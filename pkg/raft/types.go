@@ -2,21 +2,26 @@
 // Enums for Raft states.
 // This keeps all data model definitions in one place
 
-package raft 
+package raft
 
-type Role struct {
-	name string
-}
+type Role string
+
+const (
+	Follower  Role = "follower"
+	Candidate Role = "candidate"
+	Leader    Role = "leader"
+)
 
 type VoteRequest struct {
-	candidateId int 
-	candidateTerm int 
-	candidateLogLength int 
-	candidateLogTerm int 
+	candidateId        int
+	candidateTerm      int
+	candidateLogLength int
+	candidateLogTerm   int
 }
 
 type VoteResponse struct {
-	nodeId int 
-	currentTerm int 
-	granted bool 
+	nodeId      int
+	currentTerm int
+	granted     bool
 }
+
