@@ -15,7 +15,7 @@ import (
 )
 
 type Raft struct {
-	id         int
+	id         int 
 	totalNodes int
 	// Stable storage variables
 	currentTerm    int
@@ -42,8 +42,14 @@ func NewRaft() *Raft {
 	if err != nil {
 		panic("TOTAL NODES IS NOT A NUMBER!")
 	}
+
+	id, err := strconv.Atoi(os.Getenv("RAFT_ID"))
+	if err != nil {
+		panic("RAFT_ID not defined in environment or is not a number")
+	}
+
 	r := &Raft{
-		id:             0, //we only keep one raft on each machine so lets always assume that 0 is us. We need to somehow tell other Raft nodes what ID are we (who tf are we?)
+		id:             id, 
 		totalNodes:     totalNodes,
 		currentTerm:    0,
 		votedFor:       -1,
