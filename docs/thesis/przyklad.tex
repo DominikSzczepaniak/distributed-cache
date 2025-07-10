@@ -1,0 +1,146 @@
+% Opcje klasy 'iithesis' opisane sa w komentarzach w pliku klasy. Za ich pomoca
+% ustawia sie przede wszystkim jezyk oraz rodzaj (lic/inz/mgr) pracy.
+\documentclass[shortabstract]{iithesis}
+
+\usepackage[utf8]{inputenc}
+
+%%%%% DANE DO STRONY TYTUŁOWEJ
+% Niezaleznie od jezyka pracy wybranego w opcjach klasy, tytul i streszczenie
+% pracy nalezy podac zarowno w jezyku polskim, jak i angielskim.
+% Pamietaj o madrym (zgodnym z logicznym rozbiorem zdania oraz estetyka) recznym
+% zlamaniu wierszy w temacie pracy, zwlaszcza tego w jezyku pracy. Uzyj do tego
+% polecenia \fmlinebreak.
+\polishtitle    {Distributed In-Memory Cache\fmlinebreak with Strong Consistency Guarantees}
+\englishtitle    {Distributed In-Memory Cache\fmlinebreak with Strong Consistency Guarantees}
+% \polishtitle   {Rozproszona pamięć podręczna wewnątrzpamięciowa z silnymi gwarancjami spójności}
+
+\polishabstract {\ldots}
+\englishabstract{\ldots}
+% w pracach wielu autorow nazwiska mozna oddzielic poleceniem \and
+\author         {Dominik Szczepaniak}
+% w przypadku kilku promotorow, lub koniecznosci podania ich afiliacji, linie
+% w ponizszym poleceniu mozna zlamac poleceniem \fmlinebreak
+\advisor        {dr Piotr Witkowski}
+%\date          {}                     % Data zlozenia pracy
+% Dane do oswiadczenia o autorskim wykonaniu
+%\transcriptnum {}                     % Numer indeksu
+% \advisorgen    {dr. Jana Kowalskiego} % Nazwisko promotora w dopelniaczu
+%%%%%
+
+%%%%% WLASNE DODATKOWE PAKIETY
+%
+%\usepackage{graphicx,listings,amsmath,amssymb,amsthm,amsfonts,tikz}
+%
+%%%%% WŁASNE DEFINICJE I POLECENIA
+%
+%\theoremstyle{definition} \newtheorem{definition}{Definition}[chapter]
+%\theoremstyle{remark} \newtheorem{remark}[definition]{Observation}
+%\theoremstyle{plain} \newtheorem{theorem}[definition]{Theorem}
+%\theoremstyle{plain} \newtheorem{lemma}[definition]{Lemma}
+%\renewcommand \qedsymbol {\ensuremath{\square}}
+% ...
+%%%%%
+
+\begin{document}
+
+%%%%% POCZĄTEK ZASADNICZEGO TEKSTU PRACY
+
+\chapter{Introduction}
+
+\section{What am i building - cache, what is it purpose}
+
+\subsection{Use cases of such software}
+
+The distributed cache with strong consistency would be perfect solution for any application that doesn't work in centralized architecture and needs to ensure that the data it returns is always correct and can't afford to overload underlying databases for frequent operations. Let's look at some examples.
+\begin{itemize}
+    \item Any financial transaction broker as if the data is incorrect the bank, or anyone making a transaction, might be at loss
+    \item Inventory management systems, such as online shops needs data quickly and the state of the data needs to be consistent
+    \item Games might benefit from this application aswell, for example the leaderboard might change very frequently but still need accurate data for every player on the server 
+    \item Session management on web servers for many cases, for example authentication
+    \item Industrial software might need to check the system health based on some services data, this data cannot be wrong or contradictory to eachother
+
+\end{itemize}
+
+\section{What is consensus}
+
+\section{What type of applications do need a consensus at all times}
+
+\chapter{Reaching consensus}
+
+\section{What type of algorithms are these - byzantine vs non byzantine}
+
+\subsection{Why do we not want a byzantine algorithm}
+
+\section{How can we reach consensus - about algorithms}
+
+\chapter{Raft}
+
+\section{What is Raft}
+
+\section{How does Raft work}
+
+
+\chapter{Architecture}
+
+We define five layers in our application. These are 
+\begin{itemize}
+    \item entry point
+    \item data partitioning
+    \item node
+    \item server
+    \item application
+\end{itemize}
+
+Each of these layers will have different responsibilites and functions.
+
+\section{Entry point}
+
+The client need some way to connect to the application and send the requests. 
+Lets define what an entry point is formally.
+\textbf{Entry point is a way for a client to access the application.}
+
+I state that for system to be failure-prone for most of the time the application has to have more than one entry point. If it doesn't then if said entry point crashes, the application is inaccessible.
+
+We need to allow more than one entry point. Hence client needs to know more than one way to connect to application. Let's look at two of them 
+
+\subsection{Smart Client}
+
+In this approach we will make a client smart, that is, client will know both to which node to connect and how to do that, and if he fails, he will know how to correct itself with the help of the node.
+In this approach, client will also know how the data is partitioned, hence he can totally omit the data partitioning part and immediately choose correct node.
+
+The advantages of this approach are:
+\begin{itemize}
+    \item We omit the possible failures of the reverse proxy 
+    \item We drastically lower the latency by making client calculate the things he needs for himself, instead of relying on server resources
+\end{itemize}
+
+However, the disadvantages are:
+\begin{itemize}
+    \item Implementing a smart client is pretty hard, that is, client has to know how the data is partitioned. This is a very bug-prone section, as if the implementation between two programming languages is different the client might introduce a bug to the whole system or simply do not get what he wants.
+\end{itemize}
+\subsection{Reverse Proxy}
+
+In this approach, client will be very simple - it will only know the addresses of each reverse proxy. All reverse proxies will function the same - it will forward the request to the correct node. It will know which node to go to - as it will know how the data is partiotioned. 
+??The problem with this approach however, is that these proxies has to reach a consensus aswell.?? WHY?? 
+Let's assume that nodes do not need to reach a consensus. Then let's look at this situation:
+Client sends a PUT request to one of reverse proxies server. The server forwards this to the correct node, the node finishes the request and in the process of returning the data from a node, the reverse proxy crashes. In this situation the client doesn't know whether his request was successful, but it was. So client, by how TCP works, send another of this request to another reverse proxy server, as the previous one timed out. The next reverse proxy server accepts the request, and sends it again to the node, which will make the request again. Now this is unwanted situation, as something might have happened between the timeout and another request, lets say someone wanted reassign this data. The requests might have been PUT("a", 3), PUT("a", 4), GET("a"). In the correct system, the GET should return 4. If the reverse proxies do not have consensus, then the system might also return 3. If reverse proxies reach consensus, then the second server (the one the request was sent to after the crash) know that the PUT("a", 3) actually succeeded, hence it won't send a request again. (WILL HE REALLY KNOW THAT? WHAT HAPPENS WHEN THE PROXY ACTUALLY CRASHES WHEN GETTING THE RESPONSE, THE RAFT WON'T KNOW THAT AND NO OTHER SERVER WILL KNOW THAT AS THIS PROXY WONT BE ABLE TO SEND THIS MESSAGE FURTHER)
+
+\section{Node}
+
+Node is a set of Raft servers running and reaching a consensus at the same time at all times.
+
+\section{Server}
+
+Server is a single machine running a Raft algorithm.
+
+\section{Application \ Database}
+
+Application \ Database is an actual cache that we keep - this is where all the logic around saving, getting and deleting data is being done. We can access this layer if, and only if, the Raft node reached a consensus and majority of the servers have agreed upon it.
+
+%%%%% BIBLIOGRAFIA
+
+%\begin{thebibliography}{1}
+%\bibitem{example} \ldots
+%\end{thebibliography}
+
+\end{document}
