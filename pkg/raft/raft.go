@@ -15,6 +15,7 @@ import (
 )
 
 type Raft struct {
+	RaftFunctions
 	id         int 
 	totalNodes int
 	// Stable storage variables
@@ -31,6 +32,19 @@ type Raft struct {
 	ackedLenghts  []int
 
 	RaftElection
+}
+
+type RaftFunctions interface{
+	NewRaft() *Raft 
+	ProposeLeader(voteRequest VoteRequest) (VoteResponse, error)
+	ReceiveVote(vote VoteResponse)
+	ReplicateLog(id int, followerId int) 
+	Broadcast(message Message) 
+	Receive(message Message)
+	AppendEntries(prefixLen, leaderCommit, suffix int)
+	LogRequest(leaderId, currentTerm, prefixLen, prefixTerm, commitLength, suffix int)
+	LogResponse(followerId, term, ack int, success bool) 
+	CommitLogEntries() //commits all messages to the application - cache
 }
 
 func NewRaft() *Raft {
