@@ -42,7 +42,7 @@ type RaftFunctions interface{
 	Broadcast(message Message) 
 	Receive(message Message)
 	AppendEntries(prefixLen, leaderCommit, suffix int)
-	LogRequest(leaderId, currentTerm, prefixLen, prefixTerm, commitLength, suffix int)
+	LogRequest(leaderId, currentTerm, prefixLen, prefixTerm, commitLength int, suffix []LogEntry)
 	LogResponse(followerId, term, ack int, success bool) 
 	CommitLogEntries() //commits all messages to the application - cache
 }
@@ -142,5 +142,35 @@ func (r *Raft) ReceiveVote(vote VoteResponse) {
 }
 
 func (r *Raft) ReplicateLog(id int, followerId int) {
+	prefixLen := r.sentLengths[followerId]
+	suffix := r.log[prefixLen:]
+	prefixTerm := 0
+	if prefixLen > 0{
+		prefixTerm = r.log[prefixLen-1].Term
+	}
+	r.LogRequest(id, r.currentTerm, prefixLen, prefixTerm, r.commitedLength, suffix) //we send this to followerId
+}
+
+func (r *Raft) Broadcast(message Message) {
+	panic("unimplemented")
+}
+
+func (r *Raft) Receive(message Message) {
+	panic("unimplemented")
+}
+
+func (r *Raft) AppendEntries(prefixLen, leaderCommit, suffix int) {
+	panic("unimplemented")
+}
+
+func (r *Raft) LogRequest(leaderId, currentTerm, prefixLen, prefixTerm, commitLength int, suffix []LogEntry) {
+	panic("unimplemented")
+}
+
+func (r *Raft) LogResponse(followerId, term, ack int, success bool){
+	panic("unimplemented")
+}
+
+func (r *Raft) CommitLogEntries(){
 	panic("unimplemented")
 }
