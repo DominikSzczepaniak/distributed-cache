@@ -26,12 +26,13 @@ type Raft struct {
 
 	// Volatile state on all servers
 	currentRole   Role
-	currentLeader *Raft // or int?
+	currentLeader *Raft // or int - nodeid of leader?
 	votesReceived mapset.Set[int]
 	sentLengths   []int
 	ackedLenghts  []int
 
 	RaftElection
+	RaftLogReplicator
 }
 
 type RaftFunctions interface{
@@ -99,7 +100,7 @@ func (r *Raft) ProposeLeader(voteRequest VoteRequest) (VoteResponse, error) {
 	}
 	lastTerm := 0
 	if len(r.log) > 0 {
-		lastTerm = r.log[len(r.log)-1].Term
+		lastTerm = r.log[len(r.log)-1].term
 	}
 	logOk := (voteRequest.candidateTerm > lastTerm) || (voteRequest.candidateLogTerm == lastTerm && voteRequest.candidateLogLength >= len(r.log))
 
@@ -141,18 +142,25 @@ func (r *Raft) ReceiveVote(vote VoteResponse) {
 	}
 }
 
-func (r *Raft) ReplicateLog(id int, followerId int) {
-	prefixLen := r.sentLengths[followerId]
-	suffix := r.log[prefixLen:]
-	prefixTerm := 0
-	if prefixLen > 0{
-		prefixTerm = r.log[prefixLen-1].Term
-	}
-	r.LogRequest(id, r.currentTerm, prefixLen, prefixTerm, r.commitedLength, suffix) //we send this to followerId
+func (r *Raft) ForwardMessage(message Message, nodeId int){
+	panic("unimplemented")
 }
 
-func (r *Raft) Broadcast(message Message) {
-	panic("unimplemented")
+func (r *Raft) Broadcast(message Message) { 
+	if r.currentRole != "leader"{
+		r.ForwardMessage(message, r.currentLeader.id)
+	}
+	r.log = append(r.log, LogEntry{
+		message: message,
+		term: r.currentTerm,
+	})
+	r.ackedLenghts[r.id] = len(r.log)
+	for i:=0; i<r.totalNodes; i++{
+		if i == r.id{
+			continue
+		}
+		r.ReplicateLog(r.id, i)
+	}
 }
 
 func (r *Raft) Receive(message Message) {

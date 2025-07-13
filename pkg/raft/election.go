@@ -44,5 +44,6 @@ func (re *RaftElection) electionTimerLoop() {
 }
 
 func (r *Raft) StartElection() {
+	//send rpc request for ProposeLeader to every node
 	panic("unimplemented")
 }
