@@ -43,6 +43,15 @@ func (re *RaftElection) electionTimerLoop() {
 	}
 }
 
+
+func (r *RaftElection) ResetTimer(){
+	select{
+	case <-r.resetTimerCh:
+		r.resetTimerCh <- struct{}{}
+	default:
+	}
+}
+
 func (r *Raft) StartElection() {
 	//send rpc request for ProposeLeader to every node
 	panic("unimplemented")
