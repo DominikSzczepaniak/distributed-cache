@@ -3,6 +3,8 @@ package raft
 import (
 	"math/rand"
 	"time"
+
+	mapset "github.com/deckarep/golang-set/v2"
 )
 
 type RaftElection struct {
@@ -54,5 +56,19 @@ func (r *RaftElection) ResetTimer(){
 
 func (r *Raft) StartElection() {
 	//send rpc request for ProposeLeader to every node
+	r.currentRole = "candidate"
+	r.currentTerm++
+	r.votedFor = r.id
+	r.votesReceived = mapset.NewSet[int]()
+	r.votesReceived.Add(r.id)
+	for i := 0; i < r.totalNodes; i++ {
+		if i == r.id{
+			continue
+		}
+		//send via grpc to node i:
+		r.ProposeLeader(VoteRequest{r.id, r.currentTerm, len(r.log), r.log[len(r.log)-1].term})
+	}
+
+
 	panic("unimplemented")
 }

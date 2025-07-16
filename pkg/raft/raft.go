@@ -31,6 +31,8 @@ type Raft struct {
 	sentLengths   []int
 	ackedLenghts  []int
 
+	application Application
+
 	RaftElection
 	RaftLogReplicator
 }
@@ -48,7 +50,7 @@ type RaftFunctions interface{
 	CommitLogEntries() //commits all messages to the application - cache
 }
 
-func NewRaft() *Raft {
+func NewRaft(application Application) *Raft {
 	totalNodesStr, exists := os.LookupEnv("TOTAL_NODES")
 	if !exists {
 		panic("TOTAL NODES NOT DEFINED!")
@@ -76,6 +78,8 @@ func NewRaft() *Raft {
 		votesReceived: mapset.NewSet[int](),
 		sentLengths:   make([]int, totalNodes),
 		ackedLenghts:  make([]int, totalNodes),
+
+		application: application,
 	}
 
 	r.RaftElection = RaftElection{
@@ -111,6 +115,7 @@ func (r *Raft) ProposeLeader(voteRequest VoteRequest) (VoteResponse, error) {
 		return VoteResponse{nodeId: r.id, currentTerm: r.currentTerm, granted: false}, nil
 	}
 }
+
 func (r *Raft) ReceiveVote(vote VoteResponse) {
 	if r.currentTerm < vote.currentTerm {
 		r.currentTerm = vote.currentTerm
@@ -139,13 +144,16 @@ func (r *Raft) ReceiveVote(vote VoteResponse) {
 	}
 }
 
-func (r *Raft) ForwardMessage(message Message, nodeId int){
+func (r *Raft) ForwardMessage(message Message, nodeId int){ //forward via FIFO link to leader
+	timestamp := time.Now()
+
+
 	panic("unimplemented")
 }
 
 func (r *Raft) Broadcast(message Message) { 
 	if r.currentRole != "leader"{
-		r.ForwardMessage(message, r.currentLeaderId)
+		r.ForwardMessage(message, r.currentLeaderId) //response with Redirect http if not a leader?
 	}
 	r.log = append(r.log, LogEntry{
 		message: message,
@@ -164,8 +172,8 @@ func (r *Raft) Receive(message Message) {
 	panic("unimplemented")
 }
 
-func (r *Raft) DelieverToApplication(message Message){ //applies message to cache
-
+func (r *Raft) DelieverToApplication(message Message) (success bool, value int){ //applies message to cache
+	return r.application.AppendMessage(message)
 }
 
 func (r *Raft) AppendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
