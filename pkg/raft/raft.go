@@ -43,7 +43,6 @@ type RaftFunctions interface{
 	ReceiveVote(vote VoteResponse)
 	ReplicateLog(id int, followerId int) 
 	Broadcast(message Message) 
-	Receive(message Message)
 	AppendEntries(prefixLen, leaderCommit, suffix int)
 	LogRequest(leaderId, currentTerm, prefixLen, prefixTerm, commitLength int, suffix []LogEntry)
 	LogResponse(followerId, term, ack int, success bool) 
@@ -110,9 +109,9 @@ func (r *Raft) ProposeLeader(voteRequest VoteRequest) (VoteResponse, error) {
 
 	if voteRequest.candidateTerm == r.currentTerm && logOk && (r.votedFor == -1 || r.votedFor == voteRequest.candidateId) {
 		r.votedFor = voteRequest.candidateId
-		return VoteResponse{nodeId: r.id, currentTerm: r.currentTerm, granted: true}, nil
+		return VoteResponse{nodeId: r.id, currentTerm: r.currentTerm, granted: true}, nil //grpc 
 	} else {
-		return VoteResponse{nodeId: r.id, currentTerm: r.currentTerm, granted: false}, nil
+		return VoteResponse{nodeId: r.id, currentTerm: r.currentTerm, granted: false}, nil //grpc
 	}
 }
 
@@ -144,8 +143,8 @@ func (r *Raft) ReceiveVote(vote VoteResponse) {
 	}
 }
 
-func (r *Raft) ForwardMessage(message Message, nodeId int){ //forward via FIFO link to leader
-	timestamp := time.Now()
+func (r *Raft) Forward(message Message, nodeId int){ //forward via FIFO link to leader
+	// timestamp := time.Now()
 
 
 	panic("unimplemented")
@@ -153,7 +152,7 @@ func (r *Raft) ForwardMessage(message Message, nodeId int){ //forward via FIFO l
 
 func (r *Raft) Broadcast(message Message) { 
 	if r.currentRole != "leader"{
-		r.ForwardMessage(message, r.currentLeaderId) //response with Redirect http if not a leader?
+		r.Forward(message, r.currentLeaderId) //response with Redirect http if not a leader?
 	}
 	r.log = append(r.log, LogEntry{
 		message: message,
@@ -166,10 +165,6 @@ func (r *Raft) Broadcast(message Message) {
 		}
 		r.ReplicateLog(r.id, i)
 	}
-}
-
-func (r *Raft) Receive(message Message) {
-	panic("unimplemented")
 }
 
 func (r *Raft) DelieverToApplication(message Message) (success bool, value int){ //applies message to cache
@@ -210,11 +205,10 @@ func (r *Raft) LogRequest(leaderId, term, prefixLen, prefixTerm, commitLength in
 	if r.currentTerm == term && logOk{
 		r.AppendEntries(prefixLen, commitLength, suffix)
 		ack := prefixLen + len(suffix)
-		r.LogResponse(r.id, r.currentTerm, ack, true)
+		r.LogResponse(r.id, r.currentTerm, ack, true) //grpc
 	} else{
-		r.LogResponse(r.id, r.currentTerm, 0, false)
+		r.LogResponse(r.id, r.currentTerm, 0, false) //grpc
 	}
-	
 }
 
 func (r *Raft) LogResponse(followerId, term, ack int, success bool){ //its received on Leader - followers sent this as GRPC

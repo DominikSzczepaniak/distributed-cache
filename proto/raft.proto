@@ -1,0 +1,60 @@
+syntax = "proto3";
+package raftpb;
+
+import "google/protobuf/wrappers.proto";
+
+option go_package = "github.com/dominikszczepaniak/distributed-cache/raft/raftpb";
+
+message Message{
+    enum Type { GET = 0; PUT=1; DELETE = 2;}
+    Type type = 1;
+    int32 key = 2;
+    google.protobuf.Int32Value value = 3;
+}
+
+message Null {}
+
+message LogEntry{
+    int32 term = 1;
+    Message message = 2;
+}
+
+message VoteRequestArgs{
+    int32 candidateId = 1;
+	int32 candidateTerm = 2;
+	int32 candidateLogLength = 3;
+	int32 candidateLogTerm = 4;
+}
+
+message VoteResponse{
+    int32 nodeId = 1;
+	int32 currentTerm = 2;
+	bool granted = 3;
+}
+
+message LogRequestArgs{
+    int32 leaderId = 1;
+    int32 term = 2;
+    int32 prefixLen = 3;
+    int32 prefixTerm = 4;
+    int32 commitLength = 5;
+    repeated LogEntry suffix = 6;
+}
+
+message LogResponse{
+    int32 nodeId = 1;
+    int32 currentTerm = 2;
+    int32 ack = 3;
+    bool success = 4;
+}
+
+
+
+
+service Raft{
+    rpc Forward (Message) returns (Null);
+    rpc VoteRequest (VoteRequestArgs) returns (VoteResponse);
+    rpc LogRequest(LogRequestArgs) returns (LogResponse);
+}
+
+
