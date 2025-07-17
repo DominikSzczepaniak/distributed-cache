@@ -12,11 +12,13 @@ import (
 	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
+	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
+	"google.golang.org/grpc"
 )
 
 type Raft struct {
 	RaftFunctions
-	id         int 
+	id         int
 	totalNodes int
 	// Stable storage variables
 	currentTerm    int
@@ -25,27 +27,31 @@ type Raft struct {
 	commitedLength int
 
 	// Volatile state on all servers
-	currentRole   Role
+	currentRole     Role
 	currentLeaderId int // or int - nodeid of leader?
-	votesReceived mapset.Set[int]
-	sentLengths   []int
-	ackedLenghts  []int
+	votesReceived   mapset.Set[int]
+	sentLengths     []int
+	ackedLenghts    []int
 
 	application Application
 
+	peers []raftpb.RaftClient
+	conns []*grpc.ClientConn
+
 	RaftElection
 	RaftLogReplicator
+
+	raftpb.UnimplementedRaftServer
 }
 
-type RaftFunctions interface{
-	NewRaft() *Raft 
-	ProposeLeader(voteRequest VoteRequest) (VoteResponse, error)
+type RaftFunctions interface {
+	NewRaft() *Raft
 	ReceiveVote(vote VoteResponse)
-	ReplicateLog(id int, followerId int) 
-	Broadcast(message Message) 
+	ReplicateLog(id int, followerId int)
+	Broadcast(message Message)
 	AppendEntries(prefixLen, leaderCommit, suffix int)
 	LogRequest(leaderId, currentTerm, prefixLen, prefixTerm, commitLength int, suffix []LogEntry)
-	LogResponse(followerId, term, ack int, success bool) 
+	LogResponse(followerId, term, ack int, success bool)
 	CommitLogEntries() //commits all messages to the application - cache
 }
 
@@ -65,18 +71,18 @@ func NewRaft(application Application) *Raft {
 	}
 
 	r := &Raft{
-		id:             id, 
+		id:             id,
 		totalNodes:     totalNodes,
 		currentTerm:    0,
 		votedFor:       -1,
 		log:            []LogEntry{},
 		commitedLength: 0,
 
-		currentRole:   "follower",
+		currentRole:     "follower",
 		currentLeaderId: -1, //unknown
-		votesReceived: mapset.NewSet[int](),
-		sentLengths:   make([]int, totalNodes),
-		ackedLenghts:  make([]int, totalNodes),
+		votesReceived:   mapset.NewSet[int](),
+		sentLengths:     make([]int, totalNodes),
+		ackedLenghts:    make([]int, totalNodes),
 
 		application: application,
 	}
@@ -92,27 +98,9 @@ func NewRaft(application Application) *Raft {
 	}
 
 	go r.electionTimerLoop()
+	r.initGRPC()
+	r.serveGRPC(os.Getenv("RAFT_ADDR"))
 	return r
-}
-
-func (r *Raft) ProposeLeader(voteRequest VoteRequest) (VoteResponse, error) {
-	if voteRequest.candidateTerm > r.currentTerm {
-		r.currentTerm = voteRequest.candidateTerm
-		r.currentRole = "follower"
-		r.votedFor = -1
-	}
-	lastTerm := 0
-	if len(r.log) > 0 {
-		lastTerm = r.log[len(r.log)-1].term
-	}
-	logOk := (voteRequest.candidateTerm > lastTerm) || (voteRequest.candidateLogTerm == lastTerm && voteRequest.candidateLogLength >= len(r.log))
-
-	if voteRequest.candidateTerm == r.currentTerm && logOk && (r.votedFor == -1 || r.votedFor == voteRequest.candidateId) {
-		r.votedFor = voteRequest.candidateId
-		return VoteResponse{nodeId: r.id, currentTerm: r.currentTerm, granted: true}, nil //grpc 
-	} else {
-		return VoteResponse{nodeId: r.id, currentTerm: r.currentTerm, granted: false}, nil //grpc
-	}
 }
 
 func (r *Raft) ReceiveVote(vote VoteResponse) {
@@ -143,105 +131,84 @@ func (r *Raft) ReceiveVote(vote VoteResponse) {
 	}
 }
 
-func (r *Raft) Forward(message Message, nodeId int){ //forward via FIFO link to leader
+func (r *Raft) forwardToLeader(message Message, nodeId int) { //forward via FIFO link to leader
 	// timestamp := time.Now()
-
 
 	panic("unimplemented")
 }
 
-func (r *Raft) Broadcast(message Message) { 
-	if r.currentRole != "leader"{
-		r.Forward(message, r.currentLeaderId) //response with Redirect http if not a leader?
+func (r *Raft) Broadcast(message Message) {
+	if r.currentRole != "leader" {
+		r.forwardToLeader(message, r.currentLeaderId) //response with Redirect http if not a leader?
 	}
 	r.log = append(r.log, LogEntry{
 		message: message,
-		term: r.currentTerm,
+		term:    r.currentTerm,
 	})
 	r.ackedLenghts[r.id] = len(r.log)
-	for i:=range r.totalNodes{
-		if i == r.id{
+	for i := range r.totalNodes {
+		if i == r.id {
 			continue
 		}
 		r.ReplicateLog(r.id, i)
 	}
 }
 
-func (r *Raft) DelieverToApplication(message Message) (success bool, value int){ //applies message to cache
+func (r *Raft) DelieverToApplication(message Message) (success bool, value int) { //applies message to cache
 	return r.application.AppendMessage(message)
 }
 
 func (r *Raft) AppendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 	if len(suffix) > 0 && len(r.log) > prefixLen {
-		index := int(math.Min(float64(len(r.log)), float64(prefixLen + len(suffix))) -1)
+		index := int(math.Min(float64(len(r.log)), float64(prefixLen+len(suffix))) - 1)
 		if r.log[index].term != suffix[index-prefixLen].term {
 			r.log = r.log[:prefixLen]
 		}
 	}
-	if prefixLen + len(suffix) > len(r.log){
-		for i:=len(r.log) - prefixLen; i<len(suffix); i++{
+	if prefixLen+len(suffix) > len(r.log) {
+		for i := len(r.log) - prefixLen; i < len(suffix); i++ {
 			r.log = append(r.log, suffix[i])
 		}
 	}
-	if leaderCommit > r.commitedLength{
-		for i:=r.commitedLength; i<leaderCommit; i++{
+	if leaderCommit > r.commitedLength {
+		for i := r.commitedLength; i < leaderCommit; i++ {
 			r.DelieverToApplication(r.log[i].message)
 		}
 		r.commitedLength = leaderCommit
 	}
 }
 
-func (r *Raft) LogRequest(leaderId, term, prefixLen, prefixTerm, commitLength int, suffix []LogEntry) { //receiving LogRequest - this machine is trying to append log entries to it's log entries
-	if r.currentTerm > term {
-		r.currentTerm = term 
+func (r *Raft) LogResponse(followerId, term, ack int, success bool) { //its received on Leader - followers sent this as GRPC
+	if r.currentTerm < term {
+		r.currentTerm = term
+		r.currentRole = "follower"
 		r.votedFor = -1
 		r.ResetTimer()
 	}
-	if r.currentTerm == term{
-		r.currentRole = "follower"
-		r.currentLeaderId = leaderId
-	}
-	logOk := (len(r.log) >= prefixLen) && (prefixLen == 0 || r.log[prefixLen-1].term == prefixTerm)
-	if r.currentTerm == term && logOk{
-		r.AppendEntries(prefixLen, commitLength, suffix)
-		ack := prefixLen + len(suffix)
-		r.LogResponse(r.id, r.currentTerm, ack, true) //grpc
-	} else{
-		r.LogResponse(r.id, r.currentTerm, 0, false) //grpc
-	}
-}
-
-func (r *Raft) LogResponse(followerId, term, ack int, success bool){ //its received on Leader - followers sent this as GRPC
-	if r.currentTerm < term{
-		r.currentTerm = term 
-		r.currentRole = "follower"
-		r.votedFor = -1 
-		r.ResetTimer()
-	}
-	if r.currentTerm == term && r.currentRole == "leader"{
-		if success && ack >= r.ackedLenghts[followerId]{
+	if r.currentTerm == term && r.currentRole == "leader" {
+		if success && ack >= r.ackedLenghts[followerId] {
 			r.ackedLenghts[followerId] = ack
-			r.sentLengths[followerId] = ack 
+			r.sentLengths[followerId] = ack
 			r.CommitLogEntries()
 		} else if r.sentLengths[followerId] > 0 {
-			r.sentLengths[followerId]-- 
+			r.sentLengths[followerId]--
 			r.ReplicateLog(r.id, followerId)
 		}
 	}
 }
 
-func (r *Raft) CommitLogEntries(){
-	for ; r.commitedLength < len(r.log);{
-		acks := 0 
-		for j := range r.totalNodes{
-			if j == r.id{
-				continue 
+func (r *Raft) CommitLogEntries() {
+	for r.commitedLength < len(r.log) {
+		acks := 0
+		for j := range r.totalNodes {
+			if j == r.id {
+				continue
 			}
-			if r.ackedLenghts[j] > r.commitedLength{
+			if r.ackedLenghts[j] > r.commitedLength {
 				acks++
 			}
 		}
-		if acks > int(math.Ceil(float64(r.totalNodes+1)/2)){
+		if acks > int(math.Ceil(float64(r.totalNodes+1)/2)) {
 			r.DelieverToApplication(r.log[r.commitedLength].message)
 			r.commitedLength++
 		}

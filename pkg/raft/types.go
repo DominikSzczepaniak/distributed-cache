@@ -12,7 +12,7 @@ const (
 	Leader    Role = "leader"
 )
 
-type VoteRequest struct {
+type VoteRequestData struct {
 	candidateId        int
 	candidateTerm      int
 	candidateLogLength int
@@ -24,4 +24,3 @@ type VoteResponse struct {
 	currentTerm int
 	granted     bool
 }
-

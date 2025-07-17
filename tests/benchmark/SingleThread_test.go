@@ -1,11 +1,12 @@
 package tests
 
 import (
-	"distributed-cache/pkg/cache"
-	"distributed-cache/pkg/cachemodel"
 	"math/rand"
 	"testing"
 	"time"
+
+	"github.com/dominikszczepaniak/distributed-cache/pkg/cache"
+	"github.com/dominikszczepaniak/distributed-cache/pkg/cachemodel"
 )
 
 func runCacheOperations(b *testing.B, cache cachemodel.Cache, numKeys int, rng *rand.Rand) {
@@ -35,8 +36,8 @@ func runCacheOperations(b *testing.B, cache cachemodel.Cache, numKeys int, rng *
 func BenchmarkCacheComparison(b *testing.B) {
 	const (
 		numKeys         = 1000000 // number of distinct keys the cache will operate on
-		rngSeed   int64 = 42        
-		numShards       = 32        // number of shards for ShardedCache
+		rngSeed   int64 = 42
+		numShards       = 32 // number of shards for ShardedCache
 	)
 
 	b.Run("BasicMapCache_SingleThreaded", func(b *testing.B) {

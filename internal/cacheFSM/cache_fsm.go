@@ -1,3 +1,0 @@
-// Raft requires a "Finite State Machine" (FSM) interface to apply committed log entries. This package would contain the struct and methods that implement that interface.
-// Its methods (e.g., Apply(command []byte) interface{}) would parse the Raft log entry (e.g., "SET key value", "DELETE key") and then call the appropriate method on your underlying pkg/cache instance.
-// It would also handle Snapshot() and Restore() operations for Raft.

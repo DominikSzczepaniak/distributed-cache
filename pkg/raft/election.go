@@ -1,10 +1,12 @@
 package raft
 
 import (
+	"context"
 	"math/rand"
 	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
+	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 )
 
 type RaftElection struct {
@@ -45,9 +47,8 @@ func (re *RaftElection) electionTimerLoop() {
 	}
 }
 
-
-func (r *RaftElection) ResetTimer(){
-	select{
+func (r *RaftElection) ResetTimer() {
+	select {
 	case <-r.resetTimerCh:
 		r.resetTimerCh <- struct{}{}
 	default:
@@ -55,20 +56,37 @@ func (r *RaftElection) ResetTimer(){
 }
 
 func (r *Raft) StartElection() {
-	//send rpc request for ProposeLeader to every node
 	r.currentRole = "candidate"
 	r.currentTerm++
 	r.votedFor = r.id
 	r.votesReceived = mapset.NewSet[int]()
 	r.votesReceived.Add(r.id)
 	for i := 0; i < r.totalNodes; i++ {
-		if i == r.id{
+		if i == r.id {
 			continue
 		}
-		//send via grpc to node i:
-		r.ProposeLeader(VoteRequest{r.id, r.currentTerm, len(r.log), r.log[len(r.log)-1].term})
+		r.sendVoteRequest(VoteRequestData{r.id, r.currentTerm, len(r.log), r.log[len(r.log)-1].term}, i)
 	}
+}
 
+func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
+	go func() {
+		if r.currentRole != "candidate" {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
 
-	panic("unimplemented")
+		resp, err := r.peers[nodeId].VoteRequest(ctx, &raftpb.VoteRequestArgs{
+			CandidateId:        int32(data.candidateId),
+			CandidateTerm:      int32(data.candidateTerm),
+			CandidateLogLength: int32(data.candidateLogLength),
+			CandidateLogTerm:   int32(data.candidateLogTerm),
+		})
+		if err != nil {
+			panic("Network error") //TODO WHAT TO DO HERE?
+		}
+		r.ReceiveVote(VoteResponse{int(resp.NodeId), int(resp.CurrentTerm), resp.Granted})
+
+	}()
 }

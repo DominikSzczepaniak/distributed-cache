@@ -4,25 +4,29 @@
 package raft
 
 import (
+	"context"
 	"math/rand"
 	"time"
+
+	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 type LogEntry struct {
-	term int 
+	term    int
 	message Message
 }
 
 type RaftLogReplicator struct {
 	parent *Raft
 
-	logReplicateCh chan struct{}
-	cancelLogReplicateCh       chan struct{}
+	logReplicateCh         chan struct{}
+	cancelLogReplicateCh   chan struct{}
 	minLogReplicateTimeout time.Duration
 	maxLogReplicateTimeout time.Duration
 }
 
-func (rl *RaftLogReplicator) NewRaftLogReplicator(r Raft){
+func (rl *RaftLogReplicator) NewRaftLogReplicator(r Raft) {
 	rl.parent = &r
 	rl.logReplicateCh = make(chan struct{}, 1)
 	rl.cancelLogReplicateCh = make(chan struct{})
@@ -53,8 +57,8 @@ func (rl *RaftLogReplicator) logReplicateLoop() {
 			timer.Reset(rl.nextTimeout())
 
 		case <-timer.C:
-			for i:=0; i<rl.parent.totalNodes; i++{
-				if i == rl.parent.id{
+			for i := 0; i < rl.parent.totalNodes; i++ {
+				if i == rl.parent.id {
 					continue
 				}
 				rl.parent.ReplicateLog(rl.parent.id, i)
@@ -67,16 +71,59 @@ func (rl *RaftLogReplicator) logReplicateLoop() {
 	}
 }
 
-
-func (r *Raft) ReplicateLog(id int, followerId int) {
-	if r.currentRole != "leader"{
-		return
-	}
+func (r *Raft) prepareLogRequestArgs(id, followerId int) *raftpb.LogRequestArgs {
 	prefixLen := r.sentLengths[followerId]
 	suffix := r.log[prefixLen:]
 	prefixTerm := 0
-	if prefixLen > 0{
+	if prefixLen > 0 {
 		prefixTerm = r.log[prefixLen-1].term
 	}
-	r.LogRequest(id, r.currentTerm, prefixLen, prefixTerm, r.commitedLength, suffix) //we send this to followerId
+
+	pbSuffix := make([]*raftpb.LogEntry, len(suffix))
+	for i, e := range suffix {
+		var val *wrapperspb.Int32Value
+		if e.message.value != nil {
+			val = wrapperspb.Int32(int32(*e.message.value))
+		}
+		pbSuffix[i] = &raftpb.LogEntry{
+			Term: int32(e.term),
+			Message: &raftpb.Message{
+				Type:  toProtoMsgType(e.message.msgType),
+				Key:   int32(e.message.key),
+				Value: val,
+			},
+		}
+	}
+
+	return &raftpb.LogRequestArgs{
+		LeaderId:     int32(r.id),
+		Term:         int32(r.currentTerm),
+		PrefixLen:    int32(prefixLen),
+		PrefixTerm:   int32(prefixTerm),
+		CommitLength: int32(r.commitedLength),
+		Suffix:       pbSuffix,
+	}
+}
+
+func (r *Raft) ReplicateLog(id, followerId int) {
+	if r.currentRole != "leader" {
+		return
+	}
+	args := r.prepareLogRequestArgs(id, followerId)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		resp, err := r.peers[followerId].LogRequest(ctx, args)
+		if err != nil {
+			r.LogResponse(followerId, r.currentTerm, 0, false)
+			return
+		}
+		r.LogResponse(
+			followerId,
+			int(resp.CurrentTerm),
+			int(resp.Ack),
+			resp.Success,
+		)
+	}()
 }
