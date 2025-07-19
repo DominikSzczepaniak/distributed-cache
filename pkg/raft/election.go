@@ -9,7 +9,7 @@ import (
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 )
 
-type RaftElection struct {
+type RaftElector struct {
 	parent             *Raft
 	minElectionTimeout time.Duration
 	maxElectionTimeout time.Duration
@@ -17,12 +17,26 @@ type RaftElection struct {
 	cancelTimerCh      chan struct{}
 }
 
-func (re *RaftElection) nextTimeout() time.Duration {
+func NewRaftElector(r *Raft) *RaftElector {
+	re := &RaftElector{
+		parent: r,
+
+		minElectionTimeout: 100 * time.Millisecond, //change if needed
+		maxElectionTimeout: 300 * time.Millisecond,
+
+		resetTimerCh:  make(chan struct{}, 1),
+		cancelTimerCh: make(chan struct{}),
+	}
+	go re.electionTimerLoop()
+	return re
+}
+
+func (re *RaftElector) nextTimeout() time.Duration {
 	return re.minElectionTimeout +
 		time.Duration(rand.Int63n(int64(re.maxElectionTimeout-re.minElectionTimeout)))
 }
 
-func (re *RaftElection) electionTimerLoop() {
+func (re *RaftElector) electionTimerLoop() {
 	timer := time.NewTimer(re.nextTimeout())
 	defer timer.Stop()
 
@@ -47,7 +61,7 @@ func (re *RaftElection) electionTimerLoop() {
 	}
 }
 
-func (r *RaftElection) ResetTimer() {
+func (r *RaftElector) ResetTimer() {
 	select {
 	case <-r.resetTimerCh:
 		r.resetTimerCh <- struct{}{}

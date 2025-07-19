@@ -26,15 +26,16 @@ type RaftLogReplicator struct {
 	maxLogReplicateTimeout time.Duration
 }
 
-func (rl *RaftLogReplicator) NewRaftLogReplicator(r Raft) {
-	rl.parent = &r
-	rl.logReplicateCh = make(chan struct{}, 1)
-	rl.cancelLogReplicateCh = make(chan struct{})
-
-	rl.minLogReplicateTimeout = 100 * time.Millisecond
-	rl.maxLogReplicateTimeout = 300 * time.Millisecond
-
+func NewRaftLogReplicator(r *Raft) *RaftLogReplicator {
+	rl := &RaftLogReplicator{
+		parent:                 r,
+		logReplicateCh:         make(chan struct{}, 1),
+		cancelLogReplicateCh:   make(chan struct{}),
+		minLogReplicateTimeout: 100 * time.Millisecond,
+		maxLogReplicateTimeout: 300 * time.Millisecond,
+	}
 	go rl.logReplicateLoop()
+	return rl
 }
 
 func (rl *RaftLogReplicator) nextTimeout() time.Duration {

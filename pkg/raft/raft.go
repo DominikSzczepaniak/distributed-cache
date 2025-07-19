@@ -6,6 +6,7 @@
 package raft
 
 import (
+	"context"
 	"math"
 	"os"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 type Raft struct {
@@ -28,7 +30,7 @@ type Raft struct {
 
 	// Volatile state on all servers
 	currentRole     Role
-	currentLeaderId int // or int - nodeid of leader?
+	currentLeaderId int
 	votesReceived   mapset.Set[int]
 	sentLengths     []int
 	ackedLenghts    []int
@@ -38,8 +40,10 @@ type Raft struct {
 	peers []raftpb.RaftClient
 	conns []*grpc.ClientConn
 
-	RaftElection
-	RaftLogReplicator
+	raftElector *RaftElector //takes care of elections
+	logReplicator *RaftLogReplicator //sends logs to other servers
+	logSaver *RaftDataSaver //takes care of saving data to persistent storage
+
 
 	raftpb.UnimplementedRaftServer
 }
@@ -87,17 +91,10 @@ func NewRaft(application Application) *Raft {
 		application: application,
 	}
 
-	r.RaftElection = RaftElection{
-		parent: r,
+	r.raftElector = NewRaftElector(r)
 
-		minElectionTimeout: 100 * time.Millisecond, //change if needed
-		maxElectionTimeout: 300 * time.Millisecond,
+	r.logReplicator = NewRaftLogReplicator(r)
 
-		resetTimerCh:  make(chan struct{}, 1),
-		cancelTimerCh: make(chan struct{}),
-	}
-
-	go r.electionTimerLoop()
 	r.initGRPC()
 	r.serveGRPC(os.Getenv("RAFT_ADDR"))
 	return r
@@ -108,7 +105,7 @@ func (r *Raft) ReceiveVote(vote VoteResponse) {
 		r.currentTerm = vote.currentTerm
 		r.currentRole = "follower"
 		select {
-		case r.resetTimerCh <- struct{}{}:
+		case r.raftElector.resetTimerCh <- struct{}{}:
 		default:
 		}
 	} else if vote.granted && r.currentTerm == vote.currentTerm && r.currentRole == "candidate" {
@@ -120,7 +117,7 @@ func (r *Raft) ReceiveVote(vote VoteResponse) {
 		if r.votesReceived.Cardinality() >= int(math.Ceil(float64(totalNodes+1)/2)) {
 			r.currentRole = "leader"
 			r.currentLeaderId = r.id
-			r.ResetTimer()
+			r.raftElector.ResetTimer()
 			for followerId := 1; followerId < r.totalNodes; followerId++ {
 				r.sentLengths[followerId] = len(r.log)
 				r.ackedLenghts[followerId] = 0
@@ -131,10 +128,24 @@ func (r *Raft) ReceiveVote(vote VoteResponse) {
 	}
 }
 
-func (r *Raft) forwardToLeader(message Message, nodeId int) { //forward via FIFO link to leader
-	// timestamp := time.Now()
+func (r *Raft) forwardToLeader(message Message, nodeId int) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 
-	panic("unimplemented")
+	msg := &raftpb.Message{
+		Type: raftpb.Message_Type(toProtoMsgType(message.msgType)),
+		Key:  int32(message.key),
+		Value: &wrapperspb.Int32Value{
+			Value: int32(*message.value),
+		},
+	}
+	if message.value != nil {
+	}
+	_, err := r.peers[nodeId].Forward(ctx, msg)
+
+	if err != nil{
+		panic("Network error") //TODO WHAT TO DO HERE?
+	}
 }
 
 func (r *Raft) Broadcast(message Message) {
@@ -145,6 +156,7 @@ func (r *Raft) Broadcast(message Message) {
 		message: message,
 		term:    r.currentTerm,
 	})
+	go r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor), int32(len(r.log)), r.log)
 	r.ackedLenghts[r.id] = len(r.log)
 	for i := range r.totalNodes {
 		if i == r.id {
@@ -176,6 +188,7 @@ func (r *Raft) AppendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 		}
 		r.commitedLength = leaderCommit
 	}
+	go r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor), int32(len(r.log)), r.log)
 }
 
 func (r *Raft) LogResponse(followerId, term, ack int, success bool) { //its received on Leader - followers sent this as GRPC
@@ -183,7 +196,7 @@ func (r *Raft) LogResponse(followerId, term, ack int, success bool) { //its rece
 		r.currentTerm = term
 		r.currentRole = "follower"
 		r.votedFor = -1
-		r.ResetTimer()
+		r.raftElector.ResetTimer()
 	}
 	if r.currentTerm == term && r.currentRole == "leader" {
 		if success && ack >= r.ackedLenghts[followerId] {

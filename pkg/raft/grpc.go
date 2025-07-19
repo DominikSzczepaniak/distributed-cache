@@ -121,7 +121,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 	if r.currentTerm > term {
 		r.currentTerm = term
 		r.votedFor = -1
-		r.ResetTimer()
+		r.raftElector.ResetTimer()
 	}
 	if r.currentTerm == term {
 		r.currentRole = "follower"
