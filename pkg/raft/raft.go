@@ -37,7 +37,7 @@ type Raft struct {
 
 	application Application
 
-	peers []raftpb.RaftClient
+	peers []PeerClient
 	conns []*grpc.ClientConn
 
 	raftElector *RaftElector //takes care of elections
@@ -96,7 +96,6 @@ func NewRaft(application Application) *Raft {
 	r.logReplicator = NewRaftLogReplicator(r)
 
 	r.initGRPC()
-	r.serveGRPC(os.Getenv("RAFT_ADDR"))
 	return r
 }
 

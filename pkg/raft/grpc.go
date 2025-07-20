@@ -34,7 +34,7 @@ func (r *Raft) initGRPC() {
 		panic("Number of nodes must be equal to number of Raft adressess ids")
 	}
 
-	r.peers = make([]raftpb.RaftClient, r.totalNodes)
+	r.peers = make([]PeerClient, r.totalNodes)
 	r.conns = make([]*grpc.ClientConn, r.totalNodes)
 
 	for i, addr := range parts_addrs {
@@ -49,7 +49,7 @@ func (r *Raft) initGRPC() {
 		}
 
 		r.conns[id] = conn
-		r.peers[id] = raftpb.NewRaftClient(conn)
+		r.peers[id] = NewGRPCPeerClient(conn)
 	}
 
 	go r.serveGRPC(parts_addrs[r.id])
