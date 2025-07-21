@@ -8,25 +8,25 @@ import (
 )
 
 type PeerClient interface {
-  Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, error)
-  LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error)
-  VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*raftpb.VoteResponse, error)
+	Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, error)
+	LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error)
+	VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*raftpb.VoteResponse, error)
 }
 
 type GRPCPeerClient struct {
-  cli raftpb.RaftClient
+	cli raftpb.RaftClient
 }
 
 func NewGRPCPeerClient(conn *grpc.ClientConn) *GRPCPeerClient {
-  return &GRPCPeerClient{cli: raftpb.NewRaftClient(conn)}
+	return &GRPCPeerClient{cli: raftpb.NewRaftClient(conn)}
 }
 
 func (g *GRPCPeerClient) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, error) {
-  return g.cli.Forward(ctx, msg)
+	return g.cli.Forward(ctx, msg)
 }
 func (g *GRPCPeerClient) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) {
-  return g.cli.LogRequest(ctx, in)
+	return g.cli.LogRequest(ctx, in)
 }
 func (g *GRPCPeerClient) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*raftpb.VoteResponse, error) {
-  return g.cli.VoteRequest(ctx, in)
+	return g.cli.VoteRequest(ctx, in)
 }

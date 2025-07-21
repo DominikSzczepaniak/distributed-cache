@@ -52,7 +52,9 @@ func (re *RaftElector) electionTimerLoop() {
 			timer.Reset(re.nextTimeout())
 
 		case <-timer.C:
-			re.parent.StartElection()
+			if re.parent.currentRole == Follower {
+				re.parent.StartElection()
+			}
 			timer.Reset(re.nextTimeout())
 
 		case <-re.cancelTimerCh:
@@ -63,8 +65,7 @@ func (re *RaftElector) electionTimerLoop() {
 
 func (r *RaftElector) ResetTimer() {
 	select {
-	case <-r.resetTimerCh:
-		r.resetTimerCh <- struct{}{}
+	case r.resetTimerCh <- struct{}{}:
 	default:
 	}
 }
@@ -101,6 +102,5 @@ func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
 			panic("Network error") //TODO WHAT TO DO HERE?
 		}
 		r.ReceiveVote(VoteResponse{int(resp.NodeId), int(resp.CurrentTerm), resp.Granted})
-
 	}()
 }

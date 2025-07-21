@@ -40,10 +40,9 @@ type Raft struct {
 	peers []PeerClient
 	conns []*grpc.ClientConn
 
-	raftElector *RaftElector //takes care of elections
+	raftElector   *RaftElector       //takes care of elections
 	logReplicator *RaftLogReplicator //sends logs to other servers
-	logSaver *RaftDataSaver //takes care of saving data to persistent storage
-
+	logSaver      *RaftDataSaver     //takes care of saving data to persistent storage
 
 	raftpb.UnimplementedRaftServer
 }
@@ -90,10 +89,17 @@ func NewRaft(application Application) *Raft {
 
 		application: application,
 	}
-
+	r.logSaver = NewRaftDataSaver(r)
 	r.raftElector = NewRaftElector(r)
-
 	r.logReplicator = NewRaftLogReplicator(r)
+
+	term, votedFor, commited, savedLog, err := r.logSaver.LoadValues()
+	if err == nil {
+		r.currentTerm = term
+		r.votedFor = votedFor
+		r.commitedLength = commited
+		r.log = savedLog
+	}
 
 	r.initGRPC()
 	return r
@@ -142,7 +148,7 @@ func (r *Raft) forwardToLeader(message Message, nodeId int) {
 	}
 	_, err := r.peers[nodeId].Forward(ctx, msg)
 
-	if err != nil{
+	if err != nil {
 		panic("Network error") //TODO WHAT TO DO HERE?
 	}
 }
@@ -210,8 +216,9 @@ func (r *Raft) LogResponse(followerId, term, ack int, success bool) { //its rece
 }
 
 func (r *Raft) CommitLogEntries() {
+	majority := int(math.Ceil(float64(r.totalNodes+1) / 2))
 	for r.commitedLength < len(r.log) {
-		acks := 0
+		acks := 1
 		for j := range r.totalNodes {
 			if j == r.id {
 				continue
@@ -220,9 +227,11 @@ func (r *Raft) CommitLogEntries() {
 				acks++
 			}
 		}
-		if acks > int(math.Ceil(float64(r.totalNodes+1)/2)) {
+		if acks >= majority {
 			r.DelieverToApplication(r.log[r.commitedLength].message)
 			r.commitedLength++
+		} else {
+			break
 		}
 
 	}

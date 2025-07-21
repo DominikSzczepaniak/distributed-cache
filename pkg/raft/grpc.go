@@ -131,6 +131,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 	if r.currentTerm == term && logOk {
 		r.AppendEntries(prefixLen, commitLength, suffix)
 		ack := prefixLen + len(suffix)
+		r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor), int32(r.commitedLength), r.log)
 		return &raftpb.LogResponse{
 			NodeId:      int32(r.id),
 			CurrentTerm: int32(r.currentTerm),
@@ -138,6 +139,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 			Success:     true,
 		}, nil
 	} else {
+		r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor), int32(r.commitedLength), r.log)
 		return &raftpb.LogResponse{
 			NodeId:      int32(r.id),
 			CurrentTerm: int32(r.currentTerm),
@@ -165,12 +167,14 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 
 	if candidateTerm == r.currentTerm && logOk && (r.votedFor == -1 || r.votedFor == candidateId) {
 		r.votedFor = candidateId
+		r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor), int32(r.commitedLength), r.log)
 		return &raftpb.VoteResponse{
 			NodeId:      int32(r.id),
 			CurrentTerm: int32(r.currentTerm),
 			Granted:     true,
 		}, nil
 	} else {
+		r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor), int32(r.commitedLength), r.log)
 		return &raftpb.VoteResponse{
 			NodeId:      int32(r.id),
 			CurrentTerm: int32(r.currentTerm),
