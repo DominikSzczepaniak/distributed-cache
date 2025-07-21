@@ -26,13 +26,10 @@ type RaftDataSaverFunctions interface {
 }
 
 func NewRaftDataSaver(r *Raft) *RaftDataSaver {
-	valuesFilename := os.Getenv("VALUES_FILENAME")
-	if valuesFilename == "" {
-		panic("Specify the name of VALUES_FILENAME environment variable")
-	}
+	cfg := LoadConfig()
 	return &RaftDataSaver{
 		parent:         r,
-		valuesFilename: valuesFilename,
+		valuesFilename: cfg.valuesFilename,
 	}
 }
 

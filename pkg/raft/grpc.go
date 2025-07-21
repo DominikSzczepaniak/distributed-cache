@@ -7,9 +7,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
@@ -17,42 +14,23 @@ import (
 )
 
 func (r *Raft) initGRPC() {
-	addrs := os.Getenv("RAFT_ADDRS")
-	if addrs == "" {
-		panic("Raft addresses not defined in environment")
-	}
-	ids := os.Getenv("RAFT_IDS")
-	if ids == "" {
-		panic("Raft ids for addresses not defined in environment")
-	}
-	parts_addrs := strings.Split(addrs, ",")
-	if len(parts_addrs) != r.totalNodes {
-		panic("Number of nodes must be equal to number of Raft adressess")
-	}
-	parts_ids := strings.Split(ids, ",")
-	if len(parts_ids) != r.totalNodes {
-		panic("Number of nodes must be equal to number of Raft adressess ids")
-	}
+	cfg := LoadConfig()
 
 	r.peers = make([]PeerClient, r.totalNodes)
 	r.conns = make([]*grpc.ClientConn, r.totalNodes)
 
-	for i, addr := range parts_addrs {
+	for i, addr := range cfg.raftAddrs {
 		conn, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock(),
 			grpc.WithTimeout(500*time.Millisecond))
 		if err != nil {
 			panic(fmt.Sprintf("failed to dial %s: %v", addr, err))
 		}
-		id, err := strconv.Atoi(parts_ids[i])
-		if err != nil {
-			panic("ID of some raft server is not a number")
-		}
 
-		r.conns[id] = conn
-		r.peers[id] = NewGRPCPeerClient(conn)
+		r.conns[i] = conn
+		r.peers[i] = NewGRPCPeerClient(conn)
 	}
 
-	go r.serveGRPC(parts_addrs[r.id])
+	go r.serveGRPC(cfg.raftAddrs[r.id])
 }
 
 func (r *Raft) serveGRPC(addr string) {

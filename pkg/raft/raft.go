@@ -8,8 +8,6 @@ package raft
 import (
 	"context"
 	"math"
-	"os"
-	"strconv"
 	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
@@ -59,23 +57,11 @@ type RaftFunctions interface {
 }
 
 func NewRaft(application Application) *Raft {
-	totalNodesStr, exists := os.LookupEnv("TOTAL_NODES")
-	if !exists {
-		panic("TOTAL NODES NOT DEFINED!")
-	}
-	totalNodes, err := strconv.Atoi(totalNodesStr)
-	if err != nil {
-		panic("TOTAL NODES IS NOT A NUMBER!")
-	}
-
-	id, err := strconv.Atoi(os.Getenv("RAFT_ID"))
-	if err != nil {
-		panic("RAFT_ID not defined in environment or is not a number")
-	}
+	cfg := LoadConfig()
 
 	r := &Raft{
-		id:             id,
-		totalNodes:     totalNodes,
+		id:             cfg.raftId,
+		totalNodes:     cfg.totalNodes,
 		currentTerm:    0,
 		votedFor:       -1,
 		log:            []LogEntry{},
@@ -84,8 +70,8 @@ func NewRaft(application Application) *Raft {
 		currentRole:     "follower",
 		currentLeaderId: -1, //unknown
 		votesReceived:   mapset.NewSet[int](),
-		sentLengths:     make([]int, totalNodes),
-		ackedLenghts:    make([]int, totalNodes),
+		sentLengths:     make([]int, cfg.totalNodes),
+		ackedLenghts:    make([]int, cfg.totalNodes),
 
 		application: application,
 	}
@@ -115,11 +101,7 @@ func (r *Raft) ReceiveVote(vote VoteResponse) {
 		}
 	} else if vote.granted && r.currentTerm == vote.currentTerm && r.currentRole == "candidate" {
 		r.votesReceived.Add(vote.nodeId)
-		totalNodes, err := strconv.Atoi(os.Getenv("TOTAL_NODES"))
-		if err != nil {
-			panic("TOTAL_NODES not defined in environment")
-		}
-		if r.votesReceived.Cardinality() >= int(math.Ceil(float64(totalNodes+1)/2)) {
+		if r.votesReceived.Cardinality() >= int(math.Ceil(float64(r.totalNodes+1)/2)) {
 			r.currentRole = "leader"
 			r.currentLeaderId = r.id
 			r.raftElector.ResetTimer()
