@@ -25,8 +25,7 @@ type RaftDataSaverFunctions interface {
 	loadLog() ([]LogEntry, error)
 }
 
-func NewRaftDataSaver(r *Raft) *RaftDataSaver {
-	cfg := LoadConfig()
+func NewRaftDataSaver(r *Raft, cfg *Config) *RaftDataSaver {
 	return &RaftDataSaver{
 		parent:         r,
 		valuesFilename: cfg.valuesFilename,

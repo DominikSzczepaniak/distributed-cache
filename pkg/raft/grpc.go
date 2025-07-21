@@ -13,9 +13,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-func (r *Raft) initGRPC() {
-	cfg := LoadConfig()
-
+func (r *Raft) initGRPC(cfg *Config) {
 	r.peers = make([]PeerClient, r.totalNodes)
 	r.conns = make([]*grpc.ClientConn, r.totalNodes)
 

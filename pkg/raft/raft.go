@@ -56,9 +56,7 @@ type RaftFunctions interface {
 	CommitLogEntries() //commits all messages to the application - cache
 }
 
-func NewRaft(application Application) *Raft {
-	cfg := LoadConfig()
-
+func NewRaft(application Application, cfg *Config) *Raft {
 	r := &Raft{
 		id:             cfg.raftId,
 		totalNodes:     cfg.totalNodes,
@@ -75,7 +73,7 @@ func NewRaft(application Application) *Raft {
 
 		application: application,
 	}
-	r.logSaver = NewRaftDataSaver(r)
+	r.logSaver = NewRaftDataSaver(r, cfg)
 	r.raftElector = NewRaftElector(r)
 	r.logReplicator = NewRaftLogReplicator(r)
 
@@ -87,7 +85,7 @@ func NewRaft(application Application) *Raft {
 		r.log = savedLog
 	}
 
-	r.initGRPC()
+	r.initGRPC(cfg)
 	return r
 }
 
