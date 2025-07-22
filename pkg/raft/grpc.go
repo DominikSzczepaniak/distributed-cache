@@ -62,6 +62,7 @@ func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, 
 		}
 		return r.peers[r.currentLeaderId].Forward(ctx, msg)
 	}
+	slog.Info(fmt.Sprintf("Forwarding message from %d to %d, msgType: %s, key: %d, value :%d", r.id, r.currentLeaderId, internal.msgType, internal.key, internal.value))
 	r.Broadcast(internal)
 	return &raftpb.Null{}, nil
 }
@@ -93,25 +94,54 @@ func convertLogRequestArgs(args *raftpb.LogRequestArgs) (int, int, int, int, int
 }
 
 func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) { //receiving LogRequest - this machine is trying to append log entries to it's log entries
-	r.raftElector.ResetTimer()
 	leaderId, term, prefixLen, prefixTerm, commitLength, suffix := convertLogRequestArgs(in)
 	slog.Info(fmt.Sprintf("Received LogRequest on node %d from node %d, node on role %s", r.id, int(in.LeaderId), r.currentRole))
 
-	if r.currentTerm > term {
+	if r.currentTerm < term {
+		slog.Warn(fmt.Sprintf(
+			"Node %d: currentTerm (%d) > received term (%d), updating term and resetting votedFor",
+			r.id, r.currentTerm, term,
+		))
 		r.currentTerm = term
 		r.votedFor = -1
 		r.raftElector.ResetTimer()
+		r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor),
+			int32(r.commitedLength), r.log)
 	}
 	if r.currentTerm == term {
+		if r.currentRole != "follower" || r.currentLeaderId != leaderId {
+			slog.Info(fmt.Sprintf(
+				"Node %d: updating role to follower and setting leaderId to %d (was %s, leaderId %d)",
+				r.id, leaderId, r.currentRole, r.currentLeaderId,
+			))
+		}
 		r.currentRole = "follower"
 		r.currentLeaderId = leaderId
-		slog.Info(fmt.Sprintf("Updated role of %d to %s and set leader id to %d", r.id, r.currentRole, r.currentLeaderId))
 	}
 	logOk := (len(r.log) >= prefixLen) && (prefixLen == 0 || r.log[prefixLen-1].term == prefixTerm)
+	slog.Info(fmt.Sprintf(
+		"Node %d: logOk=%v (logLen=%d, prefixLen=%d, prefixTerm=%d, logTermAtPrefix=%v)",
+		r.id, logOk, len(r.log), prefixLen, prefixTerm,
+		func() interface{} {
+			if prefixLen > 0 && len(r.log) >= prefixLen {
+				return r.log[prefixLen-1].term
+			}
+			return nil
+		}(),
+	))
 	if r.currentTerm == term && logOk {
+		r.raftElector.ResetTimer()
+		slog.Info(fmt.Sprintf(
+			"Node %d: appending entries (prefixLen=%d, commitLength=%d, suffixLen=%d)",
+			r.id, prefixLen, commitLength, len(suffix),
+		))
 		r.AppendEntries(prefixLen, commitLength, suffix)
 		ack := prefixLen + len(suffix)
 		r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor), int32(r.commitedLength), r.log)
+		slog.Info(fmt.Sprintf(
+			"Node %d: LogRequest success, ack=%d, term=%d",
+			r.id, ack, r.currentTerm,
+		))
 		return &raftpb.LogResponse{
 			NodeId:      int32(r.id),
 			CurrentTerm: int32(r.currentTerm),
@@ -119,6 +149,11 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 			Success:     true,
 		}, nil
 	} else {
+
+		slog.Warn(fmt.Sprintf(
+			"Node %d: LogRequest failed (currentTerm=%d, receivedTerm=%d, logOk=%v)",
+			r.id, r.currentTerm, term, logOk,
+		))
 		r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor), int32(r.commitedLength), r.log)
 		return &raftpb.LogResponse{
 			NodeId:      int32(r.id),
@@ -142,6 +177,7 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 	candidateTerm := int(in.CandidateTerm)
 	candidateLogLength := int(in.CandidateLogLength)
 	candidateLogTerm := int(in.CandidateLogTerm)
+
 	if candidateTerm > r.currentTerm {
 		slog.Info(
 			"Updating current term\n",

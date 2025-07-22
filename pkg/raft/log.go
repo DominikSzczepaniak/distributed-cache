@@ -5,6 +5,8 @@ package raft
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"math/rand"
 	"time"
 
@@ -58,11 +60,13 @@ func (rl *RaftLogReplicator) logReplicateLoop() {
 			timer.Reset(rl.nextTimeout())
 
 		case <-timer.C:
-			for i := 0; i < rl.parent.totalNodes; i++ {
-				if i == rl.parent.id {
-					continue
+			if rl.parent.currentRole == Leader {
+				for i := 0; i < rl.parent.totalNodes; i++ {
+					if i == rl.parent.id {
+						continue
+					}
+					rl.parent.ReplicateLog(rl.parent.id, i)
 				}
-				rl.parent.ReplicateLog(rl.parent.id, i)
 			}
 			timer.Reset(rl.nextTimeout())
 
@@ -72,9 +76,10 @@ func (rl *RaftLogReplicator) logReplicateLoop() {
 	}
 }
 
-func (r *Raft) prepareLogRequestArgs(id, followerId int) *raftpb.LogRequestArgs {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
+	slog.Info(fmt.Sprintf("Preparing log request for leader %d", r.id))
+	//r.mu.Lock()
+	//defer r.mu.Unlock()
 	prefixLen := r.sentLengths[followerId]
 	suffix := r.log[prefixLen:]
 	prefixTerm := 0
@@ -97,7 +102,7 @@ func (r *Raft) prepareLogRequestArgs(id, followerId int) *raftpb.LogRequestArgs 
 			},
 		}
 	}
-
+	slog.Info(fmt.Sprintf("Preparing log request for follower %d finished", followerId))
 	return &raftpb.LogRequestArgs{
 		LeaderId:     int32(r.id),
 		Term:         int32(r.currentTerm),
@@ -109,17 +114,49 @@ func (r *Raft) prepareLogRequestArgs(id, followerId int) *raftpb.LogRequestArgs 
 }
 
 func (r *Raft) ReplicateLog(id, followerId int) {
-	if r.currentRole != "leader" {
+	slog.Info(fmt.Sprintf("Replicating log from %d to %d, node role: %s", id, followerId, r.currentRole))
+	retryCh := make(chan int)
+	done := make(chan struct{})
+	go r.retryAppendEntries(retryCh, done)
+
+	if r.currentRole == Leader {
+		r.handleReplicateLog(followerId, retryCh, done)
+	}
+
+	for {
+		select {
+		case peerId := <-retryCh:
+			if r.currentRole != Leader {
+				slog.Info("lost leadership, stopping ReplicateLog")
+				close(done)
+				return
+			}
+			r.handleReplicateLog(peerId, retryCh, done)
+
+		case <-done:
+			return
+		}
+	}
+}
+
+func (r *Raft) handleReplicateLog(followerId int, retryCh chan<- int, done chan struct{}) {
+	if r.currentRole != Leader {
+		slog.Info("Node is not a leader, returning")
 		return
 	}
-	args := r.prepareLogRequestArgs(id, followerId)
+	args := r.prepareLogRequestArgs(followerId)
+	slog.Info(fmt.Sprintf("Prepared log for replication from %d to %d", r.id, followerId))
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-
+		slog.Info(fmt.Sprintf("Logs for leader %d", r.id))
+		for _, log := range r.log {
+			slog.Info(fmt.Sprintf("term: %d, msgType: %s, key: %d, value: %d", log.term, log.message.msgType, log.message.key, *log.message.value))
+		}
 		resp, err := r.peers[followerId].LogRequest(ctx, args)
 		if err != nil {
-			r.LogResponse(followerId, r.currentTerm, 0, false)
+			slog.Error(err.Error())
+			retryCh <- 1
 			return
 		}
 		r.LogResponse(
@@ -128,5 +165,17 @@ func (r *Raft) ReplicateLog(id, followerId int) {
 			int(resp.Ack),
 			resp.Success,
 		)
+		done <- struct{}{}
 	}()
+}
+
+func (r *Raft) retryAppendEntries(retryCh chan int, done <-chan struct{}) {
+	for {
+		select {
+		case peerId := <-retryCh:
+			go r.ReplicateLog(r.id, peerId)
+		case <-done:
+			return
+		}
+	}
 }

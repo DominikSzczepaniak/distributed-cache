@@ -99,7 +99,7 @@ func NewRaft(application Application, cfg *Config) *Raft {
 }
 
 func (r *Raft) ReceiveVote(vote VoteResponse) {
-	r.mu.Lock()
+	//r.mu.Lock()
 	slog.Info(fmt.Sprintf("Received vote response from %d on node %d, granted: %t, node on term: %d, node from term: %d, node on role: %s",
 		vote.nodeId,
 		r.id,
@@ -109,8 +109,8 @@ func (r *Raft) ReceiveVote(vote VoteResponse) {
 		r.currentRole))
 	if r.currentTerm < vote.currentTerm {
 		r.currentTerm = vote.currentTerm
-		r.currentRole = "follower"
-		r.mu.Unlock()
+		r.currentRole = Follower
+		//r.mu.Unlock()
 		select {
 		case r.raftElector.resetTimerCh <- struct{}{}:
 		default:
@@ -120,7 +120,11 @@ func (r *Raft) ReceiveVote(vote VoteResponse) {
 		slog.Info(fmt.Sprintf("Currently voted for %d amount: %d/%d", r.id, r.votesReceived.Cardinality(), r.totalNodes))
 		if r.votesReceived.Cardinality() >= int(math.Ceil(float64(r.totalNodes+1)/2)) {
 			slog.Info(fmt.Sprintf("Node %d became a leader", r.id))
-			r.currentRole = "leader"
+			slog.Info(fmt.Sprintf("Logs for leader %d", r.id))
+			for _, log := range r.log {
+				slog.Info(fmt.Sprintf("term: %d, msgType: %s, key: %d, value: %d", log.term, log.message.msgType, log.message.key, *log.message.value))
+			}
+			r.currentRole = Leader
 			r.currentLeaderId = r.id
 			r.raftElector.ResetTimer()
 			for followerId := 0; followerId < r.totalNodes; followerId++ {
@@ -133,10 +137,12 @@ func (r *Raft) ReceiveVote(vote VoteResponse) {
 			}
 		}
 	}
-	r.mu.Unlock()
+	slog.Info("Quitting ReceiveVote, releasing lock")
+	//r.mu.Unlock()
 }
 
 func (r *Raft) forwardToLeader(message Message, nodeId int) {
+	slog.Info(fmt.Sprintf("Forwarding message {msgType %s, key %d, value %d} to leader %d", message.msgType, message.key, message.value, nodeId))
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
@@ -160,6 +166,7 @@ func (r *Raft) Broadcast(message Message) {
 	if r.currentRole != "leader" {
 		r.forwardToLeader(message, r.currentLeaderId) //response with Redirect http if not a leader?
 	}
+	slog.Info(fmt.Sprintf("Appending message {msgType %s, key %d, value %d} to node %d logs", message.msgType, message.key, *message.value, r.id))
 	r.log = append(r.log, LogEntry{
 		message: message,
 		term:    r.currentTerm,
@@ -180,13 +187,18 @@ func (r *Raft) DelieverToApplication(message Message) (success bool, value int) 
 
 func (r *Raft) AppendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 	slog.Info(fmt.Sprintf("Appending entries on node %d, current role %s", r.id, r.currentRole))
+	for i, e := range suffix {
+		slog.Info(fmt.Sprintf("Entry %d: term %d, msgType %s, key %d, value %d", i, e.term, e.message.msgType, e.message.key, e.message.value))
+	}
 	if len(suffix) > 0 && len(r.log) > prefixLen {
+		slog.Info(fmt.Sprintf("Went into 1st loop"))
 		index := int(math.Min(float64(len(r.log)), float64(prefixLen+len(suffix))) - 1)
 		if r.log[index].term != suffix[index-prefixLen].term {
 			r.log = r.log[:prefixLen]
 		}
 	}
 	if prefixLen+len(suffix) > len(r.log) {
+		slog.Info(fmt.Sprintf("Went into 2nd loop"))
 		for i := len(r.log) - prefixLen; i < len(suffix); i++ {
 			r.log = append(r.log, suffix[i])
 		}
@@ -205,11 +217,11 @@ func (r *Raft) LogResponse(followerId, term, ack int, success bool) { //its rece
 	defer r.mu.Unlock()
 	if r.currentTerm < term {
 		r.currentTerm = term
-		r.currentRole = "follower"
+		r.currentRole = Follower
 		r.votedFor = -1
 		r.raftElector.ResetTimer()
 	}
-	if r.currentTerm == term && r.currentRole == "leader" {
+	if r.currentTerm == term && r.currentRole == Leader {
 		if success && ack >= r.ackedLenghts[followerId] {
 			r.ackedLenghts[followerId] = ack
 			r.sentLengths[followerId] = ack

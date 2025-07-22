@@ -3,6 +3,7 @@ package raft
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"time"
 
@@ -67,6 +68,7 @@ func (re *RaftElector) electionTimerLoop() {
 func (r *RaftElector) ResetTimer() {
 	select {
 	case r.resetTimerCh <- struct{}{}:
+		slog.Info(fmt.Sprintf("Restarted timer for %d", r.parent.id))
 	default:
 	}
 }
@@ -106,6 +108,8 @@ func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
 			CandidateLogLength: int32(data.candidateLogLength),
 			CandidateLogTerm:   int32(data.candidateLogTerm),
 		})
+
+		slog.Info(fmt.Sprintf("Got vote response on node %d\n", nodeId))
 		if err != nil {
 			panic("Network error") //TODO WHAT TO DO HERE?
 		}

@@ -88,7 +88,7 @@ func createCluster(t *testing.T, n int) []*Raft {
 			totalNodes:     n,
 			currentTerm:    0,
 			votedFor:       -1,
-			log:            *new([]LogEntry),
+			log:            make([]LogEntry, 0),
 			commitedLength: 0,
 
 			currentRole:     Follower,
@@ -103,8 +103,6 @@ func createCluster(t *testing.T, n int) []*Raft {
 		r.logSaver = NewRaftDataSaver(r, cfg)
 		r.raftElector = NewRaftElector(r)
 		r.logReplicator = NewRaftLogReplicator(r)
-
-		r.log = []LogEntry{{term: 0, message: Message{msgType: get, key: 0}}}
 
 		nodes[id] = r
 	}
@@ -145,7 +143,17 @@ func TestLogReplication(t *testing.T) {
 			leaderNode = nodes[i]
 		}
 	}
-	leaderNode.logReplicator.logReplicateCh <- struct{}{}
+	for {
+		for i := range nodes {
+			if nodes[i].currentRole == Leader {
+				leaderNode = nodes[i]
+			}
+		}
+		if leaderNode != nil {
+			break
+		}
+	}
+	fmt.Println("here")
 
 	v := 42
 	msg := Message{msgType: put, key: 1, value: &v}
