@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -78,6 +79,10 @@ func (rds *RaftDataSaver) saveLog(logs []LogEntry, file *os.File) (bool, error) 
 }
 
 func (rds *RaftDataSaver) SaveValues(currentTerm, votedFor, commitedLength int32, logs []LogEntry) (bool, error) {
+	if err := os.MkdirAll(filepath.Dir(rds.valuesFilename), 0755); err != nil {
+		panic(fmt.Sprintf("Failed to create parent directory for %s: %s", rds.valuesFilename, err))
+	}
+
 	file, err := os.Create(rds.valuesFilename)
 	if err != nil {
 		panic("Path of VALUES_FILENAME is not correct, cannot save data to disk")

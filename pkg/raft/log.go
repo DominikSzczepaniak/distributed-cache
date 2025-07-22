@@ -73,6 +73,8 @@ func (rl *RaftLogReplicator) logReplicateLoop() {
 }
 
 func (r *Raft) prepareLogRequestArgs(id, followerId int) *raftpb.LogRequestArgs {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	prefixLen := r.sentLengths[followerId]
 	suffix := r.log[prefixLen:]
 	prefixTerm := 0

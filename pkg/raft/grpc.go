@@ -6,6 +6,7 @@ package raft
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"time"
 
@@ -92,7 +93,9 @@ func convertLogRequestArgs(args *raftpb.LogRequestArgs) (int, int, int, int, int
 }
 
 func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) { //receiving LogRequest - this machine is trying to append log entries to it's log entries
+	r.raftElector.ResetTimer()
 	leaderId, term, prefixLen, prefixTerm, commitLength, suffix := convertLogRequestArgs(in)
+	slog.Info(fmt.Sprintf("Received LogRequest on node %d from node %d, node on role %s", r.id, int(in.LeaderId), r.currentRole))
 
 	if r.currentTerm > term {
 		r.currentTerm = term
@@ -102,6 +105,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 	if r.currentTerm == term {
 		r.currentRole = "follower"
 		r.currentLeaderId = leaderId
+		slog.Info(fmt.Sprintf("Updated role of %d to %s and set leader id to %d", r.id, r.currentRole, r.currentLeaderId))
 	}
 	logOk := (len(r.log) >= prefixLen) && (prefixLen == 0 || r.log[prefixLen-1].term == prefixTerm)
 	if r.currentTerm == term && logOk {
@@ -126,11 +130,26 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 }
 
 func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*raftpb.VoteResponse, error) {
+	slog.Info(
+		"Received request for vote\n",
+		slog.Int("nodeOn", r.id),
+		slog.Int("nodeFrom", int(in.CandidateId)),
+		slog.Int("nodeOnTerm", r.currentTerm),
+		slog.Int("nodeFromTerm", int(in.CandidateTerm)),
+		slog.String("nodeOnRole", string(r.currentRole)),
+	)
 	candidateId := int(in.CandidateId)
 	candidateTerm := int(in.CandidateTerm)
 	candidateLogLength := int(in.CandidateLogLength)
 	candidateLogTerm := int(in.CandidateLogTerm)
 	if candidateTerm > r.currentTerm {
+		slog.Info(
+			"Updating current term\n",
+			slog.Int("nodeOn", r.id),
+			slog.Int("nodeFrom", int(in.CandidateId)),
+			slog.Int("nodeOnTerm", r.currentTerm),
+			slog.Int("nodeFromTerm", int(in.CandidateTerm)),
+		)
 		r.currentTerm = candidateTerm
 		r.currentRole = "follower"
 		r.votedFor = -1
@@ -139,18 +158,32 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 	if len(r.log) > 0 {
 		lastTerm = r.log[len(r.log)-1].term
 	}
-	logOk := (candidateTerm > lastTerm) || (candidateLogTerm == lastTerm && candidateLogLength >= len(r.log))
-
+	logOk := (candidateLogTerm > lastTerm) || (candidateLogTerm == lastTerm && candidateLogLength >= len(r.log))
+	slog.Info(
+		"LogOk\n",
+		slog.Int("nodeOn", r.id),
+		slog.Int("nodeFrom", int(in.CandidateId)),
+		slog.Bool("LogOK Value", logOk),
+		slog.Bool("Granting vote", candidateTerm == r.currentTerm && logOk && (r.votedFor == -1 || r.votedFor == candidateId)),
+	)
 	if candidateTerm == r.currentTerm && logOk && (r.votedFor == -1 || r.votedFor == candidateId) {
 		r.votedFor = candidateId
+		r.currentRole = Follower
 		r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor), int32(r.commitedLength), r.log)
+		slog.Info(
+			"VoteRequest successful\n",
+			slog.Int("nodeOn", r.id),
+			slog.Int("nodeFrom", int(in.CandidateId)))
 		return &raftpb.VoteResponse{
 			NodeId:      int32(r.id),
 			CurrentTerm: int32(r.currentTerm),
 			Granted:     true,
 		}, nil
 	} else {
-		r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor), int32(r.commitedLength), r.log)
+		slog.Info(
+			"VoteRequest unsuccessful\n",
+			slog.Int("nodeOn", r.id),
+			slog.Int("nodeFrom", int(in.CandidateId)))
 		return &raftpb.VoteResponse{
 			NodeId:      int32(r.id),
 			CurrentTerm: int32(r.currentTerm),

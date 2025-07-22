@@ -7,7 +7,11 @@ package raft
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"math"
+	"os"
+	"sync"
 	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
@@ -17,6 +21,8 @@ import (
 )
 
 type Raft struct {
+	mu sync.RWMutex
+
 	RaftFunctions
 	id         int
 	totalNodes int
@@ -41,6 +47,8 @@ type Raft struct {
 	raftElector   *RaftElector       //takes care of elections
 	logReplicator *RaftLogReplicator //sends logs to other servers
 	logSaver      *RaftDataSaver     //takes care of saving data to persistent storage
+
+	logger *slog.Logger
 
 	raftpb.UnimplementedRaftServer
 }
@@ -72,6 +80,7 @@ func NewRaft(application Application, cfg *Config) *Raft {
 		ackedLenghts:    make([]int, cfg.totalNodes),
 
 		application: application,
+		logger:      slog.New(slog.NewTextHandler(os.Stdout, nil)),
 	}
 	r.logSaver = NewRaftDataSaver(r, cfg)
 	r.raftElector = NewRaftElector(r)
@@ -90,27 +99,41 @@ func NewRaft(application Application, cfg *Config) *Raft {
 }
 
 func (r *Raft) ReceiveVote(vote VoteResponse) {
+	r.mu.Lock()
+	slog.Info(fmt.Sprintf("Received vote response from %d on node %d, granted: %t, node on term: %d, node from term: %d, node on role: %s",
+		vote.nodeId,
+		r.id,
+		vote.granted,
+		r.currentTerm,
+		vote.currentTerm,
+		r.currentRole))
 	if r.currentTerm < vote.currentTerm {
 		r.currentTerm = vote.currentTerm
 		r.currentRole = "follower"
+		r.mu.Unlock()
 		select {
 		case r.raftElector.resetTimerCh <- struct{}{}:
 		default:
 		}
 	} else if vote.granted && r.currentTerm == vote.currentTerm && r.currentRole == "candidate" {
 		r.votesReceived.Add(vote.nodeId)
+		slog.Info(fmt.Sprintf("Currently voted for %d amount: %d/%d", r.id, r.votesReceived.Cardinality(), r.totalNodes))
 		if r.votesReceived.Cardinality() >= int(math.Ceil(float64(r.totalNodes+1)/2)) {
+			slog.Info(fmt.Sprintf("Node %d became a leader", r.id))
 			r.currentRole = "leader"
 			r.currentLeaderId = r.id
 			r.raftElector.ResetTimer()
-			for followerId := 1; followerId < r.totalNodes; followerId++ {
+			for followerId := 0; followerId < r.totalNodes; followerId++ {
+				if followerId == r.id {
+					continue
+				}
 				r.sentLengths[followerId] = len(r.log)
 				r.ackedLenghts[followerId] = 0
 				r.ReplicateLog(r.id, followerId)
 			}
-
 		}
 	}
+	r.mu.Unlock()
 }
 
 func (r *Raft) forwardToLeader(message Message, nodeId int) {
@@ -156,6 +179,7 @@ func (r *Raft) DelieverToApplication(message Message) (success bool, value int) 
 }
 
 func (r *Raft) AppendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
+	slog.Info(fmt.Sprintf("Appending entries on node %d, current role %s", r.id, r.currentRole))
 	if len(suffix) > 0 && len(r.log) > prefixLen {
 		index := int(math.Min(float64(len(r.log)), float64(prefixLen+len(suffix))) - 1)
 		if r.log[index].term != suffix[index-prefixLen].term {
@@ -177,6 +201,8 @@ func (r *Raft) AppendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 }
 
 func (r *Raft) LogResponse(followerId, term, ack int, success bool) { //its received on Leader - followers sent this as GRPC
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.currentTerm < term {
 		r.currentTerm = term
 		r.currentRole = "follower"

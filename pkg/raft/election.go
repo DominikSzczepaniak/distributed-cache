@@ -2,6 +2,7 @@ package raft
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"time"
 
@@ -52,7 +53,7 @@ func (re *RaftElector) electionTimerLoop() {
 			timer.Reset(re.nextTimeout())
 
 		case <-timer.C:
-			if re.parent.currentRole == Follower {
+			if re.parent.currentRole != Leader {
 				re.parent.StartElection()
 			}
 			timer.Reset(re.nextTimeout())
@@ -71,22 +72,29 @@ func (r *RaftElector) ResetTimer() {
 }
 
 func (r *Raft) StartElection() {
-	r.currentRole = "candidate"
+	r.raftElector.ResetTimer()
+	fmt.Printf("Election started for node %d\n", r.id)
+	r.currentRole = Candidate
 	r.currentTerm++
 	r.votedFor = r.id
 	r.votesReceived = mapset.NewSet[int]()
 	r.votesReceived.Add(r.id)
+	logTerm := 0
+	if len(r.log) > 0 {
+		logTerm = r.log[len(r.log)-1].term
+	}
 	for i := 0; i < r.totalNodes; i++ {
 		if i == r.id {
 			continue
 		}
-		r.sendVoteRequest(VoteRequestData{r.id, r.currentTerm, len(r.log), r.log[len(r.log)-1].term}, i)
+		fmt.Printf("Sending vote request to node %d from %d\n", i, r.id)
+		r.sendVoteRequest(VoteRequestData{r.id, r.currentTerm, len(r.log), logTerm}, i)
 	}
 }
 
 func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
 	go func() {
-		if r.currentRole != "candidate" {
+		if r.currentRole != Candidate {
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
