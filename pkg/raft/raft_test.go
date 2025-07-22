@@ -15,6 +15,40 @@ import (
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 )
 
+func LogEntryNotEqual(a, b LogEntry) bool {
+	if a.term != b.term {
+		return true
+	}
+	if a.message.msgType != b.message.msgType {
+		return true
+	}
+	if a.message.key != b.message.key {
+		return true
+	}
+	if a.message.value == nil && b.message.value != nil {
+		return true
+	}
+	if a.message.value != nil && b.message.value == nil {
+		return true
+	}
+	if a.message.value != nil && b.message.value != nil && *a.message.value != *b.message.value {
+		return true
+	}
+	return false
+}
+
+func LogEntriesNotEqual(a, b []LogEntry) bool {
+	if len(a) != len(b) {
+		return true
+	}
+	for i := range a {
+		if LogEntryNotEqual(a[i], b[i]) {
+			return true
+		}
+	}
+	return false
+}
+
 type testApp struct {
 	mu   sync.Mutex
 	data map[int]int
@@ -169,5 +203,39 @@ func TestLogReplication(t *testing.T) {
 		if got != v {
 			t.Errorf("node%d expected data[1]=%d; got %d", i, v, got)
 		}
+	}
+}
+
+func TestLogReplicationWithIntialLog(t *testing.T) {
+	nodes := createCluster(t, 3)
+	v1 := 3
+	v2 := 5
+	initLog := []LogEntry{
+		{
+			term: 1,
+			message: Message{
+				msgType: get,
+				key:     2,
+				value:   &v1,
+			},
+		},
+		{
+			term: 2,
+			message: Message{
+				msgType: put,
+				key:     2,
+				value:   &v2,
+			},
+		},
+	}
+	nodes[0].log = initLog
+	time.Sleep(1000 * time.Millisecond) //one second to replicate log to everyone
+
+	log1 := nodes[0].log
+	log2 := nodes[1].log
+	log3 := nodes[2].log
+
+	if !LogEntriesNotEqual(log1, initLog) && LogEntriesNotEqual(log1, log2) && LogEntriesNotEqual(log2, log3) {
+		t.Errorf("Logs arent equal")
 	}
 }
