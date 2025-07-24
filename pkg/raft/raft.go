@@ -99,7 +99,8 @@ func NewRaft(application Application, cfg *Config) *Raft {
 }
 
 func (r *Raft) ReceiveVote(vote VoteResponse) {
-	//r.mu.Lock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	slog.Info(fmt.Sprintf("Received vote response from %d on node %d, granted: %t, node on term: %d, node from term: %d, node on role: %s",
 		vote.nodeId,
 		r.id,
@@ -108,37 +109,44 @@ func (r *Raft) ReceiveVote(vote VoteResponse) {
 		vote.currentTerm,
 		r.currentRole))
 	if r.currentTerm < vote.currentTerm {
+		slog.Info("Stepping down due to higher term in vote response",
+			slog.Int("nodeId", r.id),
+			slog.Int("oldTerm", r.currentTerm),
+			slog.Int("newTerm", vote.currentTerm))
 		r.currentTerm = vote.currentTerm
 		r.currentRole = Follower
 		//r.mu.Unlock()
-		select {
-		case r.raftElector.resetTimerCh <- struct{}{}:
-		default:
-		}
-	} else if vote.granted && r.currentTerm == vote.currentTerm && r.currentRole == "candidate" {
+		go r.raftElector.ResetTimer()
+		return
+	}
+	if vote.granted && r.currentTerm == vote.currentTerm && r.currentRole == Candidate {
 		r.votesReceived.Add(vote.nodeId)
-		slog.Info(fmt.Sprintf("Currently voted for %d amount: %d/%d", r.id, r.votesReceived.Cardinality(), r.totalNodes))
-		if r.votesReceived.Cardinality() >= int(math.Ceil(float64(r.totalNodes+1)/2)) {
-			slog.Info(fmt.Sprintf("Node %d became a leader", r.id))
-			slog.Info(fmt.Sprintf("Logs for leader %d", r.id))
-			for _, log := range r.log {
-				slog.Info(fmt.Sprintf("term: %d, msgType: %s, key: %d, value: %d", log.term, log.message.msgType, log.message.key, *log.message.value))
-			}
+		slog.Info("Vote counted",
+			slog.Int("for node", r.id),
+			slog.Int("current count", r.votesReceived.Cardinality()),
+			slog.Int("total nodes", r.totalNodes))
+
+		majority := int(math.Ceil(float64(r.totalNodes+1) / 2))
+
+		if r.votesReceived.Cardinality() >= majority {
+			slog.Info("Node became leader",
+				slog.Int("nodeId", r.id),
+				slog.Int("term", r.currentTerm))
+
 			r.currentRole = Leader
 			r.currentLeaderId = r.id
-			r.raftElector.ResetTimer()
+
 			for followerId := 0; followerId < r.totalNodes; followerId++ {
 				if followerId == r.id {
 					continue
 				}
 				r.sentLengths[followerId] = len(r.log)
 				r.ackedLenghts[followerId] = 0
-				r.ReplicateLog(r.id, followerId)
+				go r.ReplicateLog(r.id, followerId)
 			}
+			go r.raftElector.ResetTimer()
 		}
 	}
-	slog.Info("Quitting ReceiveVote, releasing lock")
-	//r.mu.Unlock()
 }
 
 func (r *Raft) forwardToLeader(message Message, nodeId int) {
@@ -163,21 +171,46 @@ func (r *Raft) forwardToLeader(message Message, nodeId int) {
 }
 
 func (r *Raft) Broadcast(message Message) {
-	if r.currentRole != "leader" {
-		r.forwardToLeader(message, r.currentLeaderId) //response with Redirect http if not a leader?
+	r.mu.Lock()
+	isLeader := r.currentRole == Leader
+	leaderID := r.currentLeaderId
+	r.mu.Unlock()
+
+	if !isLeader {
+		r.mu.Lock()
+		peer := r.peers[leaderID]
+		defer r.mu.Unlock()
+		if peer == nil {
+			slog.Warn("leader unknown – dropping client message")
+			return
+		}
+		r.forwardToLeader(message, leaderID)
+		return
 	}
+	r.mu.Lock()
 	slog.Info(fmt.Sprintf("Appending message {msgType %s, key %d, value %d} to node %d logs", message.msgType, message.key, *message.value, r.id))
 	r.log = append(r.log, LogEntry{
 		message: message,
 		term:    r.currentTerm,
 	})
-	go r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor), int32(len(r.log)), r.log)
 	r.ackedLenghts[r.id] = len(r.log)
-	for i := range r.totalNodes {
+
+	currentTerm := r.currentTerm
+	votedFor := r.votedFor
+	logLen := len(r.log)
+	logCopy := make([]LogEntry, len(r.log))
+	copy(logCopy, r.log)
+	totalNodes := r.totalNodes
+	nodeId := r.id
+	r.mu.Unlock()
+
+	go r.logSaver.SaveValues(int32(currentTerm), int32(votedFor), int32(logLen), logCopy)
+
+	for i := range totalNodes {
 		if i == r.id {
 			continue
 		}
-		r.ReplicateLog(r.id, i)
+		go r.ReplicateLog(nodeId, i)
 	}
 }
 
@@ -186,6 +219,9 @@ func (r *Raft) DelieverToApplication(message Message) (success bool, value int) 
 }
 
 func (r *Raft) AppendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	slog.Info(fmt.Sprintf("Appending entries on node %d, current role %s", r.id, r.currentRole))
 	for i, e := range suffix {
 		slog.Info(fmt.Sprintf("Entry %d: term %d, msgType %s, key %d, value %d", i, e.term, e.message.msgType, e.message.key, e.message.value))
@@ -204,12 +240,19 @@ func (r *Raft) AppendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 		}
 	}
 	if leaderCommit > r.commitedLength {
+		messagesToApply := make([]Message, 0, leaderCommit-r.commitedLength)
 		for i := r.commitedLength; i < leaderCommit; i++ {
-			r.DelieverToApplication(r.log[i].message)
+			messagesToApply = append(messagesToApply, r.log[i].message)
 		}
 		r.commitedLength = leaderCommit
+		r.mu.Unlock()
+
+		for _, msg := range messagesToApply {
+			r.DelieverToApplication(msg)
+		}
+
+		r.mu.Lock()
 	}
-	go r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor), int32(len(r.log)), r.log)
 }
 
 func (r *Raft) LogResponse(followerId, term, ack int, success bool) { //its received on Leader - followers sent this as GRPC
@@ -228,13 +271,15 @@ func (r *Raft) LogResponse(followerId, term, ack int, success bool) { //its rece
 			r.CommitLogEntries()
 		} else if r.sentLengths[followerId] > 0 {
 			r.sentLengths[followerId]--
-			r.ReplicateLog(r.id, followerId)
+			go r.ReplicateLog(r.id, followerId)
 		}
 	}
 }
 
 func (r *Raft) CommitLogEntries() {
 	majority := int(math.Ceil(float64(r.totalNodes+1) / 2))
+	messagesToApply := make([]Message, 0)
+
 	for r.commitedLength < len(r.log) {
 		acks := 1
 		for j := range r.totalNodes {
@@ -246,11 +291,18 @@ func (r *Raft) CommitLogEntries() {
 			}
 		}
 		if acks >= majority {
-			r.DelieverToApplication(r.log[r.commitedLength].message)
+			messagesToApply = append(messagesToApply, r.log[r.commitedLength].message)
 			r.commitedLength++
 		} else {
 			break
 		}
+	}
 
+	if len(messagesToApply) > 0 {
+		r.mu.Unlock()
+		for _, msg := range messagesToApply {
+			r.DelieverToApplication(msg)
+		}
+		r.mu.Lock()
 	}
 }

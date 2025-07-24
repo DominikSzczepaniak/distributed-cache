@@ -56,13 +56,22 @@ func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, 
 		value:   val,
 	}
 
-	if r.currentRole != Leader {
-		if r.currentLeaderId < 0 {
+	r.mu.RLock()
+	isLeader := r.currentRole == Leader
+	leaderID := r.currentLeaderId
+	r.mu.RUnlock()
+
+	if !isLeader {
+		if leaderID < 0 {
 			return nil, fmt.Errorf("no leader known")
 		}
-		return r.peers[r.currentLeaderId].Forward(ctx, msg)
+		r.mu.Lock()
+		peer := r.peers[leaderID]
+		r.mu.Unlock()
+		return peer.Forward(ctx, msg)
 	}
-	slog.Info(fmt.Sprintf("Forwarding message from %d to %d, msgType: %s, key: %d, value :%d", r.id, r.currentLeaderId, internal.msgType, internal.key, internal.value))
+
+	slog.Info(fmt.Sprintf("Forwarding message from %d to %d, msgType: %s, key: %d, value :%d", r.id, leaderID, internal.msgType, internal.key, internal.value))
 	r.Broadcast(internal)
 	return &raftpb.Null{}, nil
 }
@@ -97,6 +106,9 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 	leaderId, term, prefixLen, prefixTerm, commitLength, suffix := convertLogRequestArgs(in)
 	slog.Info(fmt.Sprintf("Received LogRequest on node %d from node %d, node on role %s", r.id, int(in.LeaderId), r.currentRole))
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if r.currentTerm < term {
 		slog.Warn(fmt.Sprintf(
 			"Node %d: currentTerm (%d) > received term (%d), updating term and resetting votedFor",
@@ -104,18 +116,24 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		))
 		r.currentTerm = term
 		r.votedFor = -1
-		r.raftElector.ResetTimer()
-		r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor),
-			int32(r.commitedLength), r.log)
+
+		currentTerm := r.currentTerm
+		votedFor := r.votedFor
+		commitedLength := r.commitedLength
+		logCopy := make([]LogEntry, len(r.log))
+		copy(logCopy, r.log)
+
+		go r.raftElector.ResetTimer()
+		go r.logSaver.SaveValues(int32(currentTerm), int32(votedFor), int32(commitedLength), logCopy)
 	}
 	if r.currentTerm == term {
-		if r.currentRole != "follower" || r.currentLeaderId != leaderId {
+		if r.currentRole != Follower || r.currentLeaderId != leaderId {
 			slog.Info(fmt.Sprintf(
 				"Node %d: updating role to follower and setting leaderId to %d (was %s, leaderId %d)",
 				r.id, leaderId, r.currentRole, r.currentLeaderId,
 			))
 		}
-		r.currentRole = "follower"
+		r.currentRole = Follower
 		r.currentLeaderId = leaderId
 	}
 	logOk := (len(r.log) >= prefixLen) && (prefixLen == 0 || r.log[prefixLen-1].term == prefixTerm)
@@ -129,15 +147,26 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 			return nil
 		}(),
 	))
+
 	if r.currentTerm == term && logOk {
 		r.raftElector.ResetTimer()
 		slog.Info(fmt.Sprintf(
 			"Node %d: appending entries (prefixLen=%d, commitLength=%d, suffixLen=%d)",
 			r.id, prefixLen, commitLength, len(suffix),
 		))
+		currentTerm := r.currentTerm
+		votedFor := r.votedFor
+		r.mu.Unlock()
+
 		r.AppendEntries(prefixLen, commitLength, suffix)
+		r.mu.Lock()
+
+		commitedLength := r.commitedLength
+		logCopy := make([]LogEntry, len(r.log))
+		copy(logCopy, r.log)
 		ack := prefixLen + len(suffix)
-		r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor), int32(r.commitedLength), r.log)
+		go r.logSaver.SaveValues(int32(currentTerm), int32(votedFor), int32(commitedLength), logCopy)
+
 		slog.Info(fmt.Sprintf(
 			"Node %d: LogRequest success, ack=%d, term=%d",
 			r.id, ack, r.currentTerm,
@@ -150,14 +179,19 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		}, nil
 	} else {
 
+		currentTerm := r.currentTerm
+		votedFor := r.votedFor
+		commitedLength := r.commitedLength
+		logCopy := make([]LogEntry, len(r.log))
+		copy(logCopy, r.log)
 		slog.Warn(fmt.Sprintf(
 			"Node %d: LogRequest failed (currentTerm=%d, receivedTerm=%d, logOk=%v)",
-			r.id, r.currentTerm, term, logOk,
+			r.id, currentTerm, term, logOk,
 		))
-		r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor), int32(r.commitedLength), r.log)
+		r.logSaver.SaveValues(int32(currentTerm), int32(votedFor), int32(commitedLength), logCopy)
 		return &raftpb.LogResponse{
 			NodeId:      int32(r.id),
-			CurrentTerm: int32(r.currentTerm),
+			CurrentTerm: int32(currentTerm),
 			Ack:         0,
 			Success:     false,
 		}, nil
@@ -178,17 +212,30 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 	candidateLogLength := int(in.CandidateLogLength)
 	candidateLogTerm := int(in.CandidateLogTerm)
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if candidateTerm > r.currentTerm {
 		slog.Info(
-			"Updating current term\n",
+			"Updating current term and stepping down\n",
 			slog.Int("nodeOn", r.id),
-			slog.Int("nodeFrom", int(in.CandidateId)),
+			slog.Int("nodeFrom", candidateId),
 			slog.Int("nodeOnTerm", r.currentTerm),
-			slog.Int("nodeFromTerm", int(in.CandidateTerm)),
+			slog.Int("nodeFromTerm", candidateTerm),
+			slog.String("oldRole", string(r.currentRole)),
 		)
 		r.currentTerm = candidateTerm
-		r.currentRole = "follower"
+		r.currentRole = Follower
 		r.votedFor = -1
+
+		currentTerm := r.currentTerm
+		votedFor := r.votedFor
+		commitedLength := r.commitedLength
+		logCopy := make([]LogEntry, len(r.log))
+		copy(logCopy, r.log)
+
+		go r.raftElector.ResetTimer()
+		go r.logSaver.SaveValues(int32(currentTerm), int32(votedFor), int32(commitedLength), logCopy)
 	}
 	lastTerm := 0
 	if len(r.log) > 0 {
@@ -205,7 +252,15 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 	if candidateTerm == r.currentTerm && logOk && (r.votedFor == -1 || r.votedFor == candidateId) {
 		r.votedFor = candidateId
 		r.currentRole = Follower
-		r.logSaver.SaveValues(int32(r.currentTerm), int32(r.votedFor), int32(r.commitedLength), r.log)
+
+		currentTerm := r.currentTerm
+		votedFor := r.votedFor
+		commitedLength := r.commitedLength
+		logCopy := make([]LogEntry, len(r.log))
+		copy(logCopy, r.log)
+
+		go r.raftElector.ResetTimer()
+		go r.logSaver.SaveValues(int32(currentTerm), int32(votedFor), int32(commitedLength), logCopy)
 		slog.Info(
 			"VoteRequest successful\n",
 			slog.Int("nodeOn", r.id),

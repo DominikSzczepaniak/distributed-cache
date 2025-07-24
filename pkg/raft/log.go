@@ -60,12 +60,18 @@ func (rl *RaftLogReplicator) logReplicateLoop() {
 			timer.Reset(rl.nextTimeout())
 
 		case <-timer.C:
-			if rl.parent.currentRole == Leader {
-				for i := 0; i < rl.parent.totalNodes; i++ {
-					if i == rl.parent.id {
+			rl.parent.mu.RLock()
+			isLeader := rl.parent.currentRole == Leader
+			totalNodes := rl.parent.totalNodes
+			nodeId := rl.parent.id
+			rl.parent.mu.RUnlock()
+
+			if isLeader {
+				for i := 0; i < totalNodes; i++ {
+					if i == nodeId {
 						continue
 					}
-					rl.parent.ReplicateLog(rl.parent.id, i)
+					go rl.parent.ReplicateLog(nodeId, i)
 				}
 			}
 			timer.Reset(rl.nextTimeout())
@@ -78,8 +84,9 @@ func (rl *RaftLogReplicator) logReplicateLoop() {
 
 func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 	slog.Info(fmt.Sprintf("Preparing log request for leader %d", r.id))
-	//r.mu.Lock()
-	//defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	prefixLen := r.sentLengths[followerId]
 	suffix := r.log[prefixLen:]
 	prefixTerm := 0
@@ -114,19 +121,31 @@ func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 }
 
 func (r *Raft) ReplicateLog(id, followerId int) {
-	slog.Info(fmt.Sprintf("Replicating log from %d to %d, node role: %s", id, followerId, r.currentRole))
+	r.mu.RLock()
+	currentRole := r.currentRole
+	r.mu.RUnlock()
+
+	slog.Info(fmt.Sprintf("Replicating log from %d to %d, node role: %s", id, followerId, currentRole))
 	retryCh := make(chan int)
 	done := make(chan struct{})
 	go r.retryAppendEntries(retryCh, done)
 
-	if r.currentRole == Leader {
+	r.mu.RLock()
+	isLeader := r.currentRole == Leader
+	r.mu.RUnlock()
+
+	if isLeader {
 		r.handleReplicateLog(followerId, retryCh, done)
 	}
 
 	for {
 		select {
 		case peerId := <-retryCh:
-			if r.currentRole != Leader {
+			r.mu.RLock()
+			isLeader := r.currentRole == Leader
+			r.mu.RUnlock()
+
+			if isLeader {
 				slog.Info("lost leadership, stopping ReplicateLog")
 				close(done)
 				return
@@ -140,7 +159,11 @@ func (r *Raft) ReplicateLog(id, followerId int) {
 }
 
 func (r *Raft) handleReplicateLog(followerId int, retryCh chan<- int, done chan struct{}) {
-	if r.currentRole != Leader {
+	r.mu.RLock()
+	isLeader := r.currentRole == Leader
+	r.mu.RUnlock()
+
+	if !isLeader {
 		slog.Info("Node is not a leader, returning")
 		return
 	}
@@ -153,10 +176,13 @@ func (r *Raft) handleReplicateLog(followerId int, retryCh chan<- int, done chan 
 		for _, log := range r.log {
 			slog.Info(fmt.Sprintf("term: %d, msgType: %s, key: %d, value: %d", log.term, log.message.msgType, log.message.key, *log.message.value))
 		}
-		resp, err := r.peers[followerId].LogRequest(ctx, args)
+		r.mu.Lock()
+		peer := r.peers[followerId]
+		r.mu.Unlock()
+		resp, err := peer.LogRequest(ctx, args)
 		if err != nil {
 			slog.Error(err.Error())
-			retryCh <- 1
+			retryCh <- followerId
 			return
 		}
 		r.LogResponse(

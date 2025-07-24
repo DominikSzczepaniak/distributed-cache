@@ -54,7 +54,10 @@ func (re *RaftElector) electionTimerLoop() {
 			timer.Reset(re.nextTimeout())
 
 		case <-timer.C:
-			if re.parent.currentRole != Leader {
+			re.parent.mu.Lock()
+			isLeader := re.parent.currentRole == Leader
+			re.parent.mu.Unlock()
+			if !isLeader {
 				re.parent.StartElection()
 			}
 			timer.Reset(re.nextTimeout())
@@ -74,6 +77,8 @@ func (r *RaftElector) ResetTimer() {
 }
 
 func (r *Raft) StartElection() {
+	r.mu.Lock()
+
 	r.raftElector.ResetTimer()
 	fmt.Printf("Election started for node %d\n", r.id)
 	r.currentRole = Candidate
@@ -81,38 +86,46 @@ func (r *Raft) StartElection() {
 	r.votedFor = r.id
 	r.votesReceived = mapset.NewSet[int]()
 	r.votesReceived.Add(r.id)
+
 	logTerm := 0
 	if len(r.log) > 0 {
 		logTerm = r.log[len(r.log)-1].term
 	}
-	for i := 0; i < r.totalNodes; i++ {
+
+	voteData := VoteRequestData{r.id, r.currentTerm, len(r.log), logTerm}
+	totalNodes := r.totalNodes
+
+	r.mu.Unlock()
+
+	for i := 0; i < totalNodes; i++ {
 		if i == r.id {
 			continue
 		}
 		fmt.Printf("Sending vote request to node %d from %d\n", i, r.id)
-		r.sendVoteRequest(VoteRequestData{r.id, r.currentTerm, len(r.log), logTerm}, i)
+		go r.sendVoteRequest(voteData, i)
 	}
 }
 
 func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
+	r.mu.Lock()
+	peer := r.peers[nodeId]
+	r.mu.Unlock()
 	go func() {
-		if r.currentRole != Candidate {
-			return
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
-		resp, err := r.peers[nodeId].VoteRequest(ctx, &raftpb.VoteRequestArgs{
+		resp, err := peer.VoteRequest(ctx, &raftpb.VoteRequestArgs{
 			CandidateId:        int32(data.candidateId),
 			CandidateTerm:      int32(data.candidateTerm),
 			CandidateLogLength: int32(data.candidateLogLength),
 			CandidateLogTerm:   int32(data.candidateLogTerm),
 		})
-
-		slog.Info(fmt.Sprintf("Got vote response on node %d\n", nodeId))
 		if err != nil {
-			panic("Network error") //TODO WHAT TO DO HERE?
+			slog.Error(fmt.Sprintf("Vote request failed %s", err))
+			return
 		}
+
+		slog.Info(fmt.Sprintf("Got vote response on node %d, granted %t\n", nodeId, resp.Granted))
 		r.ReceiveVote(VoteResponse{int(resp.NodeId), int(resp.CurrentTerm), resp.Granted})
 	}()
 }

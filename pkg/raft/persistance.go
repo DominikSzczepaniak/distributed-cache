@@ -5,6 +5,7 @@ package raft
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -78,10 +79,33 @@ func (rds *RaftDataSaver) saveLog(logs []LogEntry, file *os.File) (bool, error) 
 	return true, nil
 }
 
-func (rds *RaftDataSaver) SaveValues(currentTerm, votedFor, commitedLength int32, logs []LogEntry) (bool, error) {
-	if err := os.MkdirAll(filepath.Dir(rds.valuesFilename), 0755); err != nil {
-		panic(fmt.Sprintf("Failed to create parent directory for %s: %s", rds.valuesFilename, err))
+func ensureDir(filename string) {
+	dir := filepath.Clean(filepath.Dir(filename))
+	slog.Info("Checking directory", "dir", dir)
+
+	info, err := os.Stat(dir)
+	if err == nil {
+		if info.IsDir() {
+			slog.Info("Directory already exists", "dir", dir)
+			return
+		} else {
+			slog.Error("Path exists but is not a directory", "dir", dir)
+			os.Exit(1)
+		}
+	} else if !os.IsNotExist(err) {
+		slog.Error("Failed to stat directory", "dir", dir, "err", err)
+		os.Exit(1)
 	}
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		slog.Error("Failed to create directory", "dir", dir, "err", err)
+		os.Exit(1)
+	}
+	slog.Info("Directory created", "dir", dir)
+}
+
+func (rds *RaftDataSaver) SaveValues(currentTerm, votedFor, commitedLength int32, logs []LogEntry) (bool, error) {
+	ensureDir(rds.valuesFilename)
 
 	file, err := os.Create(rds.valuesFilename)
 	if err != nil {
@@ -173,6 +197,8 @@ func (rds *RaftDataSaver) loadLog() ([]LogEntry, error) {
 }
 
 func (rds *RaftDataSaver) LoadValues() (int, int, int, []LogEntry, error) {
+	rds.parent.mu.Lock()
+	defer rds.parent.mu.Unlock()
 	file, err := os.Open(rds.valuesFilename)
 	if err != nil {
 		return 0, 0, 0, nil, fmt.Errorf(
