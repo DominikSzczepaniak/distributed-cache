@@ -104,10 +104,10 @@ func convertLogRequestArgs(args *raftpb.LogRequestArgs) (int, int, int, int, int
 
 func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) { //receiving LogRequest - this machine is trying to append log entries to it's log entries
 	leaderId, term, prefixLen, prefixTerm, commitLength, suffix := convertLogRequestArgs(in)
-	slog.Info(fmt.Sprintf("Received LogRequest on node %d from node %d, node on role %s", r.id, int(in.LeaderId), r.currentRole))
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	slog.Info(fmt.Sprintf("Received LogRequest on node %d from node %d, node on role %s", r.id, int(in.LeaderId), r.currentRole))
 
 	if r.currentTerm < term {
 		slog.Warn(fmt.Sprintf(
@@ -199,6 +199,13 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 }
 
 func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*raftpb.VoteResponse, error) {
+	candidateId := int(in.CandidateId)
+	candidateTerm := int(in.CandidateTerm)
+	candidateLogLength := int(in.CandidateLogLength)
+	candidateLogTerm := int(in.CandidateLogTerm)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	slog.Info(
 		"Received request for vote\n",
 		slog.Int("nodeOn", r.id),
@@ -207,13 +214,6 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 		slog.Int("nodeFromTerm", int(in.CandidateTerm)),
 		slog.String("nodeOnRole", string(r.currentRole)),
 	)
-	candidateId := int(in.CandidateId)
-	candidateTerm := int(in.CandidateTerm)
-	candidateLogLength := int(in.CandidateLogLength)
-	candidateLogTerm := int(in.CandidateLogTerm)
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	if candidateTerm > r.currentTerm {
 		slog.Info(
