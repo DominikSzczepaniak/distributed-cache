@@ -217,47 +217,47 @@ func TestLogReplication(t *testing.T) {
 	}
 }
 
-//func TestLogReplicationWithIntialLog(t *testing.T) {
-//	v1 := 3
-//	v2 := 5
-//	initLog := []LogEntry{
-//		{
-//			term: 1,
-//			message: Message{
-//				msgType: get,
-//				key:     2,
-//				value:   &v1,
-//			},
-//		},
-//		{
-//			term: 2,
-//			message: Message{
-//				msgType: put,
-//				key:     2,
-//				value:   &v2,
-//			},
-//		},
-//	}
-//	nodes := createCluster(t, 3)
-//
-//	nodes[0].mu.Lock()
-//	nodes[0].log = initLog
-//	nodes[0].mu.Unlock()
-//
-//	time.Sleep(1000 * time.Millisecond) //one second to replicate log to everyone
-//	nodes[0].mu.Lock()
-//	log1 := nodes[0].log
-//	nodes[0].mu.Unlock()
-//
-//	nodes[1].mu.Lock()
-//	log2 := nodes[1].log
-//	nodes[1].mu.Unlock()
-//
-//	nodes[2].mu.Lock()
-//	log3 := nodes[2].log
-//	nodes[2].mu.Unlock()
-//
-//	if !LogEntriesNotEqual(log1, initLog) && LogEntriesNotEqual(log1, log2) && LogEntriesNotEqual(log2, log3) {
-//		t.Errorf("Logs arent equal")
-//	}
-//}
+func TestLogReplicationWithIntialLog(t *testing.T) {
+	v1 := 3
+	v2 := 5
+	initLog := []LogEntry{
+		{
+			term: 1,
+			message: Message{
+				msgType: get,
+				key:     2,
+				value:   &v1,
+			},
+		},
+		{
+			term: 2,
+			message: Message{
+				msgType: put,
+				key:     2,
+				value:   &v2,
+			},
+		},
+	}
+	nodes := createCluster(t, 3)
+
+	nodes[0].mu.Lock()
+	nodes[0].log = initLog
+	nodes[0].mu.Unlock()
+
+	time.Sleep(1000 * time.Millisecond) //one second to replicate log to everyone
+	nodes[0].mu.Lock()
+	log1 := nodes[0].log
+	nodes[0].mu.Unlock()
+
+	nodes[1].mu.Lock()
+	log2 := nodes[1].log
+	nodes[1].mu.Unlock()
+
+	nodes[2].mu.Lock()
+	log3 := nodes[2].log
+	nodes[2].mu.Unlock()
+
+	if !LogEntriesNotEqual(log1, initLog) && LogEntriesNotEqual(log1, log2) && LogEntriesNotEqual(log2, log3) {
+		t.Errorf("Logs arent equal")
+	}
+}
