@@ -192,8 +192,6 @@ func TestLogReplication(t *testing.T) {
 			nodes[i].mu.RUnlock()
 			if role == Leader {
 				leaderNode = nodes[i]
-			}
-			if leaderNode != nil {
 				outBreak = true
 				break
 			}
@@ -202,7 +200,7 @@ func TestLogReplication(t *testing.T) {
 
 	v := 42
 	msg := Message{msgType: put, key: 1, value: &v}
-	leaderNode.Broadcast(msg) //might fail if leaderNode is nil
+	leaderNode.Broadcast(msg)
 
 	time.Sleep(2 * time.Second)
 
@@ -259,5 +257,45 @@ func TestLogReplicationWithIntialLog(t *testing.T) {
 
 	if !LogEntriesNotEqual(log1, initLog) && LogEntriesNotEqual(log1, log2) && LogEntriesNotEqual(log2, log3) {
 		t.Errorf("Logs arent equal")
+	}
+}
+
+func TestLogReplicationWithForward(t *testing.T) {
+	nodes := createCluster(t, 3)
+
+	time.Sleep(200 * time.Millisecond)
+	var leaderIdx int
+outer:
+	for {
+		for i, n := range nodes {
+			n.mu.RLock()
+			isLeader := n.currentRole == Leader
+			n.mu.RUnlock()
+			if isLeader {
+				leaderIdx = i
+				break outer
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	v := 42
+	msg := Message{msgType: put, key: 1, value: &v}
+	if leaderIdx == 1 {
+		nodes[0].Broadcast(msg)
+	} else {
+		nodes[1].Broadcast(msg)
+	}
+
+	time.Sleep(2 * time.Second)
+
+	for i, r := range nodes {
+		app := r.application.(*testApp)
+		app.mu.Lock()
+		got := app.data[1]
+		app.mu.Unlock()
+		if got != v {
+			t.Errorf("node%d expected data[1]=%d; got %d", i, v, got)
+		}
 	}
 }
