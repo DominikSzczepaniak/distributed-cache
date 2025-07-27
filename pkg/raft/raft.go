@@ -1,8 +1,9 @@
-// The main Raft struct definition.
-// The NewRaft constructor function.
-// Perhaps the main Run loop or core goroutine management.
-// State transitions (becomeFollower, becomeCandidate, becomeLeader - or these could be in state.go).
-// Public methods for interaction (e.g., ApplyCommand).
+// TODO
+// 1. Change function sygnatures, only API raft is giving is Broadcast
+// 2. Change message type, we dont really care about the actual message, we just care about the term from the message, so we can accept whatever
+// 3. Change mutexes from full lock to read lock whenever needed
+// 4. Add more unit tests
+// 5. Broadcast should return whether he suceed, so retries can be applied for client
 package raft
 
 import (

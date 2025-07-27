@@ -299,3 +299,9 @@ outer:
 		}
 	}
 }
+
+func TestThroughput(t *testing.T) {
+	//generate a lot of get and put requests - around 100k
+	//put some custom requests into that and make sure that random wont touch those
+	//assert custom requests are good
+}
