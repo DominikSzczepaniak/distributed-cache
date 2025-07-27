@@ -65,9 +65,9 @@ func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, 
 		if leaderID < 0 {
 			return nil, fmt.Errorf("no leader known")
 		}
-		r.mu.Lock()
+		r.mu.RLock()
 		peer := r.peers[leaderID]
-		r.mu.Unlock()
+		r.mu.RUnlock()
 		return peer.Forward(ctx, msg)
 	}
 

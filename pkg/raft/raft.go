@@ -150,13 +150,13 @@ func (r *Raft) ReceiveVote(vote VoteResponse) {
 	}
 }
 
-func (r *Raft) forwardToLeader(message Message, nodeId int) {
-	slog.Info(fmt.Sprintf("Forwarding message {msgType %s, key %d, value %d} to leader %d", message.msgType, message.key, message.value, nodeId))
+func (r *Raft) forwardToLeader(message Message, leader PeerClient) {
+	slog.Info(fmt.Sprintf("Forwarding message {msgType %s, key %d, value %d} to leader", message.msgType, message.key, message.value))
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	msg := &raftpb.Message{
-		Type: raftpb.Message_Type(toProtoMsgType(message.msgType)),
+		Type: toProtoMsgType(message.msgType),
 		Key:  int32(message.key),
 		Value: &wrapperspb.Int32Value{
 			Value: int32(*message.value),
@@ -164,7 +164,7 @@ func (r *Raft) forwardToLeader(message Message, nodeId int) {
 	}
 	if message.value != nil {
 	}
-	_, err := r.peers[nodeId].Forward(ctx, msg)
+	_, err := leader.Forward(ctx, msg)
 
 	if err != nil {
 		panic("Network error") //TODO WHAT TO DO HERE?
@@ -172,20 +172,20 @@ func (r *Raft) forwardToLeader(message Message, nodeId int) {
 }
 
 func (r *Raft) Broadcast(message Message) {
-	r.mu.Lock()
+	r.mu.RLock()
 	isLeader := r.currentRole == Leader
 	leaderID := r.currentLeaderId
-	r.mu.Unlock()
+	r.mu.RUnlock()
 
 	if !isLeader {
-		r.mu.Lock()
+		r.mu.RLock()
 		peer := r.peers[leaderID]
-		defer r.mu.Unlock()
+		r.mu.RUnlock()
 		if peer == nil {
 			slog.Warn("leader unknown – dropping client message")
 			return
 		}
-		r.forwardToLeader(message, leaderID)
+		r.forwardToLeader(message, peer)
 		return
 	}
 	r.mu.Lock()

@@ -54,9 +54,9 @@ func (re *RaftElector) electionTimerLoop() {
 			timer.Reset(re.nextTimeout())
 
 		case <-timer.C:
-			re.parent.mu.Lock()
+			re.parent.mu.RLock()
 			isLeader := re.parent.currentRole == Leader
-			re.parent.mu.Unlock()
+			re.parent.mu.RUnlock()
 			if !isLeader {
 				re.parent.StartElection()
 			}
@@ -107,9 +107,9 @@ func (r *Raft) StartElection() {
 }
 
 func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
-	r.mu.Lock()
+	r.mu.RLock()
 	peer := r.peers[nodeId]
-	r.mu.Unlock()
+	r.mu.RUnlock()
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()

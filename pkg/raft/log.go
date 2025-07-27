@@ -176,9 +176,9 @@ func (r *Raft) handleReplicateLog(followerId int, retryCh chan<- int, done chan 
 		for _, log := range r.log {
 			slog.Info(fmt.Sprintf("term: %d, msgType: %s, key: %d, value: %d", log.term, log.message.msgType, log.message.key, *log.message.value))
 		}
-		r.mu.Lock()
+		r.mu.RLock()
 		peer := r.peers[followerId]
-		r.mu.Unlock()
+		r.mu.RUnlock()
 		resp, err := peer.LogRequest(ctx, args)
 		if err != nil {
 			slog.Error(err.Error())
