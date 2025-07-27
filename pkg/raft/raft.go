@@ -1,6 +1,5 @@
 // TODO
 // 2. Change message type, we dont really care about the actual message, we just care about the term from the message, so we can accept whatever
-// 4. Add more unit tests
 package raft
 
 import (
@@ -101,7 +100,6 @@ func (r *Raft) receiveVote(vote VoteResponse) {
 			slog.Int("newTerm", vote.currentTerm))
 		r.currentTerm = vote.currentTerm
 		r.currentRole = Follower
-		//r.mu.Unlock()
 		go r.raftElector.ResetTimer()
 		return
 	}
@@ -152,7 +150,10 @@ func (r *Raft) forwardToLeader(message Message, leader PeerClient) {
 	_, err := leader.Forward(ctx, msg)
 
 	if err != nil {
-		panic("Network error") //TODO WHAT TO DO HERE?
+		_, err = leader.Forward(ctx, msg) //retry once
+		if err != nil {
+			panic("Network error")
+		}
 	}
 }
 
@@ -200,7 +201,7 @@ func (r *Raft) Broadcast(message Message) {
 	}
 }
 
-func (r *Raft) deliverToApplication(message Message) (success bool, value int) { //applies message to cache
+func (r *Raft) deliverToApplication(message Message) (success bool, value int) {
 	return r.application.AppendMessage(message)
 }
 

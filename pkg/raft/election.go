@@ -23,7 +23,7 @@ func NewRaftElector(r *Raft) *Elector {
 	re := &Elector{
 		parent: r,
 
-		minElectionTimeout: 100 * time.Millisecond, //change if needed
+		minElectionTimeout: 100 * time.Millisecond,
 		maxElectionTimeout: 300 * time.Millisecond,
 
 		resetTimerCh:  make(chan struct{}, 1),
