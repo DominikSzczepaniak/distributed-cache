@@ -77,7 +77,7 @@ func (rds *DataSaver) saveLog(logs []LogEntry, file *os.File) (bool, error) {
 	return true, nil
 }
 
-func ensureDir(filename string) {
+func ensureDir(filename string) error {
 	dir := filepath.Clean(filepath.Dir(filename))
 	slog.Info("Checking directory", "dir", dir)
 
@@ -85,25 +85,29 @@ func ensureDir(filename string) {
 	if err == nil {
 		if info.IsDir() {
 			slog.Info("Directory already exists", "dir", dir)
-			return
+			return nil
 		} else {
 			slog.Error("Path exists but is not a directory", "dir", dir)
-			os.Exit(1)
+			return fmt.Errorf("path %q exists but is not a directory", dir)
 		}
 	} else if !os.IsNotExist(err) {
 		slog.Error("Failed to stat directory", "dir", dir, "err", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to stat directory %q: %w", dir, err)
 	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		slog.Error("Failed to create directory", "dir", dir, "err", err)
-		os.Exit(1)
+
+		return fmt.Errorf("failed to create directory %q: %w", dir, err)
 	}
 	slog.Info("Directory created", "dir", dir)
+	return nil
 }
 
 func (rds *DataSaver) SaveValues(currentTerm, votedFor, commitedLength int32, logs []LogEntry) (bool, error) {
-	ensureDir(rds.valuesFilename)
+	if err := ensureDir(rds.valuesFilename); err != nil {
+		return false, fmt.Errorf("ensure values dir: %w", err)
+	}
 
 	file, err := os.Create(rds.valuesFilename)
 	if err != nil {
