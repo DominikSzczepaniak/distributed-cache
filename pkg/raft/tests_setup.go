@@ -1,0 +1,187 @@
+package raft
+
+import (
+	"context"
+	"fmt"
+	mapset "github.com/deckarep/golang-set/v2"
+	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
+	"github.com/stretchr/testify/mock"
+	"path/filepath"
+	"reflect"
+	"sync"
+	"testing"
+)
+
+type testApp struct {
+	mu   sync.RWMutex
+	data map[int]int
+}
+
+func newTestApp() *testApp {
+	return &testApp{data: make(map[int]int)}
+}
+
+func (a *testApp) AppendMessage(msg Message) (bool, int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	switch msg.msgType {
+	case put:
+		if msg.value == nil {
+			return false, 0
+		}
+		a.data[msg.key] = *msg.value
+		return true, 0
+	case get:
+		return true, a.data[msg.key]
+	case delete:
+		rv := reflect.ValueOf(a.data)
+		rv.SetMapIndex(reflect.ValueOf(msg.key), reflect.Value{})
+		return true, 0
+	default:
+		return false, 0
+	}
+}
+
+func (a *testApp) getData() map[int]int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	m := make(map[int]int, len(a.data))
+	for k, v := range a.data {
+		m[k] = v
+	}
+	return m
+}
+
+func intPtr(i int) *int { return &i }
+
+type mockPeerClient struct{ mock.Mock }
+
+func (m *mockPeerClient) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, error) {
+	args := m.Called(ctx, msg)
+	return args.Get(0).(*raftpb.Null), args.Error(1)
+}
+func (m *mockPeerClient) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*raftpb.VoteResponse, error) {
+	args := m.Called(ctx, in)
+	return args.Get(0).(*raftpb.VoteResponse), args.Error(1)
+}
+func (m *mockPeerClient) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) {
+	args := m.Called(ctx, in)
+	return args.Get(0).(*raftpb.LogResponse), args.Error(1)
+}
+
+func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
+	t.Helper()
+	app := newTestApp()
+	tmpDir := t.TempDir()
+	cfg := &Config{
+		valuesFilename: filepath.Join(tmpDir, fmt.Sprintf("node-%d.data", id)),
+		totalNodes:     totalNodes,
+		raftId:         id,
+		raftAddrs:      make([]string, totalNodes),
+	}
+	r := &Raft{
+		id:              id,
+		totalNodes:      totalNodes,
+		currentTerm:     0,
+		votedFor:        -1,
+		log:             []LogEntry{},
+		commitedLength:  0,
+		currentRole:     Follower,
+		currentLeaderId: -1,
+		votesReceived:   mapset.NewSet[int](),
+		sentLengths:     make([]int, totalNodes),
+		ackedLengths:    make([]int, totalNodes),
+		application:     app,
+		peers:           make([]PeerClient, totalNodes),
+	}
+	r.logSaver = NewRaftDataSaver(r, cfg)
+	r.raftElector = NewRaftElector(r)
+	close(r.raftElector.cancelTimerCh)
+	r.logReplicator = NewRaftLogReplicator(r)
+	close(r.logReplicator.cancelLogReplicateCh)
+	return r
+}
+
+func createClusterMocks(t *testing.T, size int) ([]*Raft, []*mockPeerClient) {
+	t.Helper()
+	nodes := make([]*Raft, size)
+	mocks := make([]*mockPeerClient, size)
+	for i := 0; i < size; i++ {
+		nodes[i] = createTestRaft(t, i, size)
+		mocks[i] = &mockPeerClient{}
+		mocks[i].
+			On("LogRequest", mock.Anything, mock.Anything).
+			Return(&raftpb.LogResponse{
+				NodeId:      int32(i),
+				CurrentTerm: int32(nodes[i].currentTerm),
+				Ack:         0,
+				Success:     false,
+			}, nil).
+			Maybe()
+	}
+	for i := 0; i < size; i++ {
+		for j := 0; j < size; j++ {
+			nodes[i].peers[j] = mocks[j]
+		}
+	}
+	return nodes, mocks
+}
+
+type inMemPeer struct{ r *Raft }
+
+func (p *inMemPeer) Forward(ctx context.Context, m *raftpb.Message) (*raftpb.Null, error) {
+	return p.r.Forward(ctx, m)
+}
+func (p *inMemPeer) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*raftpb.VoteResponse, error) {
+	return p.r.VoteRequest(ctx, in)
+}
+func (p *inMemPeer) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) {
+	return p.r.LogRequest(ctx, in)
+}
+
+func createCluster(t *testing.T, n int) []*Raft {
+	t.Helper()
+	apps := make([]*testApp, n)
+	for i := range apps {
+		apps[i] = newTestApp()
+	}
+	nodes := make([]*Raft, n)
+	for id := 0; id < n; id++ {
+		tmp := t.TempDir()
+		fn := filepath.Join(tmp, fmt.Sprintf("node-%d.data", id))
+		cfg := &Config{
+			valuesFilename: fn,
+			totalNodes:     n,
+			raftId:         id,
+			raftAddrs:      make([]string, n),
+		}
+		r := &Raft{
+			id:              id,
+			totalNodes:      n,
+			currentTerm:     0,
+			votedFor:        -1,
+			log:             []LogEntry{},
+			commitedLength:  0,
+			currentRole:     Follower,
+			currentLeaderId: -1,
+			votesReceived:   mapset.NewSet[int](),
+			sentLengths:     make([]int, n),
+			ackedLengths:    make([]int, n),
+			application:     apps[id],
+		}
+		r.logSaver = NewRaftDataSaver(r, cfg)
+		r.raftElector = NewRaftElector(r)
+		r.logReplicator = NewRaftLogReplicator(r)
+		nodes[id] = r
+	}
+	peers := make([]PeerClient, n)
+	for i := range peers {
+		peers[i] = &inMemPeer{r: nodes[i]}
+	}
+	for _, r := range nodes {
+		r.mu.Lock()
+		r.peers = peers
+		r.mu.Unlock()
+	}
+	return nodes
+}

@@ -111,7 +111,7 @@ func (rds *DataSaver) SaveValues(currentTerm, votedFor, commitedLength int32, lo
 
 	file, err := os.Create(rds.valuesFilename)
 	if err != nil {
-		panic("Path of VALUES_FILENAME is not correct, cannot save data to disk")
+		panic(fmt.Sprintf("Path of VALUES_FILENAME is not correct, cannot save data to disk, error %s", err))
 	}
 	defer file.Close()
 	if _, err := fmt.Fprintf(
