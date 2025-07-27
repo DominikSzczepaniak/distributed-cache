@@ -142,7 +142,7 @@ func (r *Raft) replicateLog(id, followerId int) {
 			isLeader := r.currentRole == Leader
 			r.mu.RUnlock()
 
-			if isLeader {
+			if !isLeader {
 				slog.Info("lost leadership, stopping replicateLog")
 				close(done)
 				return
@@ -173,9 +173,8 @@ func (r *Raft) handleReplicateLog(followerId int, retryCh chan<- int, done chan 
 		for _, log := range r.log {
 			slog.Info(fmt.Sprintf("term: %d, msgType: %s, key: %d, value: %d", log.term, log.message.msgType, log.message.key, *log.message.value))
 		}
-		r.mu.RLock()
-		peer := r.peers[followerId]
-		r.mu.RUnlock()
+
+		peer := r.getPeer(followerId)
 		resp, err := peer.LogRequest(ctx, args)
 		if err != nil {
 			slog.Error(err.Error())

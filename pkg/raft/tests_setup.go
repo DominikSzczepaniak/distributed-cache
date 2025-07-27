@@ -97,13 +97,16 @@ func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
 		sentLengths:     make([]int, totalNodes),
 		ackedLengths:    make([]int, totalNodes),
 		application:     app,
-		peers:           make([]PeerClient, totalNodes),
 	}
 	r.logSaver = NewRaftDataSaver(r, cfg)
 	r.raftElector = NewRaftElector(r)
 	close(r.raftElector.cancelTimerCh)
 	r.logReplicator = NewRaftLogReplicator(r)
 	close(r.logReplicator.cancelLogReplicateCh)
+
+	initial := make([]PeerClient, totalNodes)
+	r.setPeers(initial)
+
 	return r
 }
 
@@ -124,10 +127,12 @@ func createClusterMocks(t *testing.T, size int) ([]*Raft, []*mockPeerClient) {
 			}, nil).
 			Maybe()
 	}
-	for i := 0; i < size; i++ {
-		for j := 0; j < size; j++ {
-			nodes[i].peers[j] = mocks[j]
-		}
+	peers := make([]PeerClient, size)
+	for i, m := range mocks {
+		peers[i] = m
+	}
+	for _, node := range nodes {
+		node.setPeers(peers)
 	}
 	return nodes, mocks
 }
@@ -186,10 +191,8 @@ func createCluster(t testing.TB, n int) []*Raft {
 	for i := range peers {
 		peers[i] = &inMemPeer{r: nodes[i]}
 	}
-	for _, r := range nodes {
-		r.mu.Lock()
-		r.peers = peers
-		r.mu.Unlock()
+	for _, node := range nodes {
+		node.setPeers(peers)
 	}
 	return nodes
 }

@@ -18,7 +18,7 @@ func newHeartbeat(parent *Raft) *Heartbeat {
 		parent:        parent,
 		resetTimerCh:  make(chan struct{}, 1),
 		cancelTimerCh: make(chan struct{}, 1),
-		timeout:       20 * time.Millisecond,
+		timeout:       20 * time.Millisecond, //TODO might be too aggressive for network
 	}
 }
 
@@ -28,9 +28,7 @@ func (h *Heartbeat) sendHeartbeat() {
 			continue
 		}
 
-		h.parent.mu.RLock()
-		peer := h.parent.peers[i]
-		h.parent.mu.RUnlock()
+		peer := h.parent.getPeer(i)
 
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), h.timeout)

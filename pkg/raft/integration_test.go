@@ -34,45 +34,6 @@ func randomRequest(upperLimit int) Message {
 	panic("Impossible")
 }
 
-//func TestRaftManyRequests(t *testing.T) {
-//	if testing.Short() {
-//		t.Skip("short")
-//	}
-//	nodes := createCluster(t, 3)
-//	time.Sleep(1000 * time.Second)
-//
-//	const requestNumber = 10
-//	const upperLimit = 800000
-//
-//	requests := make([]Message, 0, requestNumber+1)
-//	for i := 0; i < requestNumber; i++ {
-//		requests = append(requests, randomRequest(upperLimit))
-//	}
-//	testKey := upperLimit + 5
-//	testValue := 11
-//	requests = append(requests, Message{
-//		msgType: put,
-//		key:     testKey,
-//		value:   &testValue,
-//	})
-//
-//	for i := range requests {
-//		j := rand.Intn(i + 1)
-//		requests[i], requests[j] = requests[j], requests[i]
-//	}
-//
-//	for _, req := range requests {
-//		nodes[0].Broadcast(req)
-//	}
-//
-//	time.Sleep(2 * time.Second)
-//
-//	for i, n := range nodes {
-//		data := n.application.(*testApp).getData()
-//		assert.Equal(t, testValue, data[testKey], "node %d", i)
-//	}
-//}
-
 func TestFullRaftIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short")
@@ -180,7 +141,7 @@ func TestConcurrentOperations(t *testing.T) {
 		n.mu.RUnlock()
 	}
 	require.NotNil(t, leader)
-	const nmsgs = 10
+	const nmsgs = 2000
 	done := make(chan struct{}, nmsgs)
 	for i := 0; i < nmsgs; i++ {
 		go func(key int) {

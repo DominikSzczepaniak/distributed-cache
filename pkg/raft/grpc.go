@@ -13,7 +13,7 @@ import (
 )
 
 func (r *Raft) initGRPC(cfg *Config) {
-	r.peers = make([]PeerClient, r.totalNodes)
+	peers := make([]PeerClient, r.totalNodes)
 	r.conns = make([]*grpc.ClientConn, r.totalNodes)
 
 	for i, addr := range cfg.raftAddrs {
@@ -26,9 +26,9 @@ func (r *Raft) initGRPC(cfg *Config) {
 		}
 
 		r.conns[i] = conn
-		r.peers[i] = NewGRPCPeerClient(conn)
+		peers[i] = NewGRPCPeerClient(conn)
 	}
-
+	r.setPeers(peers)
 	go r.serveGRPC(cfg.raftAddrs[r.id])
 }
 
@@ -65,9 +65,7 @@ func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, 
 		if leaderID < 0 {
 			return nil, fmt.Errorf("no leader known")
 		}
-		r.mu.RLock()
-		peer := r.peers[leaderID]
-		r.mu.RUnlock()
+		peer := r.getPeer(leaderID)
 		return peer.Forward(ctx, msg)
 	}
 
@@ -105,7 +103,7 @@ func convertLogRequestArgs(args *raftpb.LogRequestArgs) (int, int, int, int, int
 func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) {
 	leaderId, term, prefixLen, prefixTerm, commitLength, suffix := convertLogRequestArgs(in)
 
-	r.mu.Lock()
+	r.mu.Lock() //TODO: fix, kept too long. Release the lock for slow operations - network and IO
 	defer r.mu.Unlock()
 	slog.Info(fmt.Sprintf("Received LogRequest on node %d from node %d, node on role %s", r.id, int(in.LeaderId), r.currentRole))
 
@@ -124,7 +122,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		copy(logCopy, r.log)
 
 		go r.raftElector.ResetTimer()
-		go r.logSaver.SaveValues(int32(currentTerm), int32(votedFor), int32(commitedLength), logCopy)
+		go r.logSaver.SaveValues(int32(currentTerm), int32(votedFor), int32(commitedLength), logCopy) //TODO dont run inside lock
 	}
 	if r.currentTerm == term {
 		if r.currentRole != Follower || r.currentLeaderId != leaderId {

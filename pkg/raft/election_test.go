@@ -122,11 +122,20 @@ func TestElectionTimeout(t *testing.T) {
 	mocks := make([]*mockPeerClient, 3)
 	for i := range mocks {
 		mocks[i] = &mockPeerClient{}
-		node.peers[i] = mocks[i]
-		mocks[i].On("VoteRequest", mock.Anything, mock.Anything).
-			Return(&raftpb.VoteResponse{NodeId: int32(i), CurrentTerm: 1, Granted: false}, nil).
+		mocks[i].
+			On("VoteRequest", mock.Anything, mock.Anything).
+			Return(&raftpb.VoteResponse{
+				NodeId:      int32(i),
+				CurrentTerm: 1,
+				Granted:     false,
+			}, nil).
 			Maybe()
 	}
+	peers := make([]PeerClient, len(mocks))
+	for i, m := range mocks {
+		peers[i] = m
+	}
+	node.setPeers(peers)
 	time.Sleep(400 * time.Millisecond)
 	node.mu.RLock()
 	role, term := node.currentRole, node.currentTerm

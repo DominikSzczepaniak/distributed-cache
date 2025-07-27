@@ -45,7 +45,10 @@ func TestLogReplication(t *testing.T) {
 			leader.currentTerm = 1
 			leader.log = append([]LogEntry{}, tt.leaderLog...)
 			mockPeer := &mockPeerClient{}
-			leader.peers[1] = mockPeer
+			peers := leader.getPeers()
+			peers[1] = mockPeer
+			leader.setPeers(peers)
+
 			tt.setupMock(mockPeer)
 			leader.replicateLog(0, 1)
 			time.Sleep(100 * time.Millisecond)

@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
@@ -37,7 +38,7 @@ type Raft struct {
 
 	application Application
 
-	peers []PeerClient
+	peers atomic.Value
 	conns []*grpc.ClientConn
 
 	raftElector   *Elector       //takes care of elections
@@ -166,9 +167,7 @@ func (r *Raft) Broadcast(message Message) {
 	r.mu.RUnlock()
 
 	if !isLeader {
-		r.mu.RLock()
-		peer := r.peers[leaderID]
-		r.mu.RUnlock()
+		peer := r.getPeer(leaderID)
 		if peer == nil {
 			slog.Warn("leader unknown – dropping client message")
 			return
@@ -199,7 +198,7 @@ func (r *Raft) Broadcast(message Message) {
 		if i == r.id {
 			continue
 		}
-		go r.replicateLog(nodeId, i)
+		go r.replicateLog(nodeId, i) // TODO implement batching, this implementation spams RPC too much
 	}
 }
 
@@ -211,7 +210,7 @@ func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	slog.Info(fmt.Sprintf("Appending entries on node %d, current role %s", r.id, r.currentRole))
+	slog.Info(fmt.Sprintf("Appending entries on node %d, current role %s", r.id, r.currentRole)) //TODO spamming too much and possibly slowing entire thing, consider batching
 	for i, e := range suffix {
 		slog.Info(fmt.Sprintf("Entry %d: term %d, msgType %s, key %d, value %d", i, e.term, e.message.msgType, e.message.key, e.message.value))
 	}

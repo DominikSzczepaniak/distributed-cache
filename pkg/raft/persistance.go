@@ -1,5 +1,8 @@
 package raft
 
+//this is tragic implementation, speed ups need to be made
+//1.append only model for data - we currently create a new  file every time
+//2.metadata can be stored in different file (currentVote,votedFor)
 import (
 	"bufio"
 	"fmt"

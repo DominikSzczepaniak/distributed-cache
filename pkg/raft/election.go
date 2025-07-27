@@ -12,7 +12,9 @@ import (
 )
 
 type Elector struct {
-	parent             *Raft
+	parent *Raft
+	rnd    *rand.Rand
+
 	minElectionTimeout time.Duration
 	maxElectionTimeout time.Duration
 	resetTimerCh       chan struct{}
@@ -20,8 +22,10 @@ type Elector struct {
 }
 
 func NewRaftElector(r *Raft) *Elector {
+	src := rand.NewSource(time.Now().UnixNano() + int64(r.id))
 	re := &Elector{
 		parent: r,
+		rnd:    rand.New(src),
 
 		minElectionTimeout: 100 * time.Millisecond,
 		maxElectionTimeout: 300 * time.Millisecond,
@@ -107,9 +111,7 @@ func (r *Raft) startElection() {
 }
 
 func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
-	r.mu.RLock()
-	peer := r.peers[nodeId]
-	r.mu.RUnlock()
+	peer := r.getPeer(nodeId)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
