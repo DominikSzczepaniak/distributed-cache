@@ -43,7 +43,7 @@ func LoadConfig() *Config {
 	}
 	raftAddrs := strings.Split(addrs, ",")
 	if len(raftAddrs) != totalNodes {
-		panic("Number of nodes must be equal to number of Raft adressess")
+		panic("Number of nodes must be equal to number of Raft addresses")
 	}
 
 	return &Config{

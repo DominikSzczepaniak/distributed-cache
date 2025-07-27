@@ -1,7 +1,6 @@
 // TODO
 // 2. Change message type, we dont really care about the actual message, we just care about the term from the message, so we can accept whatever
 // 4. Add more unit tests
-// 5. Broadcast should return whether he suceed, so retries can be applied for client
 package raft
 
 import (
@@ -35,16 +34,16 @@ type Raft struct {
 	currentLeaderId int
 	votesReceived   mapset.Set[int]
 	sentLengths     []int
-	ackedLenghts    []int
+	ackedLengths    []int
 
 	application Application
 
 	peers []PeerClient
 	conns []*grpc.ClientConn
 
-	raftElector   *RaftElector       //takes care of elections
-	logReplicator *RaftLogReplicator //sends logs to other servers
-	logSaver      *RaftDataSaver     //takes care of saving data to persistent storage
+	raftElector   *Elector       //takes care of elections
+	logReplicator *LogReplicator //sends logs to other servers
+	logSaver      *DataSaver     //takes care of saving data to persistent storage
 
 	logger *slog.Logger
 
@@ -64,7 +63,7 @@ func NewRaft(application Application, cfg *Config) *Raft {
 		currentLeaderId: -1, //unknown
 		votesReceived:   mapset.NewSet[int](),
 		sentLengths:     make([]int, cfg.totalNodes),
-		ackedLenghts:    make([]int, cfg.totalNodes),
+		ackedLengths:    make([]int, cfg.totalNodes),
 
 		application: application,
 		logger:      slog.New(slog.NewTextHandler(os.Stdout, nil)),
@@ -128,7 +127,7 @@ func (r *Raft) receiveVote(vote VoteResponse) {
 					continue
 				}
 				r.sentLengths[followerId] = len(r.log)
-				r.ackedLenghts[followerId] = 0
+				r.ackedLengths[followerId] = 0
 				go r.replicateLog(r.id, followerId)
 			}
 			go r.raftElector.ResetTimer()
@@ -138,7 +137,7 @@ func (r *Raft) receiveVote(vote VoteResponse) {
 
 func (r *Raft) forwardToLeader(message Message, leader PeerClient) {
 	slog.Info(fmt.Sprintf("Forwarding message {msgType %s, key %d, value %d} to leader", message.msgType, message.key, message.value))
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
 	msg := &raftpb.Message{
@@ -180,7 +179,7 @@ func (r *Raft) Broadcast(message Message) {
 		message: message,
 		term:    r.currentTerm,
 	})
-	r.ackedLenghts[r.id] = len(r.log)
+	r.ackedLengths[r.id] = len(r.log)
 
 	currentTerm := r.currentTerm
 	votedFor := r.votedFor
@@ -242,7 +241,7 @@ func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 	}
 }
 
-func (r *Raft) logResponse(followerId, term, ack int, success bool) { //its received on Leader - followers sent this as GRPC
+func (r *Raft) logResponse(followerId, term, ack int, success bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.currentTerm < term {
@@ -252,8 +251,8 @@ func (r *Raft) logResponse(followerId, term, ack int, success bool) { //its rece
 		r.raftElector.ResetTimer()
 	}
 	if r.currentTerm == term && r.currentRole == Leader {
-		if success && ack >= r.ackedLenghts[followerId] {
-			r.ackedLenghts[followerId] = ack
+		if success && ack >= r.ackedLengths[followerId] {
+			r.ackedLengths[followerId] = ack
 			r.sentLengths[followerId] = ack
 			r.commitLogEntries()
 		} else if r.sentLengths[followerId] > 0 {
@@ -273,7 +272,7 @@ func (r *Raft) commitLogEntries() {
 			if j == r.id {
 				continue
 			}
-			if r.ackedLenghts[j] > r.commitedLength {
+			if r.ackedLengths[j] > r.commitedLength {
 				acks++
 			}
 		}

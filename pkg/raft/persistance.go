@@ -1,5 +1,3 @@
-// Functions for reading and writing Raft's persistent state (current term, voted for, log entries) to disk.
-// Logic for recovering state on restart.
 package raft
 
 import (
@@ -12,14 +10,14 @@ import (
 	"strings"
 )
 
-type RaftDataSaver struct {
+type DataSaver struct {
 	parent         *Raft
 	valuesFilename string
 
-	RaftDataSaverFunctions
+	DataSaverFunctions
 }
 
-type RaftDataSaverFunctions interface {
+type DataSaverFunctions interface {
 	SaveValues(currentTerm, votedFor, commitedLength int32, logs []LogEntry) (bool, error)
 	LoadValues() (int, int, int, []LogEntry, error)
 
@@ -27,14 +25,14 @@ type RaftDataSaverFunctions interface {
 	loadLog() ([]LogEntry, error)
 }
 
-func NewRaftDataSaver(r *Raft, cfg *Config) *RaftDataSaver {
-	return &RaftDataSaver{
+func NewRaftDataSaver(r *Raft, cfg *Config) *DataSaver {
+	return &DataSaver{
 		parent:         r,
 		valuesFilename: cfg.valuesFilename,
 	}
 }
 
-func (rds *RaftDataSaver) saveLog(logs []LogEntry, file *os.File) (bool, error) {
+func (rds *DataSaver) saveLog(logs []LogEntry, file *os.File) (bool, error) {
 	for _, entry := range logs {
 		switch entry.message.msgType {
 		case put:
@@ -104,7 +102,7 @@ func ensureDir(filename string) {
 	slog.Info("Directory created", "dir", dir)
 }
 
-func (rds *RaftDataSaver) SaveValues(currentTerm, votedFor, commitedLength int32, logs []LogEntry) (bool, error) {
+func (rds *DataSaver) SaveValues(currentTerm, votedFor, commitedLength int32, logs []LogEntry) (bool, error) {
 	ensureDir(rds.valuesFilename)
 
 	file, err := os.Create(rds.valuesFilename)
@@ -125,7 +123,7 @@ func (rds *RaftDataSaver) SaveValues(currentTerm, votedFor, commitedLength int32
 	return rds.saveLog(logs, file)
 }
 
-func (rds *RaftDataSaver) loadLog() ([]LogEntry, error) {
+func (rds *DataSaver) loadLog() ([]LogEntry, error) {
 	file, err := os.Open(rds.valuesFilename)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -196,7 +194,7 @@ func (rds *RaftDataSaver) loadLog() ([]LogEntry, error) {
 	return logs, nil
 }
 
-func (rds *RaftDataSaver) LoadValues() (int, int, int, []LogEntry, error) {
+func (rds *DataSaver) LoadValues() (int, int, int, []LogEntry, error) {
 	rds.parent.mu.Lock()
 	defer rds.parent.mu.Unlock()
 	file, err := os.Open(rds.valuesFilename)

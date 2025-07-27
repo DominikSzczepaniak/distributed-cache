@@ -11,7 +11,7 @@ import (
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 )
 
-type RaftElector struct {
+type Elector struct {
 	parent             *Raft
 	minElectionTimeout time.Duration
 	maxElectionTimeout time.Duration
@@ -19,8 +19,8 @@ type RaftElector struct {
 	cancelTimerCh      chan struct{}
 }
 
-func NewRaftElector(r *Raft) *RaftElector {
-	re := &RaftElector{
+func NewRaftElector(r *Raft) *Elector {
+	re := &Elector{
 		parent: r,
 
 		minElectionTimeout: 100 * time.Millisecond, //change if needed
@@ -33,12 +33,12 @@ func NewRaftElector(r *Raft) *RaftElector {
 	return re
 }
 
-func (re *RaftElector) nextTimeout() time.Duration {
+func (re *Elector) nextTimeout() time.Duration {
 	return re.minElectionTimeout +
 		time.Duration(rand.Int63n(int64(re.maxElectionTimeout-re.minElectionTimeout)))
 }
 
-func (re *RaftElector) electionTimerLoop() {
+func (re *Elector) electionTimerLoop() {
 	timer := time.NewTimer(re.nextTimeout())
 	defer timer.Stop()
 
@@ -68,10 +68,10 @@ func (re *RaftElector) electionTimerLoop() {
 	}
 }
 
-func (r *RaftElector) ResetTimer() {
+func (re *Elector) ResetTimer() {
 	select {
-	case r.resetTimerCh <- struct{}{}:
-		slog.Info(fmt.Sprintf("Restarted timer for %d", r.parent.id))
+	case re.resetTimerCh <- struct{}{}:
+		slog.Info(fmt.Sprintf("Restarted timer for %d", re.parent.id))
 	default:
 	}
 }
@@ -111,7 +111,7 @@ func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
 	peer := r.peers[nodeId]
 	r.mu.RUnlock()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
 
 		resp, err := peer.VoteRequest(ctx, &raftpb.VoteRequestArgs{

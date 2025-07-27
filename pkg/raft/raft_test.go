@@ -129,7 +129,7 @@ func createCluster(t *testing.T, n int) []*Raft {
 			currentLeaderId: -1,
 			votesReceived:   mapset.NewSet[int](),
 			sentLengths:     make([]int, n),
-			ackedLenghts:    make([]int, n),
+			ackedLengths:    make([]int, n),
 
 			application: apps[id],
 		}
@@ -215,7 +215,7 @@ func TestLogReplication(t *testing.T) {
 	}
 }
 
-func TestLogReplicationWithIntialLog(t *testing.T) {
+func TestLogReplicationWithInitialLog(t *testing.T) {
 	v1 := 3
 	v2 := 5
 	initLog := []LogEntry{
@@ -302,6 +302,6 @@ outer:
 
 func TestThroughput(t *testing.T) {
 	//generate a lot of get and put requests - around 100k
-	//put some custom requests into that and make sure that random wont touch those
+	//put some custom requests into that and make sure that random won't touch those
 	//assert custom requests are good
 }

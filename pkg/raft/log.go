@@ -19,7 +19,7 @@ type LogEntry struct {
 	message Message
 }
 
-type RaftLogReplicator struct {
+type LogReplicator struct {
 	parent *Raft
 
 	logReplicateCh         chan struct{}
@@ -28,8 +28,8 @@ type RaftLogReplicator struct {
 	maxLogReplicateTimeout time.Duration
 }
 
-func NewRaftLogReplicator(r *Raft) *RaftLogReplicator {
-	rl := &RaftLogReplicator{
+func NewRaftLogReplicator(r *Raft) *LogReplicator {
+	rl := &LogReplicator{
 		parent:                 r,
 		logReplicateCh:         make(chan struct{}, 1),
 		cancelLogReplicateCh:   make(chan struct{}),
@@ -40,11 +40,11 @@ func NewRaftLogReplicator(r *Raft) *RaftLogReplicator {
 	return rl
 }
 
-func (rl *RaftLogReplicator) nextTimeout() time.Duration {
+func (rl *LogReplicator) nextTimeout() time.Duration {
 	return rl.minLogReplicateTimeout + time.Duration(rand.Int63n(int64(rl.maxLogReplicateTimeout-rl.minLogReplicateTimeout)))
 }
 
-func (rl *RaftLogReplicator) logReplicateLoop() {
+func (rl *LogReplicator) logReplicateLoop() {
 	timer := time.NewTimer(rl.nextTimeout())
 	defer timer.Stop()
 
@@ -170,7 +170,7 @@ func (r *Raft) handleReplicateLog(followerId int, retryCh chan<- int, done chan 
 	args := r.prepareLogRequestArgs(followerId)
 	slog.Info(fmt.Sprintf("Prepared log for replication from %d to %d", r.id, followerId))
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
 		slog.Info(fmt.Sprintf("Logs for leader %d", r.id))
 		for _, log := range r.log {

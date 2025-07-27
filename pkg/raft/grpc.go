@@ -1,14 +1,11 @@
-// Definitions of RequestVote, appendEntries, InstallSnapshot RPC structs.
-// Handlers for these RPCs (handleRequestVote, handleAppendEntries, handleInstallSnapshot).
-// Helper functions for sending RPCs.
 package raft
 
 import (
 	"context"
 	"fmt"
+	"google.golang.org/grpc/credentials/insecure"
 	"log/slog"
 	"net"
-	"time"
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 	"google.golang.org/grpc"
@@ -19,8 +16,10 @@ func (r *Raft) initGRPC(cfg *Config) {
 	r.conns = make([]*grpc.ClientConn, r.totalNodes)
 
 	for i, addr := range cfg.raftAddrs {
-		conn, err := grpc.Dial(addr, grpc.WithInsecure(), grpc.WithBlock(),
-			grpc.WithTimeout(500*time.Millisecond))
+		conn, err := grpc.NewClient(
+			addr,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
 		if err != nil {
 			panic(fmt.Sprintf("failed to dial %s: %v", addr, err))
 		}
@@ -102,7 +101,7 @@ func convertLogRequestArgs(args *raftpb.LogRequestArgs) (int, int, int, int, int
 
 }
 
-func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) { //receiving LogRequest - this machine is trying to append log entries to it's log entries
+func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) {
 	leaderId, term, prefixLen, prefixTerm, commitLength, suffix := convertLogRequestArgs(in)
 
 	r.mu.Lock()
