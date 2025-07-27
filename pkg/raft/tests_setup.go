@@ -6,6 +6,7 @@ import (
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 	"github.com/stretchr/testify/mock"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -67,6 +68,10 @@ func (m *mockPeerClient) VoteRequest(ctx context.Context, in *raftpb.VoteRequest
 func (m *mockPeerClient) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) {
 	args := m.Called(ctx, in)
 	return args.Get(0).(*raftpb.LogResponse), args.Error(1)
+}
+func (m *mockPeerClient) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error) {
+	args := m.Called(ctx, in)
+	return args.Get(0).(*emptypb.Empty), args.Error(1)
 }
 
 func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
@@ -137,6 +142,9 @@ func (p *inMemPeer) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs)
 }
 func (p *inMemPeer) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) {
 	return p.r.LogRequest(ctx, in)
+}
+func (p *inMemPeer) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error) {
+	return p.r.Heartbeat(ctx, in)
 }
 
 func createCluster(t testing.TB, n int) []*Raft {

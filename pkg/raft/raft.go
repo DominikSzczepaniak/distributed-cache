@@ -43,6 +43,7 @@ type Raft struct {
 	raftElector   *Elector       //takes care of elections
 	logReplicator *LogReplicator //sends logs to other servers
 	logSaver      *DataSaver     //takes care of saving data to persistent storage
+	heartbeat     *Heartbeat
 
 	logger *slog.Logger
 
@@ -70,6 +71,7 @@ func NewRaft(application Application, cfg *Config) *Raft {
 	r.logSaver = NewRaftDataSaver(r, cfg)
 	r.raftElector = NewRaftElector(r)
 	r.logReplicator = NewRaftLogReplicator(r)
+	r.heartbeat = newHeartbeat(r)
 
 	term, votedFor, commited, savedLog, err := r.logSaver.LoadValues()
 	if err == nil {

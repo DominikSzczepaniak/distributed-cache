@@ -30,8 +30,8 @@ func NewRaftLogReplicator(r *Raft) *LogReplicator {
 		parent:                 r,
 		logReplicateCh:         make(chan struct{}, 1),
 		cancelLogReplicateCh:   make(chan struct{}),
-		minLogReplicateTimeout: 100 * time.Millisecond,
-		maxLogReplicateTimeout: 300 * time.Millisecond,
+		minLogReplicateTimeout: 50 * time.Millisecond,
+		maxLogReplicateTimeout: 100 * time.Millisecond,
 	}
 	go rl.logReplicateLoop()
 	return rl

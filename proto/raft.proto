@@ -2,6 +2,7 @@ syntax = "proto3";
 package raftpb;
 
 import "google/protobuf/wrappers.proto";
+import "google/protobuf/empty.proto";
 
 option go_package = "github.com/dominikszczepaniak/distributed-cache/raft/raftpb";
 
@@ -55,6 +56,7 @@ service Raft{
     rpc Forward (Message) returns (Null);
     rpc VoteRequest (VoteRequestArgs) returns (VoteResponse);
     rpc LogRequest(LogRequestArgs) returns (LogResponse);
+    rpc Heartbeat (google.protobuf.Empty) returns (google.protobuf.Empty);
 }
 
 

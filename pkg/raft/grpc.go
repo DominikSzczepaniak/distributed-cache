@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"log/slog"
 	"net"
 
@@ -280,4 +281,9 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 			Granted:     false,
 		}, nil
 	}
+}
+
+func (r *Raft) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error) {
+	r.heartbeat.receiveHeartbeat()
+	return &emptypb.Empty{}, nil
 }
