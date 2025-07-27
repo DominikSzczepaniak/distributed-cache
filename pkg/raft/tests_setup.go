@@ -139,7 +139,7 @@ func (p *inMemPeer) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (
 	return p.r.LogRequest(ctx, in)
 }
 
-func createCluster(t *testing.T, n int) []*Raft {
+func createCluster(t testing.TB, n int) []*Raft {
 	t.Helper()
 	apps := make([]*testApp, n)
 	for i := range apps {

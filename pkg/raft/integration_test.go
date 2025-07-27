@@ -3,10 +3,74 @@ package raft
 import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"math/rand"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func randomRequest(upperLimit int) Message {
+	msgTypeId := rand.Int() % 3
+	var msgType MessageType
+	switch msgTypeId {
+	case 0:
+		msgType = get
+		break
+	case 1:
+		msgType = put
+		break
+	case 2:
+		msgType = delete
+		break
+	}
+	key := rand.Int() % upperLimit
+	value := rand.Int()
+	switch msgType {
+	case get, delete:
+		return Message{msgType: msgType, key: key}
+	case put:
+		return Message{msgType: msgType, key: key, value: &value}
+	}
+	panic("Impossible")
+}
+func TestRaftManyRequests(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short")
+	}
+	nodes := createCluster(t, 3)
+	time.Sleep(1000 * time.Second)
+
+	const requestNumber = 1000
+	const upperLimit = 800000
+
+	requests := make([]Message, 0, requestNumber+1)
+	for i := 0; i < requestNumber; i++ {
+		requests = append(requests, randomRequest(upperLimit))
+	}
+	testKey := upperLimit + 5
+	testValue := 11
+	requests = append(requests, Message{
+		msgType: put,
+		key:     testKey,
+		value:   &testValue,
+	})
+
+	for i := range requests {
+		j := rand.Intn(i + 1)
+		requests[i], requests[j] = requests[j], requests[i]
+	}
+
+	for _, req := range requests {
+		nodes[0].Broadcast(req)
+	}
+
+	time.Sleep(2 * time.Second)
+
+	for i, n := range nodes {
+		data := n.application.(*testApp).getData()
+		assert.Equal(t, testValue, data[testKey], "node %d", i)
+	}
+}
 
 func TestFullRaftIntegration(t *testing.T) {
 	if testing.Short() {
