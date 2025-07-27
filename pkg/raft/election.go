@@ -58,7 +58,7 @@ func (re *RaftElector) electionTimerLoop() {
 			isLeader := re.parent.currentRole == Leader
 			re.parent.mu.RUnlock()
 			if !isLeader {
-				re.parent.StartElection()
+				re.parent.startElection()
 			}
 			timer.Reset(re.nextTimeout())
 
@@ -76,7 +76,7 @@ func (r *RaftElector) ResetTimer() {
 	}
 }
 
-func (r *Raft) StartElection() {
+func (r *Raft) startElection() {
 	r.mu.Lock()
 
 	r.raftElector.ResetTimer()
@@ -126,6 +126,6 @@ func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
 		}
 
 		slog.Info(fmt.Sprintf("Got vote response on node %d, granted %t\n", nodeId, resp.Granted))
-		r.ReceiveVote(VoteResponse{int(resp.NodeId), int(resp.CurrentTerm), resp.Granted})
+		r.receiveVote(VoteResponse{int(resp.NodeId), int(resp.CurrentTerm), resp.Granted})
 	}()
 }

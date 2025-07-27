@@ -15,7 +15,7 @@ import (
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 )
 
-func LogEntryNotEqual(a, b LogEntry) bool {
+func logEntryNotEqual(a, b LogEntry) bool {
 	if a.term != b.term {
 		return true
 	}
@@ -37,12 +37,12 @@ func LogEntryNotEqual(a, b LogEntry) bool {
 	return false
 }
 
-func LogEntriesNotEqual(a, b []LogEntry) bool {
+func logEntriesNotEqual(a, b []LogEntry) bool {
 	if len(a) != len(b) {
 		return true
 	}
 	for i := range a {
-		if LogEntryNotEqual(a[i], b[i]) {
+		if logEntryNotEqual(a[i], b[i]) {
 			return true
 		}
 	}
@@ -158,7 +158,7 @@ func createCluster(t *testing.T, n int) []*Raft {
 
 func TestLeaderElection(t *testing.T) {
 	nodes := createCluster(t, 3)
-	nodes[0].StartElection()
+	nodes[0].startElection()
 	time.Sleep(50 * time.Millisecond)
 	nodes[0].mu.RLock()
 	role0 := nodes[0].currentRole
@@ -255,7 +255,7 @@ func TestLogReplicationWithIntialLog(t *testing.T) {
 	log3 := nodes[2].log
 	nodes[2].mu.Unlock()
 
-	if !LogEntriesNotEqual(log1, initLog) && LogEntriesNotEqual(log1, log2) && LogEntriesNotEqual(log2, log3) {
+	if !logEntriesNotEqual(log1, initLog) && logEntriesNotEqual(log1, log2) && logEntriesNotEqual(log2, log3) {
 		t.Errorf("Logs arent equal")
 	}
 }

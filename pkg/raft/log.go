@@ -71,7 +71,7 @@ func (rl *RaftLogReplicator) logReplicateLoop() {
 					if i == nodeId {
 						continue
 					}
-					go rl.parent.ReplicateLog(nodeId, i)
+					go rl.parent.replicateLog(nodeId, i)
 				}
 			}
 			timer.Reset(rl.nextTimeout())
@@ -120,7 +120,7 @@ func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 	}
 }
 
-func (r *Raft) ReplicateLog(id, followerId int) {
+func (r *Raft) replicateLog(id, followerId int) {
 	r.mu.RLock()
 	currentRole := r.currentRole
 	r.mu.RUnlock()
@@ -146,7 +146,7 @@ func (r *Raft) ReplicateLog(id, followerId int) {
 			r.mu.RUnlock()
 
 			if isLeader {
-				slog.Info("lost leadership, stopping ReplicateLog")
+				slog.Info("lost leadership, stopping replicateLog")
 				close(done)
 				return
 			}
@@ -185,7 +185,7 @@ func (r *Raft) handleReplicateLog(followerId int, retryCh chan<- int, done chan 
 			retryCh <- followerId
 			return
 		}
-		r.LogResponse(
+		r.logResponse(
 			followerId,
 			int(resp.CurrentTerm),
 			int(resp.Ack),
@@ -199,7 +199,7 @@ func (r *Raft) retryAppendEntries(retryCh chan int, done <-chan struct{}) {
 	for {
 		select {
 		case peerId := <-retryCh:
-			go r.ReplicateLog(r.id, peerId)
+			go r.replicateLog(r.id, peerId)
 		case <-done:
 			return
 		}

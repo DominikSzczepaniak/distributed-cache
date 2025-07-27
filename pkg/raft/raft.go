@@ -1,7 +1,5 @@
 // TODO
-// 1. Change function sygnatures, only API raft is giving is Broadcast
 // 2. Change message type, we dont really care about the actual message, we just care about the term from the message, so we can accept whatever
-// 3. Change mutexes from full lock to read lock whenever needed
 // 4. Add more unit tests
 // 5. Broadcast should return whether he suceed, so retries can be applied for client
 package raft
@@ -24,7 +22,6 @@ import (
 type Raft struct {
 	mu sync.RWMutex
 
-	RaftFunctions
 	id         int
 	totalNodes int
 	// Stable storage variables
@@ -52,17 +49,6 @@ type Raft struct {
 	logger *slog.Logger
 
 	raftpb.UnimplementedRaftServer
-}
-
-type RaftFunctions interface {
-	NewRaft() *Raft
-	ReceiveVote(vote VoteResponse)
-	ReplicateLog(id int, followerId int)
-	Broadcast(message Message)
-	AppendEntries(prefixLen, leaderCommit, suffix int)
-	LogRequest(leaderId, currentTerm, prefixLen, prefixTerm, commitLength int, suffix []LogEntry)
-	LogResponse(followerId, term, ack int, success bool)
-	CommitLogEntries() //commits all messages to the application - cache
 }
 
 func NewRaft(application Application, cfg *Config) *Raft {
@@ -99,7 +85,7 @@ func NewRaft(application Application, cfg *Config) *Raft {
 	return r
 }
 
-func (r *Raft) ReceiveVote(vote VoteResponse) {
+func (r *Raft) receiveVote(vote VoteResponse) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	slog.Info(fmt.Sprintf("Received vote response from %d on node %d, granted: %t, node on term: %d, node from term: %d, node on role: %s",
@@ -143,7 +129,7 @@ func (r *Raft) ReceiveVote(vote VoteResponse) {
 				}
 				r.sentLengths[followerId] = len(r.log)
 				r.ackedLenghts[followerId] = 0
-				go r.ReplicateLog(r.id, followerId)
+				go r.replicateLog(r.id, followerId)
 			}
 			go r.raftElector.ResetTimer()
 		}
@@ -211,15 +197,15 @@ func (r *Raft) Broadcast(message Message) {
 		if i == r.id {
 			continue
 		}
-		go r.ReplicateLog(nodeId, i)
+		go r.replicateLog(nodeId, i)
 	}
 }
 
-func (r *Raft) DelieverToApplication(message Message) (success bool, value int) { //applies message to cache
+func (r *Raft) deliverToApplication(message Message) (success bool, value int) { //applies message to cache
 	return r.application.AppendMessage(message)
 }
 
-func (r *Raft) AppendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
+func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -249,14 +235,14 @@ func (r *Raft) AppendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 		r.mu.Unlock()
 
 		for _, msg := range messagesToApply {
-			r.DelieverToApplication(msg)
+			r.deliverToApplication(msg)
 		}
 
 		r.mu.Lock()
 	}
 }
 
-func (r *Raft) LogResponse(followerId, term, ack int, success bool) { //its received on Leader - followers sent this as GRPC
+func (r *Raft) logResponse(followerId, term, ack int, success bool) { //its received on Leader - followers sent this as GRPC
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.currentTerm < term {
@@ -269,15 +255,15 @@ func (r *Raft) LogResponse(followerId, term, ack int, success bool) { //its rece
 		if success && ack >= r.ackedLenghts[followerId] {
 			r.ackedLenghts[followerId] = ack
 			r.sentLengths[followerId] = ack
-			r.CommitLogEntries()
+			r.commitLogEntries()
 		} else if r.sentLengths[followerId] > 0 {
 			r.sentLengths[followerId]--
-			go r.ReplicateLog(r.id, followerId)
+			go r.replicateLog(r.id, followerId)
 		}
 	}
 }
 
-func (r *Raft) CommitLogEntries() {
+func (r *Raft) commitLogEntries() {
 	majority := int(math.Ceil(float64(r.totalNodes+1) / 2))
 	messagesToApply := make([]Message, 0)
 
@@ -302,7 +288,7 @@ func (r *Raft) CommitLogEntries() {
 	if len(messagesToApply) > 0 {
 		r.mu.Unlock()
 		for _, msg := range messagesToApply {
-			r.DelieverToApplication(msg)
+			r.deliverToApplication(msg)
 		}
 		r.mu.Lock()
 	}

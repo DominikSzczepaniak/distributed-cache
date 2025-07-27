@@ -466,7 +466,7 @@ func (x *LogResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use LogResponse.ProtoReflect.Descriptor instead.
+// Deprecated: Use logResponse.ProtoReflect.Descriptor instead.
 func (*LogResponse) Descriptor() ([]byte, []int) {
 	return file_proto_raft_proto_rawDescGZIP(), []int{6}
 }
@@ -568,7 +568,7 @@ var file_proto_raft_proto_goTypes = []any{
 	(*VoteRequestArgs)(nil),       // 4: raftpb.VoteRequestArgs
 	(*VoteResponse)(nil),          // 5: raftpb.VoteResponse
 	(*LogRequestArgs)(nil),        // 6: raftpb.LogRequestArgs
-	(*LogResponse)(nil),           // 7: raftpb.LogResponse
+	(*LogResponse)(nil),           // 7: raftpb.logResponse
 	(*wrapperspb.Int32Value)(nil), // 8: google.protobuf.Int32Value
 }
 var file_proto_raft_proto_depIdxs = []int32{
@@ -581,7 +581,7 @@ var file_proto_raft_proto_depIdxs = []int32{
 	6, // 6: raftpb.Raft.LogRequest:input_type -> raftpb.LogRequestArgs
 	2, // 7: raftpb.Raft.Forward:output_type -> raftpb.Null
 	5, // 8: raftpb.Raft.VoteRequest:output_type -> raftpb.VoteResponse
-	7, // 9: raftpb.Raft.LogRequest:output_type -> raftpb.LogResponse
+	7, // 9: raftpb.Raft.LogRequest:output_type -> raftpb.logResponse
 	7, // [7:10] is the sub-list for method output_type
 	4, // [4:7] is the sub-list for method input_type
 	4, // [4:4] is the sub-list for extension type_name

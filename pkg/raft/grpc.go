@@ -1,4 +1,4 @@
-// Definitions of RequestVote, AppendEntries, InstallSnapshot RPC structs.
+// Definitions of RequestVote, appendEntries, InstallSnapshot RPC structs.
 // Handlers for these RPCs (handleRequestVote, handleAppendEntries, handleInstallSnapshot).
 // Helper functions for sending RPCs.
 package raft
@@ -158,7 +158,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		votedFor := r.votedFor
 		r.mu.Unlock()
 
-		r.AppendEntries(prefixLen, commitLength, suffix)
+		r.appendEntries(prefixLen, commitLength, suffix)
 		r.mu.Lock()
 
 		commitedLength := r.commitedLength
