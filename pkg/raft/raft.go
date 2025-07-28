@@ -4,10 +4,8 @@ package raft
 
 import (
 	"context"
-	"fmt"
-	"log/slog"
+	//"log/slog"
 	"math"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,8 +44,6 @@ type Raft struct {
 	logSaver      *DataSaver     //takes care of saving data to persistent storage
 	heartbeat     *Heartbeat
 
-	logger *slog.Logger
-
 	raftpb.UnimplementedRaftServer
 }
 
@@ -67,7 +63,6 @@ func NewRaft(application Application, cfg *Config) *Raft {
 		ackedLengths:    make([]int, cfg.totalNodes),
 
 		application: application,
-		logger:      slog.New(slog.NewTextHandler(os.Stdout, nil)),
 	}
 	r.logSaver = NewRaftDataSaver(r, cfg)
 	r.raftElector = NewRaftElector(r)
@@ -89,18 +84,18 @@ func NewRaft(application Application, cfg *Config) *Raft {
 func (r *Raft) receiveVote(vote VoteResponse) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	slog.Info(fmt.Sprintf("Received vote response from %d on node %d, granted: %t, node on term: %d, node from term: %d, node on role: %s",
-		vote.nodeId,
-		r.id,
-		vote.granted,
-		r.currentTerm,
-		vote.currentTerm,
-		r.currentRole))
+	//slog.Info(fmt.Sprintf("Received vote response from %d on node %d, granted: %t, node on term: %d, node from term: %d, node on role: %s",
+	//	vote.nodeId,
+	//	r.id,
+	//	vote.granted,
+	//	r.currentTerm,
+	//	vote.currentTerm,
+	//	r.currentRole))
 	if r.currentTerm < vote.currentTerm {
-		slog.Info("Stepping down due to higher term in vote response",
-			slog.Int("nodeId", r.id),
-			slog.Int("oldTerm", r.currentTerm),
-			slog.Int("newTerm", vote.currentTerm))
+		//slog.Info("Stepping down due to higher term in vote response",
+		//	slog.Int("nodeId", r.id),
+		//	slog.Int("oldTerm", r.currentTerm),
+		//	slog.Int("newTerm", vote.currentTerm))
 		r.currentTerm = vote.currentTerm
 		r.currentRole = Follower
 		go r.raftElector.ResetTimer()
@@ -108,17 +103,17 @@ func (r *Raft) receiveVote(vote VoteResponse) {
 	}
 	if vote.granted && r.currentTerm == vote.currentTerm && r.currentRole == Candidate {
 		r.votesReceived.Add(vote.nodeId)
-		slog.Info("Vote counted",
-			slog.Int("for node", r.id),
-			slog.Int("current count", r.votesReceived.Cardinality()),
-			slog.Int("total nodes", r.totalNodes))
+		//slog.Info("Vote counted",
+		//	slog.Int("for node", r.id),
+		//	slog.Int("current count", r.votesReceived.Cardinality()),
+		//	slog.Int("total nodes", r.totalNodes))
 
 		majority := int(math.Ceil(float64(r.totalNodes+1) / 2))
 
 		if r.votesReceived.Cardinality() >= majority {
-			slog.Info("Node became leader",
-				slog.Int("nodeId", r.id),
-				slog.Int("term", r.currentTerm))
+			//slog.Info("Node became leader",
+			//	slog.Int("nodeId", r.id),
+			//	slog.Int("term", r.currentTerm))
 
 			r.currentRole = Leader
 			r.currentLeaderId = r.id
@@ -137,7 +132,7 @@ func (r *Raft) receiveVote(vote VoteResponse) {
 }
 
 func (r *Raft) forwardToLeader(message Message, leader PeerClient) {
-	slog.Info(fmt.Sprintf("Forwarding message {msgType %s, key %d, value %d} to leader", message.msgType, message.key, message.value))
+	//slog.Info(fmt.Sprintf("Forwarding message {msgType %s, key %d, value %d} to leader", message.msgType, message.key, message.value))
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
@@ -169,14 +164,14 @@ func (r *Raft) Broadcast(message Message) {
 	if !isLeader {
 		peer := r.getPeer(leaderID)
 		if peer == nil {
-			slog.Warn("leader unknown – dropping client message")
+			//slog.Warn("leader unknown – dropping client message")
 			return
 		}
 		r.forwardToLeader(message, peer)
 		return
 	}
 	r.mu.Lock()
-	slog.Info(fmt.Sprintf("Appending message {msgType %s, key %d, value %d} to node %d logs", message.msgType, message.key, *message.value, r.id))
+	//slog.Info(fmt.Sprintf("Appending message {msgType %s, key %d, value %d} to node %d logs", message.msgType, message.key, *message.value, r.id))
 	r.log = append(r.log, LogEntry{
 		message: message,
 		term:    r.currentTerm,
@@ -210,19 +205,19 @@ func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	slog.Info(fmt.Sprintf("Appending entries on node %d, current role %s", r.id, r.currentRole)) //TODO spamming too much and possibly slowing entire thing, consider batching
-	for i, e := range suffix {
-		slog.Info(fmt.Sprintf("Entry %d: term %d, msgType %s, key %d, value %d", i, e.term, e.message.msgType, e.message.key, e.message.value))
-	}
+	//slog.Info(fmt.Sprintf("Appending entries on node %d, current role %s", r.id, r.currentRole)) //TODO spamming too much and possibly slowing entire thing, consider batching
+	//for i, e := range suffix {
+	//	slog.Info(fmt.Sprintf("Entry %d: term %d, msgType %s, key %d, value %d", i, e.term, e.message.msgType, e.message.key, e.message.value))
+	//}
 	if len(suffix) > 0 && len(r.log) > prefixLen {
-		slog.Info(fmt.Sprintf("Went into 1st loop"))
+		//slog.Info(fmt.Sprintf("Went into 1st loop"))
 		index := int(math.Min(float64(len(r.log)), float64(prefixLen+len(suffix))) - 1)
 		if r.log[index].term != suffix[index-prefixLen].term {
 			r.log = r.log[:prefixLen]
 		}
 	}
 	if prefixLen+len(suffix) > len(r.log) {
-		slog.Info(fmt.Sprintf("Went into 2nd loop"))
+		//slog.Info(fmt.Sprintf("Went into 2nd loop"))
 		for i := len(r.log) - prefixLen; i < len(suffix); i++ {
 			r.log = append(r.log, suffix[i])
 		}

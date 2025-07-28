@@ -6,7 +6,6 @@ package raft
 import (
 	"bufio"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -33,6 +32,17 @@ func NewRaftDataSaver(r *Raft, cfg *Config) *DataSaver {
 		parent:         r,
 		valuesFilename: cfg.valuesFilename,
 	}
+}
+
+func fileExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 func (rds *DataSaver) saveLog(logs []LogEntry, file *os.File) (bool, error) {
@@ -82,52 +92,100 @@ func (rds *DataSaver) saveLog(logs []LogEntry, file *os.File) (bool, error) {
 
 func ensureDir(filename string) error {
 	dir := filepath.Clean(filepath.Dir(filename))
-	slog.Info("Checking directory", "dir", dir)
+	//slog.Info("Checking directory", "dir", dir)
 
 	info, err := os.Stat(dir)
 	if err == nil {
 		if info.IsDir() {
-			slog.Info("Directory already exists", "dir", dir)
+			//slog.Info("Directory already exists", "dir", dir)
 			return nil
 		} else {
-			slog.Error("Path exists but is not a directory", "dir", dir)
+			//slog.Error("Path exists but is not a directory", "dir", dir)
 			return fmt.Errorf("path %q exists but is not a directory", dir)
 		}
 	} else if !os.IsNotExist(err) {
-		slog.Error("Failed to stat directory", "dir", dir, "err", err)
+		//slog.Error("Failed to stat directory", "dir", dir, "err", err)
 		return fmt.Errorf("failed to stat directory %q: %w", dir, err)
 	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		slog.Error("Failed to create directory", "dir", dir, "err", err)
+		//slog.Error("Failed to create directory", "dir", dir, "err", err)
 
 		return fmt.Errorf("failed to create directory %q: %w", dir, err)
 	}
-	slog.Info("Directory created", "dir", dir)
+	//slog.Info("Directory created", "dir", dir)
 	return nil
 }
 
-func (rds *DataSaver) SaveValues(currentTerm, votedFor, commitedLength int32, logs []LogEntry) (bool, error) {
+func (rds *DataSaver) SaveValues(
+	currentTerm, votedFor, committedLength int32,
+	logs []LogEntry,
+) (bool, error) {
 	if err := ensureDir(rds.valuesFilename); err != nil {
 		return false, fmt.Errorf("ensure values dir: %w", err)
 	}
 
-	file, err := os.Create(rds.valuesFilename)
+	exists, err := fileExists(rds.valuesFilename)
 	if err != nil {
-		panic(fmt.Sprintf("Path of VALUES_FILENAME is not correct, cannot save data to disk, error %s", err))
-	}
-	defer file.Close()
-	if _, err := fmt.Fprintf(
-		file,
-		"%d %d %d\n",
-		currentTerm,
-		votedFor,
-		commitedLength,
-	); err != nil {
-		return false, fmt.Errorf("failed to write header: %w", err)
+		return false, fmt.Errorf("stat %q: %w", rds.valuesFilename, err)
 	}
 
-	return rds.saveLog(logs, file)
+	if !exists {
+		f, err := os.Create(rds.valuesFilename)
+		if err != nil {
+			return false, fmt.Errorf("create %q: %w", rds.valuesFilename, err)
+		}
+		defer f.Close()
+
+		if _, err := fmt.Fprintf(
+			f,
+			"%d %d %d\n",
+			currentTerm,
+			votedFor,
+			committedLength,
+		); err != nil {
+			return false, fmt.Errorf("write header: %w", err)
+		}
+
+		return rds.saveLog(logs, f)
+	}
+
+	existing, err := rds.loadLog()
+	if err != nil {
+		return false, err
+	}
+
+	if len(logs) <= len(existing) {
+		f, err := os.Create(rds.valuesFilename)
+		if err != nil {
+			return false, fmt.Errorf("recreate %q: %w", rds.valuesFilename, err)
+		}
+		defer f.Close()
+
+		if _, err := fmt.Fprintf(
+			f,
+			"%d %d %d\n",
+			currentTerm,
+			votedFor,
+			committedLength,
+		); err != nil {
+			return false, fmt.Errorf("write header: %w", err)
+		}
+		return rds.saveLog(logs, f)
+	}
+
+	f, err := os.OpenFile(
+		rds.valuesFilename,
+		os.O_APPEND|os.O_WRONLY,
+		0o644,
+	)
+	if err != nil {
+		return false, fmt.Errorf("open for append %q: %w", rds.valuesFilename, err)
+	}
+	defer f.Close()
+
+	newEntries := logs[len(existing):]
+	return rds.saveLog(newEntries, f)
 }
 
 func (rds *DataSaver) loadLog() ([]LogEntry, error) {

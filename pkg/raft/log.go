@@ -2,8 +2,8 @@ package raft
 
 import (
 	"context"
-	"fmt"
-	"log/slog"
+	//"fmt"
+	//"log/slog"
 	"math/rand"
 	"time"
 
@@ -80,7 +80,7 @@ func (rl *LogReplicator) logReplicateLoop() {
 }
 
 func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
-	slog.Info(fmt.Sprintf("Preparing log request for leader %d", r.id))
+	//slog.Info(fmt.Sprintf("Preparing log request for leader %d", r.id))
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -106,7 +106,7 @@ func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 			},
 		}
 	}
-	slog.Info(fmt.Sprintf("Preparing log request for follower %d finished", followerId))
+	//slog.Info(fmt.Sprintf("Preparing log request for follower %d finished", followerId))
 	return &raftpb.LogRequestArgs{
 		LeaderId:     int32(r.id),
 		Term:         int32(r.currentTerm),
@@ -118,11 +118,11 @@ func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 }
 
 func (r *Raft) replicateLog(id, followerId int) {
-	r.mu.RLock()
-	currentRole := r.currentRole
-	r.mu.RUnlock()
+	//r.mu.RLock()
+	//currentRole := r.currentRole
+	//r.mu.RUnlock()
 
-	slog.Info(fmt.Sprintf("Replicating log from %d to %d, node role: %s", id, followerId, currentRole))
+	//slog.Info(fmt.Sprintf("Replicating log from %d to %d, node role: %s", id, followerId, currentRole))
 	retryCh := make(chan int)
 	done := make(chan struct{})
 	go r.retryAppendEntries(retryCh, done)
@@ -143,7 +143,7 @@ func (r *Raft) replicateLog(id, followerId int) {
 			r.mu.RUnlock()
 
 			if !isLeader {
-				slog.Info("lost leadership, stopping replicateLog")
+				//slog.Info("lost leadership, stopping replicateLog")
 				close(done)
 				return
 			}
@@ -161,23 +161,23 @@ func (r *Raft) handleReplicateLog(followerId int, retryCh chan<- int, done chan 
 	r.mu.RUnlock()
 
 	if !isLeader {
-		slog.Info("Node is not a leader, returning")
+		//slog.Info("Node is not a leader, returning")
 		return
 	}
 	args := r.prepareLogRequestArgs(followerId)
-	slog.Info(fmt.Sprintf("Prepared log for replication from %d to %d", r.id, followerId))
+	//slog.Info(fmt.Sprintf("Prepared log for replication from %d to %d", r.id, followerId))
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
-		slog.Info(fmt.Sprintf("Logs for leader %d", r.id))
-		for _, log := range r.log {
-			slog.Info(fmt.Sprintf("term: %d, msgType: %s, key: %d, value: %d", log.term, log.message.msgType, log.message.key, *log.message.value))
-		}
+		//slog.Info(fmt.Sprintf("Logs for leader %d", r.id))
+		//for _, log := range r.log {
+		//	slog.Info(fmt.Sprintf("term: %d, msgType: %s, key: %d, value: %d", log.term, log.message.msgType, log.message.key, *log.message.value))
+		//}
 
 		peer := r.getPeer(followerId)
 		resp, err := peer.LogRequest(ctx, args)
 		if err != nil {
-			slog.Error(err.Error())
+			//slog.Error(err.Error())
 			retryCh <- followerId
 			return
 		}

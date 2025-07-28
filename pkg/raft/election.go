@@ -3,7 +3,7 @@ package raft
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	//"log/slog"
 	"math/rand"
 	"time"
 
@@ -75,7 +75,7 @@ func (re *Elector) electionTimerLoop() {
 func (re *Elector) ResetTimer() {
 	select {
 	case re.resetTimerCh <- struct{}{}:
-		slog.Info(fmt.Sprintf("Restarted timer for %d", re.parent.id))
+		//slog.Info(fmt.Sprintf("Restarted timer for %d", re.parent.id))
 	default:
 	}
 }
@@ -123,11 +123,11 @@ func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
 			CandidateLogTerm:   int32(data.candidateLogTerm),
 		})
 		if err != nil {
-			slog.Error(fmt.Sprintf("Vote request failed %s", err))
+			//slog.Error(fmt.Sprintf("Vote request failed %s", err))
 			return
 		}
 
-		slog.Info(fmt.Sprintf("Got vote response on node %d, granted %t\n", nodeId, resp.Granted))
+		//slog.Info(fmt.Sprintf("Got vote response on node %d, granted %t\n", nodeId, resp.Granted))
 		r.receiveVote(VoteResponse{int(resp.NodeId), int(resp.CurrentTerm), resp.Granted})
 	}()
 }
