@@ -73,9 +73,9 @@ func (Message_Type) EnumDescriptor() ([]byte, []int) {
 }
 
 type Message struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	Type  Message_Type           `protobuf:"varint,1,opt,name=type,proto3,enum=raftpb.Message_Type" json:"type,omitempty"`
-	Key   int32                  `protobuf:"varint,2,opt,name=key,proto3" json:"key,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Type          Message_Type           `protobuf:"varint,1,opt,name=type,proto3,enum=raftpb.Message_Type" json:"type,omitempty"`
+	Key           int32                  `protobuf:"varint,2,opt,name=key,proto3" json:"key,omitempty"`
 	Value         *wrapperspb.Int32Value `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -170,8 +170,8 @@ func (*Null) Descriptor() ([]byte, []int) {
 
 type LogEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Term          int32    `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
-	Message       *Message `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	Term          int32                  `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
+	Message       *Message               `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -354,8 +354,8 @@ type LogRequestArgs struct {
 	Term          int32                  `protobuf:"varint,2,opt,name=term,proto3" json:"term,omitempty"`
 	PrefixLen     int32                  `protobuf:"varint,3,opt,name=prefixLen,proto3" json:"prefixLen,omitempty"`
 	PrefixTerm    int32                  `protobuf:"varint,4,opt,name=prefixTerm,proto3" json:"prefixTerm,omitempty"`
-	CommitLength  int32       `protobuf:"varint,5,opt,name=commitLength,proto3" json:"commitLength,omitempty"`
-	Suffix        []*LogEntry `protobuf:"bytes,6,rep,name=suffix,proto3" json:"suffix,omitempty"`
+	CommitLength  int32                  `protobuf:"varint,5,opt,name=commitLength,proto3" json:"commitLength,omitempty"`
+	Suffix        []*LogEntry            `protobuf:"bytes,6,rep,name=suffix,proto3" json:"suffix,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

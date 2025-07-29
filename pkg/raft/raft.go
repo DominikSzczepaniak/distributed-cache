@@ -43,6 +43,7 @@ type Raft struct {
 	logReplicator *LogReplicator //sends logs to other servers
 	logSaver      *DataSaver     //takes care of saving data to persistent storage
 	heartbeat     *Heartbeat
+	replicators   []*Replicator
 
 	raftpb.UnimplementedRaftServer
 }
@@ -115,18 +116,7 @@ func (r *Raft) receiveVote(vote VoteResponse) {
 			//	slog.Int("nodeId", r.id),
 			//	slog.Int("term", r.currentTerm))
 
-			r.currentRole = Leader
-			r.currentLeaderId = r.id
-
-			for followerId := 0; followerId < r.totalNodes; followerId++ {
-				if followerId == r.id {
-					continue
-				}
-				r.sentLengths[followerId] = len(r.log)
-				r.ackedLengths[followerId] = 0
-				go r.replicateLog(r.id, followerId)
-			}
-			go r.raftElector.ResetTimer()
+			r.becomeLeader()
 		}
 	}
 }
@@ -184,7 +174,9 @@ func (r *Raft) Broadcast(message Message) {
 	logCopy := make([]LogEntry, len(r.log))
 	copy(logCopy, r.log)
 	totalNodes := r.totalNodes
-	nodeId := r.id
+
+	replicatorsToSignal := make([]*Replicator, len(r.replicators))
+	copy(replicatorsToSignal, r.replicators)
 	r.mu.Unlock()
 
 	go r.logSaver.SaveValues(int32(currentTerm), int32(votedFor), int32(logLen), logCopy)
@@ -193,7 +185,9 @@ func (r *Raft) Broadcast(message Message) {
 		if i == r.id {
 			continue
 		}
-		go r.replicateLog(nodeId, i) // TODO implement batching, this implementation spams RPC too much
+		if r.replicators[i] != nil {
+			replicatorsToSignal[i].signal()
+		}
 	}
 }
 

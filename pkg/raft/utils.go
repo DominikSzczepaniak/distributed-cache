@@ -19,3 +19,40 @@ func (r *Raft) getCurrentRole() Role {
 	defer r.mu.RUnlock()
 	return r.currentRole
 }
+
+func (r *Raft) becomeFollower(term int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.currentRole = Follower
+	r.currentTerm = term
+	r.votedFor = -1
+
+	if r.replicators != nil {
+		for _, rep := range r.replicators {
+			if rep != nil {
+				rep.stop()
+			}
+		}
+		r.replicators = nil
+	}
+
+	r.raftElector.ResetTimer()
+}
+
+func (r *Raft) becomeLeader() {
+	r.currentRole = Leader
+	r.currentLeaderId = r.id
+
+	r.replicators = make([]*Replicator, r.totalNodes)
+	for followerId := 0; followerId < r.totalNodes; followerId++ {
+		if followerId == r.id {
+			continue
+		}
+		r.sentLengths[followerId] = len(r.log)
+		r.ackedLengths[followerId] = 0
+
+		r.replicators[followerId] = NewReplicator(r, followerId)
+		r.replicators[followerId].start()
+	}
+}
