@@ -4,6 +4,8 @@ package raft
 
 import (
 	"context"
+	"fmt"
+
 	//"log/slog"
 	"math"
 	"sync"
@@ -72,6 +74,7 @@ func NewRaft(application Application, cfg *Config) *Raft {
 
 	term, votedFor, commited, savedLog, err := r.logSaver.LoadValues()
 	if err == nil {
+		fmt.Printf("Loaded values from file: %d %d %d, log length: %d\n", term, votedFor, commited, len(savedLog))
 		r.currentTerm = term
 		r.votedFor = votedFor
 		r.commitedLength = commited
@@ -127,13 +130,13 @@ func (r *Raft) forwardToLeader(message Message, leader PeerClient) {
 	defer cancel()
 
 	msg := &raftpb.Message{
-		Type: toProtoMsgType(message.msgType),
-		Key:  int32(message.key),
+		Type: toProtoMsgType(message.MsgType),
+		Key:  int32(message.Key),
 		Value: &wrapperspb.Int32Value{
-			Value: int32(*message.value),
+			Value: int32(*message.Value),
 		},
 	}
-	if message.value != nil {
+	if message.Value != nil {
 	}
 	_, err := leader.Forward(ctx, msg)
 
@@ -163,23 +166,18 @@ func (r *Raft) Broadcast(message Message) {
 	r.mu.Lock()
 	//slog.Info(fmt.Sprintf("Appending message {msgType %s, key %d, value %d} to node %d logs", message.msgType, message.key, *message.value, r.id))
 	r.log = append(r.log, LogEntry{
-		message: message,
-		term:    r.currentTerm,
+		Message: message,
+		Term:    r.currentTerm,
 	})
 	r.ackedLengths[r.id] = len(r.log)
 
-	currentTerm := r.currentTerm
-	votedFor := r.votedFor
-	logLen := len(r.log)
-	logCopy := make([]LogEntry, len(r.log))
-	copy(logCopy, r.log)
 	totalNodes := r.totalNodes
 
 	replicatorsToSignal := make([]*Replicator, len(r.replicators))
 	copy(replicatorsToSignal, r.replicators)
 	r.mu.Unlock()
 
-	go r.logSaver.SaveValues(int32(currentTerm), int32(votedFor), int32(logLen), logCopy)
+	go r.logSaver.SaveValues()
 
 	for i := range totalNodes {
 		if i == r.id {
@@ -206,7 +204,7 @@ func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 	if len(suffix) > 0 && len(r.log) > prefixLen {
 		//slog.Info(fmt.Sprintf("Went into 1st loop"))
 		index := int(math.Min(float64(len(r.log)), float64(prefixLen+len(suffix))) - 1)
-		if r.log[index].term != suffix[index-prefixLen].term {
+		if r.log[index].Term != suffix[index-prefixLen].Term {
 			r.log = r.log[:prefixLen]
 		}
 	}
@@ -219,7 +217,7 @@ func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 	if leaderCommit > r.commitedLength {
 		messagesToApply := make([]Message, 0, leaderCommit-r.commitedLength)
 		for i := r.commitedLength; i < leaderCommit; i++ {
-			messagesToApply = append(messagesToApply, r.log[i].message)
+			messagesToApply = append(messagesToApply, r.log[i].Message)
 		}
 		r.commitedLength = leaderCommit
 		r.mu.Unlock()
@@ -268,7 +266,7 @@ func (r *Raft) commitLogEntries() {
 			}
 		}
 		if acks >= majority {
-			messagesToApply = append(messagesToApply, r.log[r.commitedLength].message)
+			messagesToApply = append(messagesToApply, r.log[r.commitedLength].Message)
 			r.commitedLength++
 		} else {
 			break

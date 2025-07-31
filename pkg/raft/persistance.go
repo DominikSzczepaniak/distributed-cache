@@ -3,18 +3,29 @@ package raft
 //this is tragic implementation, speed ups need to be made
 //1.append only model for data - we currently create a new  file every time
 //2.metadata can be stored in different file (currentVote,votedFor)
+
+//Saving - we know a variable that says committedLenght. Lets introduce second variable which says index of log saved. If this variable in set do default value, we crashed to we dont know whether the logs are good, so we can start from commitedLength. If the variable is set we can just start from there.
+//helper function 1 - saves log
+//helper function 2 - does the logic around commitedLength, savedIndex
+//Loading is straighforward
+
 import (
-	"bufio"
+	"encoding/gob"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
+	"sync"
 )
 
 type DataSaver struct {
-	parent         *Raft
-	valuesFilename string
+	mu sync.RWMutex
+
+	parent             *Raft
+	logsFilename       string
+	metadataFilename   string
+	previousSavedIndex *int
 
 	DataSaverFunctions
 }
@@ -29,268 +40,248 @@ type DataSaverFunctions interface {
 
 func NewRaftDataSaver(r *Raft, cfg *Config) *DataSaver {
 	return &DataSaver{
-		parent:         r,
-		valuesFilename: cfg.valuesFilename,
+		parent:             r,
+		logsFilename:       cfg.valuesFilename,
+		metadataFilename:   cfg.valuesFilename + ".meta",
+		previousSavedIndex: nil,
 	}
-}
-
-func fileExists(path string) (bool, error) {
-	_, err := os.Stat(path)
-	if err == nil {
-		return true, nil
-	}
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	return false, err
-}
-
-func (rds *DataSaver) saveLog(logs []LogEntry, file *os.File) (bool, error) {
-	for _, entry := range logs {
-		switch entry.message.msgType {
-		case put:
-			if entry.message.value == nil {
-				return false, fmt.Errorf(
-					"nil value for PUT entry: term=%d key=%d",
-					entry.term, entry.message.key,
-				)
-			}
-			if _, err := fmt.Fprintf(
-				file,
-				"%d %s %d %d\n",
-				entry.term,
-				entry.message.msgType,
-				entry.message.key,
-				*entry.message.value,
-			); err != nil {
-				return false, fmt.Errorf("failed to write PUT entry: %w", err)
-			}
-
-		case get, delete:
-			if _, err := fmt.Fprintf(
-				file,
-				"%d %s %d\n",
-				entry.term,
-				entry.message.msgType,
-				entry.message.key,
-			); err != nil {
-				return false, fmt.Errorf(
-					"failed to write %s entry: %w",
-					entry.message.msgType,
-					err,
-				)
-			}
-
-		default:
-			return false, fmt.Errorf(
-				"unknown message type %q in log entry", entry.message.msgType,
-			)
-		}
-	}
-	return true, nil
 }
 
 func ensureDir(filename string) error {
 	dir := filepath.Clean(filepath.Dir(filename))
-	//slog.Info("Checking directory", "dir", dir)
 
 	info, err := os.Stat(dir)
 	if err == nil {
 		if info.IsDir() {
-			//slog.Info("Directory already exists", "dir", dir)
 			return nil
 		} else {
-			//slog.Error("Path exists but is not a directory", "dir", dir)
 			return fmt.Errorf("path %q exists but is not a directory", dir)
 		}
 	} else if !os.IsNotExist(err) {
-		//slog.Error("Failed to stat directory", "dir", dir, "err", err)
 		return fmt.Errorf("failed to stat directory %q: %w", dir, err)
 	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		//slog.Error("Failed to create directory", "dir", dir, "err", err)
 
 		return fmt.Errorf("failed to create directory %q: %w", dir, err)
 	}
-	//slog.Info("Directory created", "dir", dir)
 	return nil
 }
 
-func (rds *DataSaver) SaveValues(
-	currentTerm, votedFor, committedLength int32,
-	logs []LogEntry,
-) (bool, error) {
-	if err := ensureDir(rds.valuesFilename); err != nil {
-		return false, fmt.Errorf("ensure values dir: %w", err)
+// ------
+// saving
+// ------
+
+func (rds *DataSaver) saveLog(logs []LogEntry, f *os.File) error {
+	fmt.Printf("Saving logs, length: %d\n", len(logs))
+	encoder := gob.NewEncoder(f)
+	for _, entry := range logs {
+		if err := encoder.Encode(entry); err != nil {
+			return fmt.Errorf("encode log entry: %w", err)
+		}
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("sync log file: %w", err)
+	}
+	return nil
+}
+
+func (rds *DataSaver) saveMetadata(currentTerm, votedFor, committedLength int, f *os.File) error {
+	meta := struct {
+		Term           int
+		VotedFor       int
+		CommitedLength int
+	}{
+		Term:           currentTerm,
+		VotedFor:       votedFor,
+		CommitedLength: committedLength,
+	}
+	encoder := gob.NewEncoder(f)
+	if err := encoder.Encode(meta); err != nil {
+		return fmt.Errorf("encode metadata: %w", err)
 	}
 
-	exists, err := fileExists(rds.valuesFilename)
-	if err != nil {
-		return false, fmt.Errorf("stat %q: %w", rds.valuesFilename, err)
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("sync metadata: %w", err)
 	}
 
-	if !exists {
-		f, err := os.Create(rds.valuesFilename)
-		if err != nil {
-			return false, fmt.Errorf("create %q: %w", rds.valuesFilename, err)
-		}
-		defer f.Close()
+	return nil
+}
 
-		if _, err := fmt.Fprintf(
-			f,
-			"%d %d %d\n",
-			currentTerm,
-			votedFor,
-			committedLength,
-		); err != nil {
-			return false, fmt.Errorf("write header: %w", err)
-		}
-
-		return rds.saveLog(logs, f)
-	}
-
-	existing, err := rds.loadLog()
-	if err != nil {
-		return false, err
-	}
-
-	if len(logs) <= len(existing) {
-		f, err := os.Create(rds.valuesFilename)
-		if err != nil {
-			return false, fmt.Errorf("recreate %q: %w", rds.valuesFilename, err)
-		}
-		defer f.Close()
-
-		if _, err := fmt.Fprintf(
-			f,
-			"%d %d %d\n",
-			currentTerm,
-			votedFor,
-			committedLength,
-		); err != nil {
-			return false, fmt.Errorf("write header: %w", err)
-		}
-		return rds.saveLog(logs, f)
+func (rds *DataSaver) handleLogFileExistanceAndCreation(path string) (*os.File, error) {
+	dir := filepath.Dir(path)
+	if err := ensureDir(dir); err != nil {
+		return nil, fmt.Errorf("ensure values dir %q: %w", dir, err)
 	}
 
 	f, err := os.OpenFile(
-		rds.valuesFilename,
-		os.O_APPEND|os.O_WRONLY,
+		path,
+		os.O_CREATE|os.O_APPEND|os.O_WRONLY,
 		0o644,
 	)
 	if err != nil {
-		return false, fmt.Errorf("open for append %q: %w", rds.valuesFilename, err)
+		return nil, fmt.Errorf("open or create %q: %w", path, err)
 	}
-	defer f.Close()
 
-	newEntries := logs[len(existing):]
-	return rds.saveLog(newEntries, f)
+	return f, nil
 }
 
-func (rds *DataSaver) loadLog() ([]LogEntry, error) {
-	file, err := os.Open(rds.valuesFilename)
+func (rds *DataSaver) saveValuesManager(
+	currentTerm, votedFor, committedLength int,
+	logs []LogEntry,
+) (bool, error) {
+	logFile, err := rds.handleLogFileExistanceAndCreation(rds.logsFilename)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"unable to open values file %q: %w",
-			rds.valuesFilename, err,
-		)
+		fmt.Println("Failed to create logs file, error: ", err)
+		return false, err
 	}
-	defer file.Close()
+	defer logFile.Close()
 
-	scanner := bufio.NewScanner(file)
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return nil, fmt.Errorf("read header for logs: %w", err)
-		}
-		return nil, nil
+	metadataFile, err := os.Create(rds.metadataFilename)
+	if err != nil {
+		fmt.Println("Failed to create metadata file, error: ", err)
+		return false, err
+	}
+	defer metadataFile.Close()
+
+	err = rds.saveMetadata(currentTerm, votedFor, committedLength, metadataFile)
+	if err != nil {
+		fmt.Println("Failed to save metadata, error: ", err)
+		return false, err
 	}
 
+	err = rds.saveLog(logs, logFile)
+	if err != nil {
+		fmt.Println("Failed to save logs, error: ", err)
+		return false, err
+	}
+
+	rds.mu.Lock()
+	logLength := len(logs)
+	rds.previousSavedIndex = &logLength
+	rds.mu.Unlock()
+
+	return true, nil
+}
+
+//imagine a node dies but before it it logs 5 entries that arent sent to anyone, so we have fake entries. we can say he commited these logs to the app so commitedLengths are bad aswell
+
+func (rds *DataSaver) SaveValues() (bool, error) {
+	
+	if !rds.mu.TryLock(){
+		return false, nil
+	}
+	defer rds.mu.Unlock()
+	idx := 0
+	if rds.previousSavedIndex != nil{
+		idx = *rds.previousSavedIndex
+	}
+	
+
+	rds.parent.mu.RLock()
+
+	currentTerm := rds.parent.currentTerm
+
+	votedFor := rds.parent.votedFor
+	commitedLength := rds.parent.commitedLength
+
+	fmt.Println("SaveValues idx: ", idx)
+	src := rds.parent.log[idx:]
+	logCopy := make([]LogEntry, len(src))
+	copy(logCopy, src)
+	rds.parent.mu.RUnlock()
+
+	return rds.saveValuesManager(currentTerm, votedFor, commitedLength, logCopy)
+}
+
+// ------
+// loading
+// ------
+
+func (rds *DataSaver) openFileForReading(
+	path string,
+) (*os.File, error) {
+	dir := filepath.Dir(path)
+	if err := ensureDir(dir); err != nil {
+		return nil, fmt.Errorf("ensure dir %q: %w", dir, err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open file %q: %w", path, err)
+	}
+	return f, nil
+}
+
+func (rds *DataSaver) loadLogs(f *os.File) ([]LogEntry, error) {
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("seek to start: %w", err)
+	}
+
+	dec := gob.NewDecoder(f)
 	var logs []LogEntry
-	for scanner.Scan() {
-		line := scanner.Text()
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			return nil, fmt.Errorf("invalid log line: %q", line)
-		}
-		t, err := strconv.ParseInt(fields[0], 10, 32)
-		if err != nil {
-			return nil, fmt.Errorf("invalid term %q: %w", fields[0], err)
-		}
-		msgType := MessageType(fields[1])
-		k, err := strconv.ParseInt(fields[2], 10, 32)
-		if err != nil {
-			return nil, fmt.Errorf("invalid key %q: %w", fields[2], err)
-		}
-
-		var valuePtr *int
-		if msgType == put {
-			if len(fields) != 4 {
-				return nil, fmt.Errorf("PUT entry malformed: %q", line)
+	for {
+		var entry LogEntry
+		if err := dec.Decode(&entry); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
 			}
-			v, err := strconv.ParseInt(fields[3], 10, 32)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"invalid value %q: %w", fields[3], err,
-				)
-			}
-			vi := int(v)
-			valuePtr = &vi
-		} else {
-			if len(fields) != 3 {
-				return nil, fmt.Errorf(
-					"%s entry malformed: %q", msgType, line,
-				)
-			}
+			return nil, fmt.Errorf("decode log entry: %w", err)
 		}
-
-		logs = append(logs, LogEntry{
-			term: int(t),
-			message: Message{
-				msgType: msgType,
-				key:     int(k),
-				value:   valuePtr,
-			},
-		})
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scanning logs: %w", err)
+		logs = append(logs, entry)
 	}
 	return logs, nil
+}
+
+func (rds *DataSaver) loadMetadata(
+	f *os.File,
+) (currentTerm, votedFor, committedLength int, err error) {
+	if _, err = f.Seek(0, 0); err != nil {
+		err = fmt.Errorf("seek to start: %w", err)
+		return
+	}
+
+	var meta struct {
+		Term           int
+		VotedFor       int
+		CommitedLength int
+	}
+	dec := gob.NewDecoder(f)
+	if err = dec.Decode(&meta); err != nil {
+		err = fmt.Errorf("decode metadata: %w", err)
+		return
+	}
+
+	currentTerm = meta.Term
+	votedFor = meta.VotedFor
+	committedLength = meta.CommitedLength
+	return
 }
 
 func (rds *DataSaver) LoadValues() (int, int, int, []LogEntry, error) {
 	rds.parent.mu.Lock()
 	defer rds.parent.mu.Unlock()
-	file, err := os.Open(rds.valuesFilename)
-	if err != nil {
-		return 0, 0, 0, nil, fmt.Errorf(
-			"unable to open values file %q: %w",
-			rds.valuesFilename, err,
-		)
-	}
-	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return 0, 0, 0, nil, fmt.Errorf("read header: %w", err)
-		}
-		return 0, 0, 0, nil, fmt.Errorf("empty values file")
+	logFile, err := rds.openFileForReading(rds.logsFilename)
+	if err != nil {
+		fmt.Println("Error opening log file, error: ", err)
+		return 0, 0, 0, nil, err
 	}
-	header := scanner.Text()
-	var currentTerm, votedFor, committedLen int
-	n, err := fmt.Sscanf(header, "%d %d %d",
-		&currentTerm, &votedFor, &committedLen,
-	)
-	if err != nil || n != 3 {
-		return 0, 0, 0, nil, fmt.Errorf(
-			"invalid header format %q", header,
-		)
+	defer logFile.Close()
+
+	metadataFile, err := rds.openFileForReading(rds.metadataFilename)
+	if err != nil {
+		return 0, 0, 0, nil, err
+	}
+	defer metadataFile.Close()
+
+	currentTerm, votedFor, committedLen, err := rds.loadMetadata(metadataFile)
+	if err != nil {
+		return 0, 0, 0, nil, err
 	}
 
-	logs, err := rds.loadLog()
+	logs, err := rds.loadLogs(logFile)
 	if err != nil {
+		fmt.Println("Error reading log file, error: ", err)
 		return 0, 0, 0, nil, err
 	}
 	return currentTerm, votedFor, committedLen, logs, nil

@@ -12,8 +12,8 @@ import (
 )
 
 type LogEntry struct {
-	term    int
-	message Message
+	Term    int
+	Message Message
 }
 
 type LogReplicator struct {
@@ -88,20 +88,20 @@ func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 	suffix := r.log[prefixLen:]
 	prefixTerm := 0
 	if prefixLen > 0 {
-		prefixTerm = r.log[prefixLen-1].term
+		prefixTerm = r.log[prefixLen-1].Term
 	}
 
 	pbSuffix := make([]*raftpb.LogEntry, len(suffix))
 	for i, e := range suffix {
 		var val *wrapperspb.Int32Value
-		if e.message.value != nil {
-			val = wrapperspb.Int32(int32(*e.message.value))
+		if e.Message.Value != nil {
+			val = wrapperspb.Int32(int32(*e.Message.Value))
 		}
 		pbSuffix[i] = &raftpb.LogEntry{
-			Term: int32(e.term),
+			Term: int32(e.Term),
 			Message: &raftpb.Message{
-				Type:  toProtoMsgType(e.message.msgType),
-				Key:   int32(e.message.key),
+				Type:  toProtoMsgType(e.Message.MsgType),
+				Key:   int32(e.Message.Key),
 				Value: val,
 			},
 		}

@@ -2,16 +2,17 @@ package raft
 
 import (
 	"fmt"
-	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
-	"github.com/stretchr/testify/assert"
 	"reflect"
 	"testing"
+
+	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestMessageTypeConversion(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		msgType       MessageType
+		MsgType       MessageType
 		expectedProto raftpb.Message_Type
 		shouldPanic   bool
 	}{
@@ -22,12 +23,12 @@ func TestMessageTypeConversion(t *testing.T) {
 	}
 	for _, tt := range tests {
 		tt := tt
-		t.Run(string(tt.msgType), func(t *testing.T) {
+		t.Run(string(tt.MsgType), func(t *testing.T) {
 			t.Parallel()
 			if tt.shouldPanic {
-				assert.Panics(t, func() { toProtoMsgType(tt.msgType) })
+				assert.Panics(t, func() { toProtoMsgType(tt.MsgType) })
 			} else {
-				assert.Equal(t, tt.expectedProto, toProtoMsgType(tt.msgType))
+				assert.Equal(t, tt.expectedProto, toProtoMsgType(tt.MsgType))
 			}
 		})
 	}
@@ -37,17 +38,17 @@ func TestMessageCreation(t *testing.T) {
 	t.Parallel()
 	v := 7
 	msgs := []Message{
-		{msgType: put, key: 1, value: &v},
-		{msgType: get, key: 2, value: nil},
-		{msgType: delete, key: 3, value: nil},
+		{MsgType: put, Key: 1, Value: &v},
+		{MsgType: get, Key: 2, Value: nil},
+		{MsgType: delete, Key: 3, Value: nil},
 	}
 	for _, msg := range msgs {
 		m := msg
-		t.Run(fmt.Sprintf("%s-%d", m.msgType, m.key), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s-%d", m.MsgType, m.Key), func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, m.msgType, m.msgType)
-			assert.Equal(t, m.key, m.key)
-			assert.True(t, reflect.DeepEqual(m.value, m.value))
+			assert.Equal(t, m.MsgType, m.MsgType)
+			assert.Equal(t, m.Key, m.Key)
+			assert.True(t, reflect.DeepEqual(m.Value, m.Value))
 		})
 	}
 }
