@@ -1,14 +1,5 @@
 package raft
 
-//this is tragic implementation, speed ups need to be made
-//1.append only model for data - we currently create a new  file every time
-//2.metadata can be stored in different file (currentVote,votedFor)
-
-//Saving - we know a variable that says committedLenght. Lets introduce second variable which says index of log saved. If this variable in set do default value, we crashed to we dont know whether the logs are good, so we can start from commitedLength. If the variable is set we can just start from there.
-//helper function 1 - saves log
-//helper function 2 - does the logic around commitedLength, savedIndex
-//Loading is straighforward
-
 import (
 	"encoding/gob"
 	"errors"
@@ -20,12 +11,12 @@ import (
 )
 
 type DataSaver struct {
-	mu sync.RWMutex
-
 	parent             *Raft
 	logsFilename       string
 	metadataFilename   string
-	previousSavedIndex *int
+	previousSavedIndex int
+
+	mu sync.Mutex
 
 	DataSaverFunctions
 }
@@ -43,7 +34,7 @@ func NewRaftDataSaver(r *Raft, cfg *Config) *DataSaver {
 		parent:             r,
 		logsFilename:       cfg.valuesFilename,
 		metadataFilename:   cfg.valuesFilename + ".meta",
-		previousSavedIndex: nil,
+		previousSavedIndex: 0,
 	}
 }
 
@@ -72,18 +63,20 @@ func ensureDir(filename string) error {
 // saving
 // ------
 
-func (rds *DataSaver) saveLog(logs []LogEntry, f *os.File) error {
+func (rds *DataSaver) saveLog(logs []LogEntry, f *os.File) (int, error) {
 	fmt.Printf("Saving logs, length: %d\n", len(logs))
 	encoder := gob.NewEncoder(f)
+	savedLines := 0
 	for _, entry := range logs {
 		if err := encoder.Encode(entry); err != nil {
-			return fmt.Errorf("encode log entry: %w", err)
+			return savedLines, fmt.Errorf("encode log entry: %w", err)
 		}
+		savedLines += 1
 	}
 	if err := f.Sync(); err != nil {
-		return fmt.Errorf("sync log file: %w", err)
+		return savedLines, fmt.Errorf("sync log file: %w", err)
 	}
-	return nil
+	return savedLines, nil
 }
 
 func (rds *DataSaver) saveMetadata(currentTerm, votedFor, committedLength int, f *os.File) error {
@@ -149,41 +142,26 @@ func (rds *DataSaver) saveValuesManager(
 		fmt.Println("Failed to save metadata, error: ", err)
 		return false, err
 	}
-
-	err = rds.saveLog(logs, logFile)
+	savedLines, err := rds.saveLog(logs, logFile)
 	if err != nil {
 		fmt.Println("Failed to save logs, error: ", err)
 		return false, err
 	}
-
-	rds.mu.Lock()
-	logLength := len(logs)
-	rds.previousSavedIndex = &logLength
-	rds.mu.Unlock()
+	rds.previousSavedIndex += savedLines
 
 	return true, nil
 }
 
-//imagine a node dies but before it it logs 5 entries that arent sent to anyone, so we have fake entries. we can say he commited these logs to the app so commitedLengths are bad aswell
-
 func (rds *DataSaver) SaveValues() (bool, error) {
-	
-	if !rds.mu.TryLock(){
-		return false, nil
-	}
-	defer rds.mu.Unlock()
-	idx := 0
-	if rds.previousSavedIndex != nil{
-		idx = *rds.previousSavedIndex
-	}
-	
 
+	rds.mu.Lock()
+	defer rds.mu.Unlock()
 	rds.parent.mu.RLock()
+	idx := rds.previousSavedIndex
 
 	currentTerm := rds.parent.currentTerm
-
 	votedFor := rds.parent.votedFor
-	commitedLength := rds.parent.commitedLength
+	committedLength := rds.parent.commitedLength
 
 	fmt.Println("SaveValues idx: ", idx)
 	src := rds.parent.log[idx:]
@@ -191,7 +169,20 @@ func (rds *DataSaver) SaveValues() (bool, error) {
 	copy(logCopy, src)
 	rds.parent.mu.RUnlock()
 
-	return rds.saveValuesManager(currentTerm, votedFor, commitedLength, logCopy)
+	// if len(logCopy) == 0 && currentTerm == 0{
+	// 	return false, nil
+	// }
+
+	ok, err := rds.saveValuesManager(
+		currentTerm,
+		votedFor,
+		committedLength,
+		logCopy,
+	)
+	if err != nil || !ok {
+		return ok, err
+	}
+	return true, nil
 }
 
 // ------
