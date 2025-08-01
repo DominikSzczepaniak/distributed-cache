@@ -142,12 +142,12 @@ func (rds *DataSaver) saveValuesManager(
 		fmt.Println("Failed to save metadata, error: ", err)
 		return false, err
 	}
-	savedLines, err := rds.saveLog(logs, logFile)
+	_, err = rds.saveLog(logs, logFile)
 	if err != nil {
 		fmt.Println("Failed to save logs, error: ", err)
 		return false, err
 	}
-	rds.previousSavedIndex += savedLines
+	// rds.previousSavedIndex += savedLines
 
 	return true, nil
 }
@@ -157,6 +157,9 @@ func (rds *DataSaver) SaveValues() (bool, error) {
 	rds.mu.Lock()
 	defer rds.mu.Unlock()
 	rds.parent.mu.RLock()
+	if rds.previousSavedIndex > len(rds.parent.log) {
+        rds.previousSavedIndex = len(rds.parent.log)
+    }
 	idx := rds.previousSavedIndex
 
 	currentTerm := rds.parent.currentTerm
@@ -182,6 +185,15 @@ func (rds *DataSaver) SaveValues() (bool, error) {
 	if err != nil || !ok {
 		return ok, err
 	}
+	rds.parent.mu.RLock()
+    lengthNow := len(rds.parent.log)
+    rds.parent.mu.RUnlock()
+
+    newIndex := idx + len(logCopy)
+    if newIndex > lengthNow {
+        newIndex = lengthNow
+    }
+    rds.previousSavedIndex = newIndex
 	return true, nil
 }
 
@@ -275,5 +287,6 @@ func (rds *DataSaver) LoadValues() (int, int, int, []LogEntry, error) {
 		fmt.Println("Error reading log file, error: ", err)
 		return 0, 0, 0, nil, err
 	}
+	rds.previousSavedIndex = len(logs)
 	return currentTerm, votedFor, committedLen, logs, nil
 }
