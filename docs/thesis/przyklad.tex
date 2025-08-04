@@ -74,6 +74,7 @@ The distributed cache with strong consistency would be perfect solution for any 
 \section{How can we reach consensus - about algorithms}
 
 \chapter{Raft}
+% nieformalny opis z odwolaniami do papera oryginalnego
 
 \section{What is Raft}
 
@@ -136,6 +137,24 @@ Server is a single machine running a Raft algorithm.
 \section{Application \ Database}
 
 Application \ Database is an actual cache that we keep - this is where all the logic around saving, getting and deleting data is being done. We can access this layer if, and only if, the Raft node reached a consensus and majority of the servers have agreed upon it.
+
+\chapter{Implementation}
+
+1. Why many threads, how synchronization works between them 
+
+
+\chapter{Testing}
+
+
+
+\chapter{Deployment}
+1. Dockery
+2. Use in other languages - API, installation
+3. Kubernetes?
+
+\chapter{Benchmarks}
+
+\chapter{Summary and ?Future work?}
 
 %%%%% BIBLIOGRAFIA
 
