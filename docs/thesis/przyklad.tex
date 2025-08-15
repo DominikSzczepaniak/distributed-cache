@@ -67,6 +67,18 @@ The distributed cache with strong consistency would be perfect solution for any 
 
 \chapter{Reaching consensus}
 
+\section{CAP theorem (ADD CITATION)}
+CAP theorem states, that the system cannot simultaneously satisfy all three following guarantees:
+\begin{itemize}
+    \item Availability - Every request receives a response, without a guarantee that it contains the most recent version of the information. The system remains operational even if some nodes fail.
+    \item Consistency - Every read receives the most recent write or an error. This is a single, up-to-date copy of the data.
+    \item Partition tolerance - The system continues to operate even if there are network failures that cause a "partition" where some nodes cannot communicate with others.
+\end{itemize}
+
+\subsection{Which part of the CAP theorem do I fulfill}
+Raft algorithm will always focus on consistency as it's main goal, hence this part of the system is always guaranteed. Let's look at the remaining guarantees - availability and partition tolerance. \\
+In the worst case scenario where the network partitions and our node splits into some number of subsets of servers that cannot connect to each other in any way the Raft algorithm will not be able to elect a leader if the size of servers subset is smaller than majority. If it cannot elect a leader, then it cannot proceed with any operation. In this case the entire system is unavailable until it "merges" back into the size of the majority. That case shows that the system does not fulfill availability from CAP theorem. It fulfills the partition tolerance, because each subset of servers will continue to operate normally.
+
 \section{What type of algorithms are these - byzantine vs non byzantine}
 
 \subsection{Why do we not want a byzantine algorithm}
