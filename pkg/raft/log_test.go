@@ -2,13 +2,14 @@ package raft
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/wrapperspb"
-	"testing"
-	"time"
 )
 
 func TestLogReplication(t *testing.T) {
@@ -20,7 +21,7 @@ func TestLogReplication(t *testing.T) {
 	}{
 		{
 			"success",
-			[]LogEntry{{term: 1, message: Message{msgType: put, key: 1, value: intPtr(42)}}},
+			[]LogEntry{{Term: 1, Message: Message{MsgType: put, Key: 1, Value: intPtr(42)}}},
 			func(m *mockPeerClient) {
 				m.On("LogRequest", mock.Anything, mock.MatchedBy(func(req *raftpb.LogRequestArgs) bool {
 					return req.LeaderId == 0 && req.Term == 1
@@ -29,7 +30,7 @@ func TestLogReplication(t *testing.T) {
 		},
 		{
 			"failure",
-			[]LogEntry{{term: 1, message: Message{msgType: put, key: 2, value: intPtr(24)}}},
+			[]LogEntry{{Term: 1, Message: Message{MsgType: put, Key: 2, Value: intPtr(24)}}},
 			func(m *mockPeerClient) {
 				m.On("LogRequest", mock.Anything, mock.Anything).
 					Return(&raftpb.LogResponse{NodeId: 1, CurrentTerm: 1, Ack: 0, Success: false}, nil).Once()
@@ -71,9 +72,9 @@ func TestLogRequest(t *testing.T) {
 		wantSuccess bool
 		wantAck     int32
 	}{
-		{"accept", 1, nil, 1, 0, 0, []LogEntry{{term: 1, message: Message{msgType: put, key: 1, value: intPtr(42)}}}, 0, true, 1},
+		{"accept", 1, nil, 1, 0, 0, []LogEntry{{Term: 1, Message: Message{MsgType: put, Key: 1, Value: intPtr(42)}}}, 0, true, 1},
 		{"stale_term", 2, nil, 1, 0, 0, nil, 0, false, 0},
-		{"inconsistency", 1, []LogEntry{{term: 1, message: Message{msgType: put, key: 1, value: intPtr(1)}}}, 1, 1, 2, []LogEntry{{term: 1, message: Message{msgType: put, key: 2, value: intPtr(2)}}}, 1, false, 0},
+		{"inconsistency", 1, []LogEntry{{Term: 1, Message: Message{MsgType: put, Key: 1, Value: intPtr(1)}}}, 1, 1, 2, []LogEntry{{Term: 1, Message: Message{MsgType: put, Key: 2, Value: intPtr(2)}}}, 1, false, 0},
 	}
 	for _, tt := range cases {
 		tt := tt
@@ -85,12 +86,12 @@ func TestLogRequest(t *testing.T) {
 			pb := make([]*raftpb.LogEntry, len(tt.entries))
 			for i, e := range tt.entries {
 				var val *wrapperspb.Int32Value
-				if e.message.value != nil {
-					val = wrapperspb.Int32(int32(*e.message.value))
+				if e.Message.Value != nil {
+					val = wrapperspb.Int32(int32(*e.Message.Value))
 				}
 				pb[i] = &raftpb.LogEntry{
-					Term:    int32(e.term),
-					Message: &raftpb.Message{Type: toProtoMsgType(e.message.msgType), Key: int32(e.message.key), Value: val},
+					Term:    int32(e.Term),
+					Message: &raftpb.Message{Type: toProtoMsgType(e.Message.MsgType), Key: int32(e.Message.Key), Value: val},
 				}
 			}
 			req := &raftpb.LogRequestArgs{
@@ -114,8 +115,8 @@ func TestLogCommitment(t *testing.T) {
 	leader := createTestRaft(t, 0, 3)
 	leader.currentRole = Leader
 	leader.currentTerm = 1
-	msg := Message{msgType: put, key: 1, value: intPtr(42)}
-	leader.log = append(leader.log, LogEntry{term: 1, message: msg})
+	msg := Message{MsgType: put, Key: 1, Value: intPtr(42)}
+	leader.log = append(leader.log, LogEntry{Term: 1, Message: msg})
 	leader.ackedLengths[0] = 1
 	leader.ackedLengths[1] = 1
 	leader.mu.Lock()

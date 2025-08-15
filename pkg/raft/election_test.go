@@ -2,12 +2,13 @@ package raft
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
 func TestRaftElection(t *testing.T) {
@@ -97,8 +98,8 @@ func TestVoteRequest(t *testing.T) {
 			n.currentTerm = tt.args.nodeTerm
 			n.votedFor = tt.args.nodeVoted
 			if tt.args.logLen > 0 {
-				n.log = append(n.log, LogEntry{term: tt.args.logTerm,
-					message: Message{msgType: put, key: 1, value: intPtr(1)}})
+				n.log = append(n.log, LogEntry{Term: tt.args.logTerm,
+					Message: Message{MsgType: put, Key: 1, Value: intPtr(1)}})
 			}
 			req := &raftpb.VoteRequestArgs{
 				CandidateId:        0,

@@ -1,104 +1,134 @@
 package raft
 
 import (
-	"fmt"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestDataSaver(t *testing.T) {
+func TestDataSaver_SaveLoad(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name      string
-		currTerm  int32
-		votedFor  int32
-		commitLen int32
+		currTerm  int
+		votedFor  int
+		commitLen int
 		logs      []LogEntry
 	}{
-		{"empty", 0, -1, 0, nil},
-		{"with_data", 2, 1, 2, []LogEntry{
-			{term: 1, message: Message{msgType: put, key: 1, value: intPtr(42)}},
-			{term: 2, message: Message{msgType: get, key: 2, value: nil}},
-			{term: 2, message: Message{msgType: delete, key: 3, value: nil}},
-		}},
+		{
+			name:      "empty",
+			currTerm:  0,
+			votedFor:  -1,
+			commitLen: 0,
+			logs:      nil,
+		},
+		{
+			name:      "with_data",
+			currTerm:  2,
+			votedFor:  1,
+			commitLen: 0,
+			logs: []LogEntry{
+				{Term: 1, Message: Message{MsgType: put, Key: 1, Value: intPtr(42)}},
+				{Term: 2, Message: Message{MsgType: get, Key: 2, Value: nil}},
+				{Term: 2, Message: Message{MsgType: delete, Key: 3, Value: nil}},
+			},
+		},
 	}
+
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
 			fn := filepath.Join(dir, "s.data")
+
 			node := createTestRaft(t, 0, 3)
-			cfg := &Config{valuesFilename: fn, totalNodes: 3, raftId: 0}
+			cfg := &Config{
+				valuesFilename: fn,
+				totalNodes:     3,
+				raftId:         0,
+			}
 			s := NewRaftDataSaver(node, cfg)
-			ok, err := s.SaveValues(tt.currTerm, tt.votedFor, tt.commitLen, tt.logs)
+
+			node.mu.Lock()
+			node.currentTerm = tt.currTerm
+			node.votedFor = tt.votedFor
+			node.commitedLength = tt.commitLen
+			node.log = make([]LogEntry, len(tt.logs))
+			copy(node.log, tt.logs)
+			node.mu.Unlock()
+
+			// save & load
+			ok, err := s.SaveValues()
 			require.NoError(t, err)
-			assert.True(t, ok)
+			assert.True(t, ok, "SaveValues should succeed")
+
 			term, vf, cl, loaded, err := s.LoadValues()
 			require.NoError(t, err)
+
 			assert.Equal(t, int(tt.currTerm), term)
 			assert.Equal(t, int(tt.votedFor), vf)
 			assert.Equal(t, int(tt.commitLen), cl)
 			assert.Equal(t, len(tt.logs), len(loaded))
+
 			for i := range tt.logs {
-				exp, got := tt.logs[i], loaded[i]
-				assert.Equal(t, exp.term, got.term)
-				assert.Equal(t, exp.message.msgType, got.message.msgType)
-				assert.Equal(t, exp.message.key, got.message.key)
-				if exp.message.value == nil {
-					assert.Nil(t, got.message.value)
+				exp := tt.logs[i]
+				got := loaded[i]
+				assert.Equal(t, exp.Term, got.Term)
+				assert.Equal(t, exp.Message.MsgType, got.Message.MsgType)
+				assert.Equal(t, exp.Message.Key, got.Message.Key)
+				if exp.Message.Value == nil {
+					assert.Nil(t, got.Message.Value)
 				} else {
-					assert.Equal(t, *exp.message.value, *got.message.value)
+					assert.Equal(t, *exp.Message.Value, *got.Message.Value)
 				}
 			}
 		})
 	}
 }
 
-func TestDataSaverInvalidPath(t *testing.T) {
+func TestDataSaver_InvalidPath(t *testing.T) {
+	t.Parallel()
 	node := createTestRaft(t, 0, 3)
-	cfg := &Config{valuesFilename: "/invalid/path", totalNodes: 3, raftId: 0}
-	defer func() {
-		if r := recover(); r != nil {
-			assert.Contains(t, fmt.Sprint(r), "not correct")
-		}
-	}()
+	cfg := &Config{
+		valuesFilename: "/invalid/path/nope.data",
+		totalNodes:     3,
+		raftId:         0,
+	}
 	s := NewRaftDataSaver(node, cfg)
-	_, err := s.SaveValues(1, 0, 0, nil)
+
+	// set minimal valid state
+	node.mu.Lock()
+	node.currentTerm = 1
+	node.votedFor = 0
+	node.commitedLength = 0
+	node.log = nil
+	node.mu.Unlock()
+
+	ok, err := s.SaveValues()
+	assert.False(t, ok, "SaveValues should return ok=false on invalid path")
 	require.Error(t, err)
 }
 
-func TestLogFileParsing(t *testing.T) {
+func TestDataSaver_CorruptedFile(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		content       string
-		expectError   bool
-		expectedCount int
-	}{
-		{"1 0 2\n1 PUT 1 42\n1 GET 2\n1 DELETE 3\n", false, 3},
-		{"bad header\n", true, 0},
-		{"1 0 0\n1 PUT 1\n", true, 0},
+	dir := t.TempDir()
+	fn := filepath.Join(dir, "broken.data")
+
+	// write some non‐gob data
+	require.NoError(t, os.WriteFile(fn, []byte("this is not gob"), 0o644))
+
+	node := createTestRaft(t, 0, 3)
+	cfg := &Config{
+		valuesFilename: fn,
+		totalNodes:     3,
+		raftId:         0,
 	}
-	for _, tt := range cases {
-		tt := tt
-		t.Run("", func(t *testing.T) {
-			t.Parallel()
-			dir := t.TempDir()
-			fn := filepath.Join(dir, "f.data")
-			require.NoError(t, os.WriteFile(fn, []byte(tt.content), 0644))
-			node := createTestRaft(t, 0, 3)
-			cfg := &Config{valuesFilename: fn, totalNodes: 3, raftId: 0}
-			s := NewRaftDataSaver(node, cfg)
-			_, _, _, logs, err := s.LoadValues()
-			if tt.expectError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.expectedCount, len(logs))
-			}
-		})
-	}
+	s := NewRaftDataSaver(node, cfg)
+
+	_, _, _, _, err := s.LoadValues()
+	assert.Error(t, err, "LoadValues should fail on corrupted file")
 }

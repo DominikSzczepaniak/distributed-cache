@@ -3,6 +3,7 @@ package raft
 import (
 	"context"
 	"fmt"
+
 	//"log/slog"
 	"math/rand"
 	"time"
@@ -93,7 +94,7 @@ func (r *Raft) startElection() {
 
 	logTerm := 0
 	if len(r.log) > 0 {
-		logTerm = r.log[len(r.log)-1].term
+		logTerm = r.log[len(r.log)-1].Term
 	}
 
 	voteData := VoteRequestData{r.id, r.currentTerm, len(r.log), logTerm}

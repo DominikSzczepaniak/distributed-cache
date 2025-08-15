@@ -3,9 +3,9 @@ package raft
 import "github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 
 type Message struct {
-	msgType MessageType
-	key     int
-	value   *int
+	MsgType MessageType
+	Key     int
+	Value   *int
 }
 
 type MessageType string

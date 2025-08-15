@@ -1,38 +1,13 @@
 package raft
 
 import (
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"math/rand"
 	"path/filepath"
 	"testing"
 	"time"
-)
 
-func randomRequest(upperLimit int) Message {
-	msgTypeId := rand.Int() % 3
-	var msgType MessageType
-	switch msgTypeId {
-	case 0:
-		msgType = get
-		break
-	case 1:
-		msgType = put
-		break
-	case 2:
-		msgType = delete
-		break
-	}
-	key := rand.Int() % upperLimit
-	value := rand.Int()
-	switch msgType {
-	case get, delete:
-		return Message{msgType: msgType, key: key}
-	case put:
-		return Message{msgType: msgType, key: key, value: &value}
-	}
-	panic("Impossible")
-}
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
 
 func TestFullRaftIntegration(t *testing.T) {
 	if testing.Short() {
@@ -56,7 +31,7 @@ func TestFullRaftIntegration(t *testing.T) {
 		}
 		require.NotNil(t, leader)
 		val := 100
-		leader.Broadcast(Message{msgType: put, key: 9, value: &val})
+		leader.Broadcast(Message{MsgType: put, Key: 9, Value: &val})
 		time.Sleep(1 * time.Second)
 		for i, n := range nodes {
 			n.mu.RLock()
@@ -83,7 +58,7 @@ func TestFullRaftIntegration(t *testing.T) {
 		require.NotNil(t, leader)
 		require.NotNil(t, follower)
 		val := 55
-		follower.Broadcast(Message{msgType: put, key: 5, value: &val})
+		follower.Broadcast(Message{MsgType: put, Key: 5, Value: &val})
 		time.Sleep(1 * time.Second)
 		for i, n := range nodes {
 			data := n.application.(*testApp).getData()
@@ -100,13 +75,21 @@ func TestRaftRecovery(t *testing.T) {
 	fn := filepath.Join(tmp, "r.data")
 	app1 := newTestApp()
 	initLogs := []LogEntry{
-		{term: 1, message: Message{msgType: put, key: 1, value: intPtr(42)}},
-		{term: 1, message: Message{msgType: put, key: 2, value: intPtr(24)}},
+		{Term: 1, Message: Message{MsgType: put, Key: 1, Value: intPtr(42)}},
+		{Term: 1, Message: Message{MsgType: put, Key: 2, Value: intPtr(24)}},
 	}
 	node1 := &Raft{id: 0, totalNodes: 3, currentTerm: 2, votedFor: 1,
 		log: initLogs, commitedLength: 2, application: app1}
 	s := NewRaftDataSaver(node1, &Config{valuesFilename: fn, totalNodes: 3, raftId: 0})
-	ok, err := s.SaveValues(2, 1, 2, initLogs)
+
+	node1.mu.Lock()
+	node1.currentTerm = 2
+	node1.votedFor = 1
+	node1.commitedLength = 2
+	node1.log = initLogs
+	node1.mu.Unlock()
+
+	ok, err := s.SaveValues()
 	require.NoError(t, err)
 	require.True(t, ok)
 	app2 := newTestApp()
@@ -117,11 +100,11 @@ func TestRaftRecovery(t *testing.T) {
 	require.Len(t, node2.log, 2)
 	for i, exp := range initLogs {
 		got := node2.log[i]
-		assert.Equal(t, exp.term, got.term)
-		assert.Equal(t, exp.message.msgType, got.message.msgType)
-		assert.Equal(t, exp.message.key, got.message.key)
-		if exp.message.value != nil {
-			assert.Equal(t, *exp.message.value, *got.message.value)
+		assert.Equal(t, exp.Term, got.Term)
+		assert.Equal(t, exp.Message.MsgType, got.Message.MsgType)
+		assert.Equal(t, exp.Message.Key, got.Message.Key)
+		if exp.Message.Value != nil {
+			assert.Equal(t, *exp.Message.Value, *got.Message.Value)
 		}
 	}
 }
@@ -141,14 +124,14 @@ func TestConcurrentOperations(t *testing.T) {
 		n.mu.RUnlock()
 	}
 	require.NotNil(t, leader)
-	const nmsgs = 100000
+	const nmsgs = 3000000
 	done := make(chan struct{}, nmsgs)
 	sem := make(chan int, 256)
 	for i := 0; i < nmsgs; i++ {
 		sem <- 1
 		go func(key int) {
 			val := key * 2
-			leader.Broadcast(Message{msgType: put, key: key, value: &val})
+			leader.Broadcast(Message{MsgType: put, Key: key, Value: &val})
 			done <- struct{}{}
 			<-sem
 		}(i)

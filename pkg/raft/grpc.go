@@ -3,8 +3,10 @@ package raft
 import (
 	"context"
 	"fmt"
+
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
+
 	//"log/slog"
 	"net"
 
@@ -51,9 +53,9 @@ func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, 
 		val = &tmp
 	}
 	internal := Message{
-		msgType: MessageType(msg.Type.String()),
-		key:     int(msg.Key),
-		value:   val,
+		MsgType: MessageType(msg.Type.String()),
+		Key:     int(msg.Key),
+		Value:   val,
 	}
 
 	r.mu.RLock()
@@ -88,11 +90,11 @@ func convertLogRequestArgs(args *raftpb.LogRequestArgs) (int, int, int, int, int
 			val = &tmp
 		}
 		suffix[i] = LogEntry{
-			term: int(e.Term),
-			message: Message{
-				msgType: MessageType(e.Message.Type.String()),
-				key:     int(e.Message.Key),
-				value:   val,
+			Term: int(e.Term),
+			Message: Message{
+				MsgType: MessageType(e.Message.Type.String()),
+				Key:     int(e.Message.Key),
+				Value:   val,
 			},
 		}
 	}
@@ -104,9 +106,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 	leaderId, term, prefixLen, prefixTerm, commitLength, suffix := convertLogRequestArgs(in)
 
 	r.mu.Lock() //TODO: fix, kept too long. Release the lock for slow operations - network and IO
-	defer r.mu.Unlock()
 	//slog.Info(fmt.Sprintf("Received LogRequest on node %d from node %d, node on role %s", r.id, int(in.LeaderId), r.currentRole))
-
 	if r.currentTerm < term {
 		//slog.Warn(fmt.Sprintf(
 		//	"Node %d: currentTerm (%d) > received term (%d), updating term and resetting votedFor",
@@ -115,14 +115,8 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		r.currentTerm = term
 		r.votedFor = -1
 
-		currentTerm := r.currentTerm
-		votedFor := r.votedFor
-		commitedLength := r.commitedLength
-		logCopy := make([]LogEntry, len(r.log))
-		copy(logCopy, r.log)
-
 		go r.raftElector.ResetTimer()
-		go r.logSaver.SaveValues(int32(currentTerm), int32(votedFor), int32(commitedLength), logCopy) //TODO dont run inside lock
+		// go r.logSaver.SaveValues()
 	}
 	if r.currentTerm == term {
 		//if r.currentRole != Follower || r.currentLeaderId != leaderId {
@@ -134,7 +128,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		r.currentRole = Follower
 		r.currentLeaderId = leaderId
 	}
-	logOk := (len(r.log) >= prefixLen) && (prefixLen == 0 || r.log[prefixLen-1].term == prefixTerm)
+	logOk := (len(r.log) >= prefixLen) && (prefixLen == 0 || r.log[prefixLen-1].Term == prefixTerm)
 	//slog.Info(fmt.Sprintf(
 	//	"Node %d: logOk=%v (logLen=%d, prefixLen=%d, prefixTerm=%d, logTermAtPrefix=%v)",
 	//	r.id, logOk, len(r.log), prefixLen, prefixTerm,
@@ -152,18 +146,12 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		//	"Node %d: appending entries (prefixLen=%d, commitLength=%d, suffixLen=%d)",
 		//	r.id, prefixLen, commitLength, len(suffix),
 		//))
-		currentTerm := r.currentTerm
-		votedFor := r.votedFor
 		r.mu.Unlock()
 
 		r.appendEntries(prefixLen, commitLength, suffix)
-		r.mu.Lock()
 
-		commitedLength := r.commitedLength
-		logCopy := make([]LogEntry, len(r.log))
-		copy(logCopy, r.log)
 		ack := prefixLen + len(suffix)
-		go r.logSaver.SaveValues(int32(currentTerm), int32(votedFor), int32(commitedLength), logCopy)
+		go r.logSaver.SaveValues()
 
 		//slog.Info(fmt.Sprintf(
 		//	"Node %d: LogRequest success, ack=%d, term=%d",
@@ -177,16 +165,13 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		}, nil
 	} else {
 
-		currentTerm := r.currentTerm
-		votedFor := r.votedFor
-		commitedLength := r.commitedLength
-		logCopy := make([]LogEntry, len(r.log))
-		copy(logCopy, r.log)
 		//slog.Warn(fmt.Sprintf(
 		//	"Node %d: LogRequest failed (currentTerm=%d, receivedTerm=%d, logOk=%v)",
 		//	r.id, currentTerm, term, logOk,
 		//))
-		r.logSaver.SaveValues(int32(currentTerm), int32(votedFor), int32(commitedLength), logCopy)
+		currentTerm := r.currentTerm
+		r.mu.Unlock()
+		r.logSaver.SaveValues()
 		return &raftpb.LogResponse{
 			NodeId:      int32(r.id),
 			CurrentTerm: int32(currentTerm),
@@ -203,7 +188,8 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 	candidateLogTerm := int(in.CandidateLogTerm)
 
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	// defer r.mu.Unlock()
+	toPersist := false
 	//slog.Info(
 	//	"Received request for vote\n",
 	//	slog.Int("nodeOn", r.id),
@@ -226,18 +212,13 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 		r.currentRole = Follower
 		r.votedFor = -1
 
-		currentTerm := r.currentTerm
-		votedFor := r.votedFor
-		commitedLength := r.commitedLength
-		logCopy := make([]LogEntry, len(r.log))
-		copy(logCopy, r.log)
-
 		go r.raftElector.ResetTimer()
-		go r.logSaver.SaveValues(int32(currentTerm), int32(votedFor), int32(commitedLength), logCopy)
+		toPersist = true
+		// go r.logSaver.SaveValues()
 	}
 	lastTerm := 0
 	if len(r.log) > 0 {
-		lastTerm = r.log[len(r.log)-1].term
+		lastTerm = r.log[len(r.log)-1].Term
 	}
 	logOk := (candidateLogTerm > lastTerm) || (candidateLogTerm == lastTerm && candidateLogLength >= len(r.log))
 	//slog.Info(
@@ -251,14 +232,9 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 		r.votedFor = candidateId
 		r.currentRole = Follower
 
-		currentTerm := r.currentTerm
-		votedFor := r.votedFor
-		commitedLength := r.commitedLength
-		logCopy := make([]LogEntry, len(r.log))
-		copy(logCopy, r.log)
-
 		go r.raftElector.ResetTimer()
-		go r.logSaver.SaveValues(int32(currentTerm), int32(votedFor), int32(commitedLength), logCopy)
+		r.mu.Unlock()
+		go r.logSaver.SaveValues()
 		//slog.Info(
 		//	"VoteRequest successful\n",
 		//	slog.Int("nodeOn", r.id),
@@ -273,6 +249,10 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 		//	"VoteRequest unsuccessful\n",
 		//	slog.Int("nodeOn", r.id),
 		//	slog.Int("nodeFrom", int(in.CandidateId)))
+		r.mu.Unlock()
+		if toPersist {
+			go r.logSaver.SaveValues()
+		}
 		return &raftpb.VoteResponse{
 			NodeId:      int32(r.id),
 			CurrentTerm: int32(r.currentTerm),

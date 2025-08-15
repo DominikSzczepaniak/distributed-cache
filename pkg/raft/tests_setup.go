@@ -3,14 +3,15 @@ package raft
 import (
 	"context"
 	"fmt"
-	mapset "github.com/deckarep/golang-set/v2"
-	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
-	"github.com/stretchr/testify/mock"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
+
+	mapset "github.com/deckarep/golang-set/v2"
+	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
+	"github.com/stretchr/testify/mock"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type testApp struct {
@@ -25,18 +26,18 @@ func newTestApp() *testApp {
 func (a *testApp) AppendMessage(msg Message) (bool, int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	switch msg.msgType {
+	switch msg.MsgType {
 	case put:
-		if msg.value == nil {
+		if msg.Value == nil {
 			return false, 0
 		}
-		a.data[msg.key] = *msg.value
+		a.data[msg.Key] = *msg.Value
 		return true, 0
 	case get:
-		return true, a.data[msg.key]
+		return true, a.data[msg.Key]
 	case delete:
 		rv := reflect.ValueOf(a.data)
-		rv.SetMapIndex(reflect.ValueOf(msg.key), reflect.Value{})
+		rv.SetMapIndex(reflect.ValueOf(msg.Key), reflect.Value{})
 		return true, 0
 	default:
 		return false, 0
