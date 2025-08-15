@@ -250,7 +250,7 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 		//	slog.Int("nodeOn", r.id),
 		//	slog.Int("nodeFrom", int(in.CandidateId)))
 		r.mu.Unlock()
-		if toPersist{
+		if toPersist {
 			go r.logSaver.SaveValues()
 		}
 		return &raftpb.VoteResponse{
