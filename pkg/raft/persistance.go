@@ -17,16 +17,6 @@ type DataSaver struct {
 	previousSavedIndex int
 
 	mu sync.Mutex
-
-	DataSaverFunctions
-}
-
-type DataSaverFunctions interface {
-	SaveValues(currentTerm, votedFor, commitedLength int32, logs []LogEntry) (bool, error)
-	LoadValues() (int, int, int, []LogEntry, error)
-
-	saveLog(logs []LogEntry, file *os.File) (bool, error)
-	loadLog() ([]LogEntry, error)
 }
 
 func NewRaftDataSaver(r *Raft, cfg *Config) *DataSaver {
@@ -39,21 +29,8 @@ func NewRaftDataSaver(r *Raft, cfg *Config) *DataSaver {
 }
 
 func ensureDir(filename string) error {
-	dir := filepath.Clean(filepath.Dir(filename))
-
-	info, err := os.Stat(dir)
-	if err == nil {
-		if info.IsDir() {
-			return nil
-		} else {
-			return fmt.Errorf("path %q exists but is not a directory", dir)
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("failed to stat directory %q: %w", dir, err)
-	}
-
+	dir := filepath.Dir(filename)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-
 		return fmt.Errorf("failed to create directory %q: %w", dir, err)
 	}
 	return nil
@@ -128,14 +105,13 @@ func (rds *DataSaver) saveValuesManager(
 		fmt.Println("Failed to create logs file, error: ", err)
 		return false, err
 	}
-	defer logFile.Close()
 
 	metadataFile, err := os.Create(rds.metadataFilename)
 	if err != nil {
+		logFile.Close()
 		fmt.Println("Failed to create metadata file, error: ", err)
 		return false, err
 	}
-	defer metadataFile.Close()
 
 	err = rds.saveMetadata(currentTerm, votedFor, committedLength, metadataFile)
 	if err != nil {
@@ -149,6 +125,16 @@ func (rds *DataSaver) saveValuesManager(
 	}
 	// rds.previousSavedIndex += savedLines
 
+	err = logFile.Close()
+	if err != nil {
+		fmt.Println("Failed to close log file, error: ", err)
+		return false, err
+	}
+	err = metadataFile.Close()
+	if err != nil {
+		fmt.Println("Failed to close metadata file, error: ", err)
+		return false, err
+	}
 	return true, nil
 }
 
