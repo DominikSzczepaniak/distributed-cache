@@ -4,7 +4,7 @@ package raftpb;
 import "google/protobuf/wrappers.proto";
 import "google/protobuf/empty.proto";
 
-option go_package = "github.com/dominikszczepaniak/distributed-cache/raft/raftpb";
+option go_package = "pkg/raft/raftpb";
 
 message Message{
     enum Type { GET = 0; PUT=1; DELETE = 2;}
@@ -49,6 +49,17 @@ message LogResponse{
     bool success = 4;
 }
 
+message InstallSnapshotRequest {
+    int32 leaderId = 1;
+    int32 term = 2;
+    int32 lastIncludedIndex = 3;
+    int32 lastIncludedTerm = 4;
+    bytes data = 5;
+}
+
+message InstallSnapshotResponse {
+    int32 term = 1;
+}
 
 
 
@@ -56,6 +67,7 @@ service Raft{
     rpc Forward (Message) returns (Null);
     rpc VoteRequest (VoteRequestArgs) returns (VoteResponse);
     rpc LogRequest(LogRequestArgs) returns (LogResponse);
+    rpc InstallSnapshot(InstallSnapshotRequest) returns (InstallSnapshotResponse);
     rpc Heartbeat (google.protobuf.Empty) returns (google.protobuf.Empty);
 }
 

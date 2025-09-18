@@ -10,11 +10,18 @@ import (
 	"sync"
 )
 
+type Snapshot struct {
+	LastIncludedIndex int
+	LastIncludedTerm  int
+	Data              []byte
+}
+
 type DataSaver struct {
 	parent             *Raft
 	logsFilename       string
 	metadataFilename   string
 	previousSavedIndex int
+	snapshotFilename   string
 
 	mu sync.Mutex
 
@@ -34,6 +41,7 @@ func NewRaftDataSaver(r *Raft, cfg *Config) *DataSaver {
 		parent:             r,
 		logsFilename:       cfg.valuesFilename,
 		metadataFilename:   cfg.valuesFilename + ".meta",
+		snapshotFilename:   cfg.valuesFilename + ".snap",
 		previousSavedIndex: 0,
 	}
 }
@@ -197,6 +205,22 @@ func (rds *DataSaver) SaveValues() (bool, error) {
 	return true, nil
 }
 
+func (rds *DataSaver) SaveSnapshot(snapshot *Snapshot) error {
+	rds.mu.Lock()
+	defer rds.mu.Unlock()
+	f, err := os.Create(rds.snapshotFilename)
+	if err != nil {
+		return fmt.Errorf("failed to create snapshot file: %w", err)
+	}
+	defer f.Close()
+
+	encoder := gob.NewEncoder(f)
+	if err := encoder.Encode(snapshot); err != nil {
+		return fmt.Errorf("failed to encode snapshot: %w", err)
+	}
+	return f.Sync()
+}
+
 // ------
 // loading
 // ------
@@ -260,33 +284,56 @@ func (rds *DataSaver) loadMetadata(
 	return
 }
 
-func (rds *DataSaver) LoadValues() (int, int, int, []LogEntry, error) {
+func (rds *DataSaver) LoadValues() (int, int, int, []LogEntry, *Snapshot, error) {
 	rds.parent.mu.Lock()
 	defer rds.parent.mu.Unlock()
+
+	snapshot, err := rds.LoadSnapshot()
+	if err != nil {
+		return 0, 0, 0, nil, nil, fmt.Errorf("error loading snapshot: %w", err)
+	}
 
 	logFile, err := rds.openFileForReading(rds.logsFilename)
 	if err != nil {
 		fmt.Println("Error opening log file, error: ", err)
-		return 0, 0, 0, nil, err
+		return 0, 0, 0, nil, snapshot, err
 	}
 	defer logFile.Close()
 
 	metadataFile, err := rds.openFileForReading(rds.metadataFilename)
 	if err != nil {
-		return 0, 0, 0, nil, err
+		return 0, 0, 0, nil, snapshot, err
 	}
 	defer metadataFile.Close()
 
 	currentTerm, votedFor, committedLen, err := rds.loadMetadata(metadataFile)
 	if err != nil {
-		return 0, 0, 0, nil, err
+		return 0, 0, 0, nil, snapshot, err
 	}
 
 	logs, err := rds.loadLogs(logFile)
 	if err != nil {
 		fmt.Println("Error reading log file, error: ", err)
-		return 0, 0, 0, nil, err
+		return 0, 0, 0, nil, snapshot, err
 	}
 	rds.previousSavedIndex = len(logs)
-	return currentTerm, votedFor, committedLen, logs, nil
+	return currentTerm, votedFor, committedLen, logs, snapshot, nil
+}
+
+func (rds *DataSaver) LoadSnapshot() (*Snapshot, error) {
+	f, err := os.Open(rds.snapshotFilename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // No snapshot yet
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	var snap Snapshot
+	decoder := gob.NewDecoder(f)
+	if err := decoder.Decode(&snap); err != nil {
+		return nil, fmt.Errorf("failed to decode snapshot: %w", err)
+	}
+	return &snap, nil
 }

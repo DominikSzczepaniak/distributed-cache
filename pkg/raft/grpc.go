@@ -128,7 +128,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		r.currentRole = Follower
 		r.currentLeaderId = leaderId
 	}
-	logOk := (len(r.log) >= prefixLen) && (prefixLen == 0 || r.log[prefixLen-1].Term == prefixTerm)
+	logOk := (r.getLastLogIndex() >= prefixLen) && (prefixLen == 0 || (prefixLen > r.lastSnapshotIndex && r.getTermForIndex(prefixLen) == prefixTerm))
 	//slog.Info(fmt.Sprintf(
 	//	"Node %d: logOk=%v (logLen=%d, prefixLen=%d, prefixTerm=%d, logTermAtPrefix=%v)",
 	//	r.id, logOk, len(r.log), prefixLen, prefixTerm,
@@ -264,4 +264,57 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 func (r *Raft) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error) {
 	r.heartbeat.receiveHeartbeat()
 	return &emptypb.Empty{}, nil
+}
+
+func (r *Raft) InstallSnapshot(ctx context.Context, args *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if args.Term < int32(r.currentTerm) {
+		return &raftpb.InstallSnapshotResponse{Term: int32(r.currentTerm)}, nil
+	}
+	if args.Term > int32(r.currentTerm) {
+		r.currentTerm = int(args.Term)
+		r.votedFor = -1
+	}
+
+	r.currentRole = Follower
+	r.currentLeaderId = int(args.LeaderId)
+	r.raftElector.ResetTimer()
+
+	// Have the application restore its state
+	err := r.application.RestoreFromSnapshot(args.Data)
+	if err != nil {
+		// This is a fatal error for the state machine
+		panic(fmt.Sprintf("failed to restore snapshot: %v", err))
+	}
+
+	// Update Raft's state
+	r.lastSnapshotIndex = int(args.LastIncludedIndex)
+	r.lastSnapshotTerm = int(args.LastIncludedTerm)
+	r.commitedLength = int(args.LastIncludedIndex)
+
+	// Persist the snapshot
+	snap := &Snapshot{
+		LastIncludedIndex: r.lastSnapshotIndex,
+		LastIncludedTerm:  r.lastSnapshotTerm,
+		Data:              args.Data,
+	}
+	if err := r.logSaver.SaveSnapshot(snap); err != nil {
+		fmt.Printf("Error saving snapshot: %v\n", err)
+	}
+
+	// Discard log entries covered by the snapshot
+	newLog := make([]LogEntry, 0)
+	for i := range r.log {
+		logIndex := r.getLogIndex(i)
+		if logIndex > r.lastSnapshotIndex {
+			newLog = append(newLog, r.log[i])
+		}
+	}
+	r.log = newLog
+
+	go r.logSaver.SaveValues() // Save the compacted log and metadata
+
+	return &raftpb.InstallSnapshotResponse{Term: int32(r.currentTerm)}, nil
 }

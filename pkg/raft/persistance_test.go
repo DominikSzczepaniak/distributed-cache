@@ -66,7 +66,7 @@ func TestDataSaver_SaveLoad(t *testing.T) {
 			require.NoError(t, err)
 			assert.True(t, ok, "SaveValues should succeed")
 
-			term, vf, cl, loaded, err := s.LoadValues()
+			term, vf, cl, loaded, _, err := s.LoadValues()
 			require.NoError(t, err)
 
 			assert.Equal(t, int(tt.currTerm), term)
@@ -129,6 +129,6 @@ func TestDataSaver_CorruptedFile(t *testing.T) {
 	}
 	s := NewRaftDataSaver(node, cfg)
 
-	_, _, _, _, err := s.LoadValues()
+	_, _, _, _, _, err := s.LoadValues()
 	assert.Error(t, err, "LoadValues should fail on corrupted file")
 }

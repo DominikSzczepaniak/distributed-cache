@@ -1,7 +1,9 @@
 package raft
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -44,6 +46,27 @@ func (a *testApp) AppendMessage(msg Message) (bool, int) {
 	}
 }
 
+func (a *testApp) GetSnapshot() ([]byte, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(a.data); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (a *testApp) RestoreFromSnapshot(data []byte) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var newData map[int]int
+	if err := gob.NewDecoder(bytes.NewBuffer(data)).Decode(&newData); err != nil {
+		return err
+	}
+	a.data = newData
+	return nil
+}
+
 func (a *testApp) getData() map[int]int {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -70,6 +93,10 @@ func (m *mockPeerClient) LogRequest(ctx context.Context, in *raftpb.LogRequestAr
 	args := m.Called(ctx, in)
 	return args.Get(0).(*raftpb.LogResponse), args.Error(1)
 }
+func (m *mockPeerClient) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
+	args := m.Called(ctx, in)
+	return args.Get(0).(*raftpb.InstallSnapshotResponse), args.Error(1)
+}
 func (m *mockPeerClient) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error) {
 	args := m.Called(ctx, in)
 	return args.Get(0).(*emptypb.Empty), args.Error(1)
@@ -86,18 +113,21 @@ func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
 		raftAddrs:      make([]string, totalNodes),
 	}
 	r := &Raft{
-		id:              id,
-		totalNodes:      totalNodes,
-		currentTerm:     0,
-		votedFor:        -1,
-		log:             []LogEntry{},
-		commitedLength:  0,
-		currentRole:     Follower,
-		currentLeaderId: -1,
-		votesReceived:   mapset.NewSet[int](),
-		sentLengths:     make([]int, totalNodes),
-		ackedLengths:    make([]int, totalNodes),
-		application:     app,
+		id:                id,
+		totalNodes:        totalNodes,
+		currentTerm:       0,
+		lastSnapshotIndex: 0,
+		lastSnapshotTerm:  0,
+		snapshotThreshold: 50000,
+		votedFor:          -1,
+		log:               []LogEntry{},
+		commitedLength:    0,
+		currentRole:       Follower,
+		currentLeaderId:   -1,
+		votesReceived:     mapset.NewSet[int](),
+		sentLengths:       make([]int, totalNodes),
+		ackedLengths:      make([]int, totalNodes),
+		application:       app,
 	}
 	r.logSaver = NewRaftDataSaver(r, cfg)
 	r.raftElector = NewRaftElector(r)
@@ -127,6 +157,12 @@ func createClusterMocks(t *testing.T, size int) ([]*Raft, []*mockPeerClient) {
 				Success:     false,
 			}, nil).
 			Maybe()
+		mocks[i].
+			On("InstallSnapshot", mock.Anything, mock.Anything).
+			Return(&raftpb.InstallSnapshotResponse{
+				Term: int32(nodes[i].currentTerm),
+			}, nil).
+			Maybe()
 	}
 	peers := make([]PeerClient, size)
 	for i, m := range mocks {
@@ -149,6 +185,9 @@ func (p *inMemPeer) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs)
 func (p *inMemPeer) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) {
 	return p.r.LogRequest(ctx, in)
 }
+func (p *inMemPeer) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
+	return p.r.InstallSnapshot(ctx, in)
+}
 func (p *inMemPeer) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error) {
 	return p.r.Heartbeat(ctx, in)
 }
@@ -170,18 +209,21 @@ func createCluster(t testing.TB, n int) []*Raft {
 			raftAddrs:      make([]string, n),
 		}
 		r := &Raft{
-			id:              id,
-			totalNodes:      n,
-			currentTerm:     0,
-			votedFor:        -1,
-			log:             []LogEntry{},
-			commitedLength:  0,
-			currentRole:     Follower,
-			currentLeaderId: -1,
-			votesReceived:   mapset.NewSet[int](),
-			sentLengths:     make([]int, n),
-			ackedLengths:    make([]int, n),
-			application:     apps[id],
+			id:                id,
+			totalNodes:        n,
+			currentTerm:       0,
+			votedFor:          -1,
+			log:               []LogEntry{},
+			commitedLength:    0,
+			lastSnapshotIndex: 0,
+			lastSnapshotTerm:  0,
+			snapshotThreshold: 50000,
+			currentRole:       Follower,
+			currentLeaderId:   -1,
+			votesReceived:     mapset.NewSet[int](),
+			sentLengths:       make([]int, n),
+			ackedLengths:      make([]int, n),
+			application:       apps[id],
 		}
 		r.logSaver = NewRaftDataSaver(r, cfg)
 		r.raftElector = NewRaftElector(r)

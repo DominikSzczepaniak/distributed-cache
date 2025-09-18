@@ -28,6 +28,10 @@ type Raft struct {
 	votedFor       int
 	log            []LogEntry
 	commitedLength int
+	//snapshots
+	lastSnapshotIndex int
+	lastSnapshotTerm  int
+	snapshotThreshold int
 
 	// Volatile state on all servers
 	currentRole     Role
@@ -59,11 +63,14 @@ func NewRaft(application Application, cfg *Config) *Raft {
 		log:            []LogEntry{},
 		commitedLength: 0,
 
-		currentRole:     "follower",
-		currentLeaderId: -1, //unknown
-		votesReceived:   mapset.NewSet[int](),
-		sentLengths:     make([]int, cfg.totalNodes),
-		ackedLengths:    make([]int, cfg.totalNodes),
+		currentRole:       "follower",
+		currentLeaderId:   -1, //unknown
+		votesReceived:     mapset.NewSet[int](),
+		sentLengths:       make([]int, cfg.totalNodes),
+		ackedLengths:      make([]int, cfg.totalNodes),
+		lastSnapshotIndex: 0,
+		lastSnapshotTerm:  0,
+		snapshotThreshold: 10000,
 
 		application: application,
 	}
@@ -72,13 +79,21 @@ func NewRaft(application Application, cfg *Config) *Raft {
 	r.logReplicator = NewRaftLogReplicator(r)
 	r.heartbeat = newHeartbeat(r)
 
-	term, votedFor, commited, savedLog, err := r.logSaver.LoadValues()
+	term, votedFor, commited, savedLog, snapshot, err := r.logSaver.LoadValues()
 	if err == nil {
 		fmt.Printf("Loaded values from file: %d %d %d, log length: %d\n", term, votedFor, commited, len(savedLog))
 		r.currentTerm = term
 		r.votedFor = votedFor
 		r.commitedLength = commited
 		r.log = savedLog
+		if snapshot != nil {
+			r.lastSnapshotIndex = snapshot.LastIncludedIndex
+			r.lastSnapshotTerm = snapshot.LastIncludedTerm
+			if err := r.application.RestoreFromSnapshot(snapshot.Data); err != nil {
+				panic(fmt.Sprintf("failed to restore snapshot on startup: %v", err))
+			}
+			r.commitedLength = r.lastSnapshotIndex
+		}
 	}
 
 	r.initGRPC(cfg)
@@ -280,4 +295,62 @@ func (r *Raft) commitLogEntries() {
 		}
 		r.mu.Lock()
 	}
+	if r.currentRole == Leader && r.getLastLogIndex()-r.lastSnapshotIndex > r.snapshotThreshold {
+		r.takeSnapshot()
+	}
+}
+
+func (r *Raft) getLogIndex(i int) int {
+	return r.lastSnapshotIndex + i + 1
+}
+
+func (r *Raft) getTermForIndex(logIndex int) int {
+	if logIndex < r.lastSnapshotIndex {
+		// This should not happen if logic is correct
+		return 0
+	}
+	if logIndex == r.lastSnapshotIndex {
+		return r.lastSnapshotTerm
+	}
+	return r.log[logIndex-r.lastSnapshotIndex-1].Term
+}
+
+func (r *Raft) getLastLogIndex() int {
+	return r.lastSnapshotIndex + len(r.log)
+}
+
+func (r *Raft) takeSnapshot() {
+	snapshotData, err := r.application.GetSnapshot()
+	if err != nil {
+		fmt.Printf("Failed to get snapshot from application: %v\n", err)
+		return
+	}
+
+	lastIndex := r.commitedLength
+	lastTerm := r.getTermForIndex(lastIndex)
+
+	snapshot := &Snapshot{
+		LastIncludedIndex: lastIndex,
+		LastIncludedTerm:  lastTerm,
+		Data:              snapshotData,
+	}
+
+	if err := r.logSaver.SaveSnapshot(snapshot); err != nil {
+		fmt.Printf("Failed to save snapshot: %v\n", err)
+		return
+	}
+
+	// Compact the log
+	newLog := make([]LogEntry, 0)
+	for i := range r.log {
+		if r.getLogIndex(i) > lastIndex {
+			newLog = append(newLog, r.log[i])
+		}
+	}
+	r.log = newLog
+	r.lastSnapshotIndex = lastIndex
+	r.lastSnapshotTerm = lastTerm
+
+	// Persist the compacted log and updated metadata
+	go r.logSaver.SaveValues()
 }

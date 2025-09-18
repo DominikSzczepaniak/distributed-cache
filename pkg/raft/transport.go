@@ -12,6 +12,7 @@ type PeerClient interface {
 	Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, error)
 	LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error)
 	VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*raftpb.VoteResponse, error)
+	InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error)
 	Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error)
 }
 
@@ -31,6 +32,9 @@ func (g *GRPCPeerClient) LogRequest(ctx context.Context, in *raftpb.LogRequestAr
 }
 func (g *GRPCPeerClient) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*raftpb.VoteResponse, error) {
 	return g.cli.VoteRequest(ctx, in)
+}
+func (g *GRPCPeerClient) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
+	return g.cli.InstallSnapshot(ctx, in)
 }
 func (g *GRPCPeerClient) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error) {
 	return g.cli.Heartbeat(ctx, in)
