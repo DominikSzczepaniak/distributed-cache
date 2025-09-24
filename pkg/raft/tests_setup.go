@@ -1,7 +1,9 @@
 package raft
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -54,6 +56,55 @@ func (a *testApp) getData() map[int]int {
 	return m
 }
 
+func (a *testApp) GetSnapshot() ([]byte, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var buf bytes.Buffer
+	byteOrder := binary.LittleEndian
+
+	mapLen := int32(len(a.data))
+	if err := binary.Write(&buf, byteOrder, mapLen); err != nil {
+		return nil, err
+	}
+
+	for k, v := range a.data {
+		if err := binary.Write(&buf, byteOrder, int64(k)); err != nil {
+			return nil, err
+		}
+		if err := binary.Write(&buf, byteOrder, int64(v)); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+func (a *testApp) RestoreFromSnapshot(data []byte) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	reader := bytes.NewReader(data)
+	byteOrder := binary.LittleEndian
+
+	var mapLen int32
+	if err := binary.Read(reader, byteOrder, mapLen); err != nil {
+		return err
+	}
+	newMap := make(map[int]int)
+
+	for i := 0; i < int(mapLen); i++ {
+		var k64, v64 int64
+		if err := binary.Read(reader, byteOrder, k64); err != nil {
+			return err
+		}
+		if err := binary.Read(reader, byteOrder, v64); err != nil {
+			return err
+		}
+		newMap[int(k64)] = int(v64)
+	}
+	a.data = newMap
+	return nil
+}
+
 func intPtr(i int) *int { return &i }
 
 type mockPeerClient struct{ mock.Mock }
@@ -73,6 +124,10 @@ func (m *mockPeerClient) LogRequest(ctx context.Context, in *raftpb.LogRequestAr
 func (m *mockPeerClient) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error) {
 	args := m.Called(ctx, in)
 	return args.Get(0).(*emptypb.Empty), args.Error(1)
+}
+func (m *mockPeerClient) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
+	args := m.Called(ctx, in)
+	return args.Get(0).(*raftpb.InstallSnapshotResponse), args.Error(1)
 }
 
 func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
@@ -151,6 +206,9 @@ func (p *inMemPeer) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (
 }
 func (p *inMemPeer) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error) {
 	return p.r.Heartbeat(ctx, in)
+}
+func (p *inMemPeer) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
+	return p.r.InstallSnapshot(ctx, in)
 }
 
 func createCluster(t testing.TB, n int) []*Raft {

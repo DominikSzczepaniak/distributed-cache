@@ -46,6 +46,7 @@ type Raft struct {
 	logSaver      *DataSaver     //takes care of saving data to persistent storage
 	heartbeat     *Heartbeat
 	replicators   []*Replicator
+	snapshotter   *Snapshot
 
 	raftpb.UnimplementedRaftServer
 }

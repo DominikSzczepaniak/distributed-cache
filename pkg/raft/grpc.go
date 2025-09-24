@@ -265,3 +265,14 @@ func (r *Raft) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty
 	r.heartbeat.receiveHeartbeat()
 	return &emptypb.Empty{}, nil
 }
+
+func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
+	r.mu.RLock()
+	if int(in.LeaderTerm) < r.currentTerm {
+		r.mu.RUnlock()
+		return &raftpb.InstallSnapshotResponse{Term: int32(r.currentTerm)}, nil
+	}
+	r.mu.RUnlock()
+	//TODO
+	return &raftpb.InstallSnapshotResponse{Term: 0}, nil
+}
