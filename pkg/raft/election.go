@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	//"log/slog"
 	"math/rand"
 	"time"
 
@@ -76,7 +75,6 @@ func (re *Elector) electionTimerLoop() {
 func (re *Elector) ResetTimer() {
 	select {
 	case re.resetTimerCh <- struct{}{}:
-		//slog.Info(fmt.Sprintf("Restarted timer for %d", re.parent.id))
 	default:
 	}
 }
@@ -92,12 +90,9 @@ func (r *Raft) startElection() {
 	r.votesReceived = mapset.NewSet[int]()
 	r.votesReceived.Add(r.id)
 
-	logTerm := 0
-	if len(r.log) > 0 {
-		logTerm = r.log[len(r.log)-1].Term
-	}
+	logTerm := r.getLastLogTerm()
 
-	voteData := VoteRequestData{r.id, r.currentTerm, len(r.log), logTerm}
+	voteData := VoteRequestData{r.id, r.currentTerm, len(r.log) + r.snapshotter.lastIndex, logTerm}
 	totalNodes := r.totalNodes
 
 	r.mu.Unlock()
@@ -124,11 +119,9 @@ func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
 			CandidateLogTerm:   int32(data.candidateLogTerm),
 		})
 		if err != nil {
-			//slog.Error(fmt.Sprintf("Vote request failed %s", err))
 			return
 		}
 
-		//slog.Info(fmt.Sprintf("Got vote response on node %d, granted %t\n", nodeId, resp.Granted))
 		r.receiveVote(VoteResponse{int(resp.NodeId), int(resp.CurrentTerm), resp.Granted})
 	}()
 }

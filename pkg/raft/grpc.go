@@ -3,11 +3,11 @@ package raft
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	//"log/slog"
 	"net"
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
@@ -58,10 +58,7 @@ func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, 
 		Value:   val,
 	}
 
-	r.mu.RLock()
-	isLeader := r.currentRole == Leader
-	leaderID := r.currentLeaderId
-	r.mu.RUnlock()
+	isLeader, leaderID := r.getLeaderData()
 
 	if !isLeader {
 		if leaderID < 0 {
@@ -71,7 +68,6 @@ func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, 
 		return peer.Forward(ctx, msg)
 	}
 
-	//slog.Info(fmt.Sprintf("Forwarding message from %d to %d, msgType: %s, key: %d, value :%d", r.id, leaderID, internal.msgType, internal.key, internal.value))
 	r.Broadcast(internal)
 	return &raftpb.Null{}, nil
 }
@@ -104,48 +100,40 @@ func convertLogRequestArgs(args *raftpb.LogRequestArgs) (int, int, int, int, int
 
 func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) {
 	leaderId, term, prefixLen, prefixTerm, commitLength, suffix := convertLogRequestArgs(in)
+	//we have to decrement prefixLen by amount of indexes we have in a snapshot:
+	prefixLen -= r.snapshotter.lastIndex
 
-	r.mu.Lock() //TODO: fix, kept too long. Release the lock for slow operations - network and IO
-	//slog.Info(fmt.Sprintf("Received LogRequest on node %d from node %d, node on role %s", r.id, int(in.LeaderId), r.currentRole))
+	r.mu.Lock()
 	if r.currentTerm < term {
-		//slog.Warn(fmt.Sprintf(
-		//	"Node %d: currentTerm (%d) > received term (%d), updating term and resetting votedFor",
-		//	r.id, r.currentTerm, term,
-		//))
 		r.currentTerm = term
 		r.votedFor = -1
 
 		go r.raftElector.ResetTimer()
-		// go r.logSaver.SaveValues()
 	}
 	if r.currentTerm == term {
-		//if r.currentRole != Follower || r.currentLeaderId != leaderId {
-		//	slog.Info(fmt.Sprintf(
-		//		"Node %d: updating role to follower and setting leaderId to %d (was %s, leaderId %d)",
-		//		r.id, leaderId, r.currentRole, r.currentLeaderId,
-		//	))
-		//}
 		r.currentRole = Follower
 		r.currentLeaderId = leaderId
 	}
-	logOk := (len(r.log) >= prefixLen) && (prefixLen == 0 || r.log[prefixLen-1].Term == prefixTerm)
-	//slog.Info(fmt.Sprintf(
-	//	"Node %d: logOk=%v (logLen=%d, prefixLen=%d, prefixTerm=%d, logTermAtPrefix=%v)",
-	//	r.id, logOk, len(r.log), prefixLen, prefixTerm,
-	//	func() interface{} {
-	//		if prefixLen > 0 && len(r.log) >= prefixLen {
-	//			return r.log[prefixLen-1].term
-	//		}
-	//		return nil
-	//	}(),
-	//))
+	logLength := len(r.log) + r.snapshotter.lastIndex
+	var logOk bool
+	//TODO might be wrong
+	if logLength < prefixLen {
+		logOk = false
+	} else if prefixLen == r.snapshotter.lastIndex {
+		logOk = r.snapshotter.lastTerm == prefixTerm
+	} else {
+		sliceIndex := prefixLen - r.snapshotter.lastIndex - 1
+		if sliceIndex < 0 {
+			logOk = r.snapshotter.lastTerm == prefixTerm
+		} else {
+			logOk = r.log[sliceIndex].Term == prefixTerm
+		}
+	}
+
+	//logOk := (len(r.log) >= prefixLen) && (prefixLen == 0 || r.log[prefixLen-1].Term == prefixTerm) //old version
 
 	if r.currentTerm == term && logOk {
 		r.raftElector.ResetTimer()
-		//slog.Info(fmt.Sprintf(
-		//	"Node %d: appending entries (prefixLen=%d, commitLength=%d, suffixLen=%d)",
-		//	r.id, prefixLen, commitLength, len(suffix),
-		//))
 		r.mu.Unlock()
 
 		r.appendEntries(prefixLen, commitLength, suffix)
@@ -153,10 +141,6 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		ack := prefixLen + len(suffix)
 		go r.logSaver.SaveValues()
 
-		//slog.Info(fmt.Sprintf(
-		//	"Node %d: LogRequest success, ack=%d, term=%d",
-		//	r.id, ack, r.currentTerm,
-		//))
 		return &raftpb.LogResponse{
 			NodeId:      int32(r.id),
 			CurrentTerm: int32(r.currentTerm),
@@ -164,11 +148,6 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 			Success:     true,
 		}, nil
 	} else {
-
-		//slog.Warn(fmt.Sprintf(
-		//	"Node %d: LogRequest failed (currentTerm=%d, receivedTerm=%d, logOk=%v)",
-		//	r.id, currentTerm, term, logOk,
-		//))
 		currentTerm := r.currentTerm
 		r.mu.Unlock()
 		r.logSaver.SaveValues()
@@ -188,46 +167,18 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 	candidateLogTerm := int(in.CandidateLogTerm)
 
 	r.mu.Lock()
-	// defer r.mu.Unlock()
 	toPersist := false
-	//slog.Info(
-	//	"Received request for vote\n",
-	//	slog.Int("nodeOn", r.id),
-	//	slog.Int("nodeFrom", int(in.CandidateId)),
-	//	slog.Int("nodeOnTerm", r.currentTerm),
-	//	slog.Int("nodeFromTerm", int(in.CandidateTerm)),
-	//	slog.String("nodeOnRole", string(r.currentRole)),
-	//)
 
 	if candidateTerm > r.currentTerm {
-		//slog.Info(
-		//	"Updating current term and stepping down\n",
-		//	slog.Int("nodeOn", r.id),
-		//	slog.Int("nodeFrom", candidateId),
-		//	slog.Int("nodeOnTerm", r.currentTerm),
-		//	slog.Int("nodeFromTerm", candidateTerm),
-		//	slog.String("oldRole", string(r.currentRole)),
-		//)
 		r.currentTerm = candidateTerm
 		r.currentRole = Follower
 		r.votedFor = -1
 
 		go r.raftElector.ResetTimer()
 		toPersist = true
-		// go r.logSaver.SaveValues()
 	}
-	lastTerm := 0
-	if len(r.log) > 0 {
-		lastTerm = r.log[len(r.log)-1].Term
-	}
-	logOk := (candidateLogTerm > lastTerm) || (candidateLogTerm == lastTerm && candidateLogLength >= len(r.log))
-	//slog.Info(
-	//	"LogOk\n",
-	//	slog.Int("nodeOn", r.id),
-	//	slog.Int("nodeFrom", int(in.CandidateId)),
-	//	slog.Bool("LogOK Value", logOk),
-	//	slog.Bool("Granting vote", candidateTerm == r.currentTerm && logOk && (r.votedFor == -1 || r.votedFor == candidateId)),
-	//)
+	lastTerm := r.getLastLogTerm()
+	logOk := (candidateLogTerm > lastTerm) || (candidateLogTerm == lastTerm && candidateLogLength >= len(r.log)+r.snapshotter.lastIndex)
 	if candidateTerm == r.currentTerm && logOk && (r.votedFor == -1 || r.votedFor == candidateId) {
 		r.votedFor = candidateId
 		r.currentRole = Follower
@@ -235,20 +186,12 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 		go r.raftElector.ResetTimer()
 		r.mu.Unlock()
 		go r.logSaver.SaveValues()
-		//slog.Info(
-		//	"VoteRequest successful\n",
-		//	slog.Int("nodeOn", r.id),
-		//	slog.Int("nodeFrom", int(in.CandidateId)))
 		return &raftpb.VoteResponse{
 			NodeId:      int32(r.id),
 			CurrentTerm: int32(r.currentTerm),
 			Granted:     true,
 		}, nil
 	} else {
-		//slog.Info(
-		//	"VoteRequest unsuccessful\n",
-		//	slog.Int("nodeOn", r.id),
-		//	slog.Int("nodeFrom", int(in.CandidateId)))
 		r.mu.Unlock()
 		if toPersist {
 			go r.logSaver.SaveValues()
@@ -268,11 +211,48 @@ func (r *Raft) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty
 
 func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
 	r.mu.RLock()
+	defaultResponse := &raftpb.InstallSnapshotResponse{Term: int32(r.currentTerm)}
 	if int(in.LeaderTerm) < r.currentTerm {
 		r.mu.RUnlock()
-		return &raftpb.InstallSnapshotResponse{Term: int32(r.currentTerm)}, nil
+		return defaultResponse, nil
 	}
 	r.mu.RUnlock()
-	//TODO
-	return &raftpb.InstallSnapshotResponse{Term: 0}, nil
+	r.mu.Lock()
+	r.currentLeaderId = int(in.LeaderId) //TODO check if this is correct
+	r.mu.Unlock()
+
+	_, err := r.logSaver.WriteSnapshotData(in.Data, int(in.Offset))
+	if err != nil {
+		return defaultResponse, nil
+	}
+
+	if in.Done {
+		r.mu.Lock()
+
+		if r.commitedLength >= int(in.LastIncludedIndex) {
+			return defaultResponse, nil
+		}
+
+		if len(r.log) > 0 {
+			lastLogIndex := r.commitedLength
+			if lastLogIndex > int(in.LastIncludedIndex) && r.log[lastLogIndex-1].Term == int(in.LastIncludedTerm) {
+				r.log = r.log[int(in.LastIncludedIndex):]
+			} else {
+				r.log = []LogEntry{}
+			}
+		}
+		snapshot, err := os.ReadFile(r.logSaver.snapshotFilename)
+		if err != nil {
+			return defaultResponse, nil
+		}
+		r.application.RestoreFromSnapshot(snapshot)
+		r.commitedLength = int(in.LastIncludedIndex)
+		go r.logSaver.SaveValues()
+		r.mu.Unlock()
+	}
+
+	r.mu.RLock()
+	term := r.currentTerm
+	r.mu.RUnlock()
+	return &raftpb.InstallSnapshotResponse{Term: int32(term)}, nil
 }

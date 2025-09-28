@@ -47,9 +47,9 @@ func TestDataSaver_SaveLoad(t *testing.T) {
 
 			node := createTestRaft(t, 0, 3)
 			cfg := &Config{
-				valuesFilename: fn,
-				totalNodes:     3,
-				raftId:         0,
+				logsFilename: fn, metadataFilename: fn + ".meta", snapshotFilename: fn + ".snap",
+				totalNodes: 3,
+				raftId:     0,
 			}
 			s := NewRaftDataSaver(node, cfg)
 
@@ -93,10 +93,11 @@ func TestDataSaver_SaveLoad(t *testing.T) {
 func TestDataSaver_InvalidPath(t *testing.T) {
 	t.Parallel()
 	node := createTestRaft(t, 0, 3)
+	fn := "/invalid/path/nope.data"
 	cfg := &Config{
-		valuesFilename: "/invalid/path/nope.data",
-		totalNodes:     3,
-		raftId:         0,
+		logsFilename: fn, metadataFilename: fn + ".meta", snapshotFilename: fn + ".snap",
+		totalNodes: 3,
+		raftId:     0,
 	}
 	s := NewRaftDataSaver(node, cfg)
 
@@ -123,9 +124,9 @@ func TestDataSaver_CorruptedFile(t *testing.T) {
 
 	node := createTestRaft(t, 0, 3)
 	cfg := &Config{
-		valuesFilename: fn,
-		totalNodes:     3,
-		raftId:         0,
+		logsFilename: fn, metadataFilename: fn + ".meta", snapshotFilename: fn + ".snap",
+		totalNodes: 3,
+		raftId:     0,
 	}
 	s := NewRaftDataSaver(node, cfg)
 

@@ -134,11 +134,15 @@ func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
 	t.Helper()
 	app := newTestApp()
 	tmpDir := t.TempDir()
+	fn := filepath.Join(tmpDir, fmt.Sprintf("node-%d", id))
 	cfg := &Config{
-		valuesFilename: filepath.Join(tmpDir, fmt.Sprintf("node-%d.data", id)),
-		totalNodes:     totalNodes,
-		raftId:         id,
-		raftAddrs:      make([]string, totalNodes),
+		logsFilename:      fn + ".logs",
+		metadataFilename:  fn + ".meta",
+		snapshotFilename:  fn + ".snap",
+		totalNodes:        totalNodes,
+		raftId:            id,
+		raftAddrs:         make([]string, totalNodes),
+		snapshotThreshold: 1e7,
 	}
 	r := &Raft{
 		id:              id,
@@ -159,6 +163,7 @@ func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
 	close(r.raftElector.cancelTimerCh)
 	r.logReplicator = NewRaftLogReplicator(r)
 	close(r.logReplicator.cancelLogReplicateCh)
+	r.snapshotter = newSnapshotter(cfg)
 
 	initial := make([]PeerClient, totalNodes)
 	r.setPeers(initial)
@@ -220,12 +225,15 @@ func createCluster(t testing.TB, n int) []*Raft {
 	nodes := make([]*Raft, n)
 	for id := 0; id < n; id++ {
 		tmp := t.TempDir()
-		fn := filepath.Join(tmp, fmt.Sprintf("node-%d.data", id))
+		fn := filepath.Join(tmp, fmt.Sprintf("node-%d", id))
 		cfg := &Config{
-			valuesFilename: fn,
-			totalNodes:     n,
-			raftId:         id,
-			raftAddrs:      make([]string, n),
+			logsFilename:      fn + ".logs",
+			metadataFilename:  fn + ".meta",
+			snapshotFilename:  fn + ".snap",
+			totalNodes:        n,
+			raftId:            id,
+			raftAddrs:         make([]string, n),
+			snapshotThreshold: 1e7,
 		}
 		r := &Raft{
 			id:              id,
@@ -244,6 +252,7 @@ func createCluster(t testing.TB, n int) []*Raft {
 		r.logSaver = NewRaftDataSaver(r, cfg)
 		r.raftElector = NewRaftElector(r)
 		r.logReplicator = NewRaftLogReplicator(r)
+		r.snapshotter = newSnapshotter(cfg)
 		nodes[id] = r
 	}
 	peers := make([]PeerClient, n)

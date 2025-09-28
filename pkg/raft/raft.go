@@ -1,12 +1,9 @@
-// TODO
-// 2. Change message type, we dont really care about the actual message, we just care about the term from the message, so we can accept whatever
 package raft
 
 import (
 	"context"
 	"fmt"
 
-	//"log/slog"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -41,9 +38,9 @@ type Raft struct {
 	peers atomic.Value
 	conns []*grpc.ClientConn
 
-	raftElector   *Elector       //takes care of elections
-	logReplicator *LogReplicator //sends logs to other servers
-	logSaver      *DataSaver     //takes care of saving data to persistent storage
+	raftElector   *Elector
+	logReplicator *LogReplicator
+	logSaver      *DataSaver
 	heartbeat     *Heartbeat
 	replicators   []*Replicator
 	snapshotter   *Snapshot
@@ -72,6 +69,7 @@ func NewRaft(application Application, cfg *Config) *Raft {
 	r.raftElector = NewRaftElector(r)
 	r.logReplicator = NewRaftLogReplicator(r)
 	r.heartbeat = newHeartbeat(r)
+	r.snapshotter = newSnapshotter(cfg)
 
 	term, votedFor, commited, savedLog, err := r.logSaver.LoadValues()
 	if err == nil {
@@ -89,18 +87,7 @@ func NewRaft(application Application, cfg *Config) *Raft {
 func (r *Raft) receiveVote(vote VoteResponse) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	//slog.Info(fmt.Sprintf("Received vote response from %d on node %d, granted: %t, node on term: %d, node from term: %d, node on role: %s",
-	//	vote.nodeId,
-	//	r.id,
-	//	vote.granted,
-	//	r.currentTerm,
-	//	vote.currentTerm,
-	//	r.currentRole))
 	if r.currentTerm < vote.currentTerm {
-		//slog.Info("Stepping down due to higher term in vote response",
-		//	slog.Int("nodeId", r.id),
-		//	slog.Int("oldTerm", r.currentTerm),
-		//	slog.Int("newTerm", vote.currentTerm))
 		r.currentTerm = vote.currentTerm
 		r.currentRole = Follower
 		go r.raftElector.ResetTimer()
@@ -108,25 +95,16 @@ func (r *Raft) receiveVote(vote VoteResponse) {
 	}
 	if vote.granted && r.currentTerm == vote.currentTerm && r.currentRole == Candidate {
 		r.votesReceived.Add(vote.nodeId)
-		//slog.Info("Vote counted",
-		//	slog.Int("for node", r.id),
-		//	slog.Int("current count", r.votesReceived.Cardinality()),
-		//	slog.Int("total nodes", r.totalNodes))
 
 		majority := int(math.Ceil(float64(r.totalNodes+1) / 2))
 
 		if r.votesReceived.Cardinality() >= majority {
-			//slog.Info("Node became leader",
-			//	slog.Int("nodeId", r.id),
-			//	slog.Int("term", r.currentTerm))
-
 			r.becomeLeader()
 		}
 	}
 }
 
 func (r *Raft) forwardToLeader(message Message, leader PeerClient) {
-	//slog.Info(fmt.Sprintf("Forwarding message {msgType %s, key %d, value %d} to leader", message.msgType, message.key, message.value))
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
@@ -150,27 +128,22 @@ func (r *Raft) forwardToLeader(message Message, leader PeerClient) {
 }
 
 func (r *Raft) Broadcast(message Message) {
-	r.mu.RLock()
-	isLeader := r.currentRole == Leader
-	leaderID := r.currentLeaderId
-	r.mu.RUnlock()
+	isLeader, leaderID := r.getLeaderData()
 
 	if !isLeader {
 		peer := r.getPeer(leaderID)
 		if peer == nil {
-			//slog.Warn("leader unknown – dropping client message")
 			return
 		}
 		r.forwardToLeader(message, peer)
 		return
 	}
 	r.mu.Lock()
-	//slog.Info(fmt.Sprintf("Appending message {msgType %s, key %d, value %d} to node %d logs", message.msgType, message.key, *message.value, r.id))
 	r.log = append(r.log, LogEntry{
 		Message: message,
 		Term:    r.currentTerm,
 	})
-	r.ackedLengths[r.id] = len(r.log)
+	r.ackedLengths[r.id] = len(r.log) + r.snapshotter.lastIndex
 
 	totalNodes := r.totalNodes
 
@@ -197,28 +170,42 @@ func (r *Raft) deliverToApplication(message Message) (success bool, value int) {
 func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	//normal case no snapshot
+	//loglength 105
+	//prefixlen 102
+	//suffix 3
+	//index 104
+	//obcinamy do :102
 
-	//slog.Info(fmt.Sprintf("Appending entries on node %d, current role %s", r.id, r.currentRole)) //TODO spamming too much and possibly slowing entire thing, consider batching
-	//for i, e := range suffix {
-	//	slog.Info(fmt.Sprintf("Entry %d: term %d, msgType %s, key %d, value %d", i, e.term, e.message.msgType, e.message.key, e.message.value))
-	//}
-	if len(suffix) > 0 && len(r.log) > prefixLen {
-		//slog.Info(fmt.Sprintf("Went into 1st loop"))
-		index := int(math.Min(float64(len(r.log)), float64(prefixLen+len(suffix))) - 1)
-		if r.log[index].Term != suffix[index-prefixLen].Term {
-			r.log = r.log[:prefixLen]
+	//snapshot case
+	//assume prefixLen = 100
+	//suffix length is 3
+	//snapshot length is 90
+	//log is length 15
+
+	//then index is min(105, 102) = 102
+	//relative index is 102 - 90 - 1 = 11
+	//log[11].Term != suffix[102-100]
+	//we cut to :10 so real :100 which is prefixLen which is good
+	if len(suffix) > 0 && len(r.log)+r.snapshotter.lastIndex > prefixLen {
+		index := int(math.Min(float64(len(r.log)+r.snapshotter.lastIndex), float64(prefixLen+len(suffix))) - 1)
+		relativeIndex := index - r.snapshotter.lastIndex - 1
+		if r.log[relativeIndex].Term != suffix[index-prefixLen].Term { //here we cutoff
+			relativePrefIndex := prefixLen - r.snapshotter.lastIndex
+			r.log = r.log[:relativePrefIndex]
 		}
 	}
-	if prefixLen+len(suffix) > len(r.log) {
-		//slog.Info(fmt.Sprintf("Went into 2nd loop"))
-		for i := len(r.log) - prefixLen; i < len(suffix); i++ {
-			r.log = append(r.log, suffix[i])
+	if prefixLen+len(suffix) > len(r.log)+r.snapshotter.lastIndex {
+		startAppendingIndex := (len(r.log) + r.snapshotter.lastIndex) - prefixLen
+		if startAppendingIndex < len(suffix) {
+			r.log = append(r.log, suffix[startAppendingIndex:]...)
 		}
 	}
 	if leaderCommit > r.commitedLength {
+		//TODO check correctness
 		messagesToApply := make([]Message, 0, leaderCommit-r.commitedLength)
 		for i := r.commitedLength; i < leaderCommit; i++ {
-			messagesToApply = append(messagesToApply, r.log[i].Message)
+			messagesToApply = append(messagesToApply, r.log[i-r.snapshotter.lastIndex].Message)
 		}
 		r.commitedLength = leaderCommit
 		r.mu.Unlock()
@@ -228,6 +215,13 @@ func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 		}
 
 		r.mu.Lock()
+	}
+	err := r.decideRunSnapshot()
+	if err != nil {
+		err := r.decideRunSnapshot()
+		if err != nil {
+			return
+		}
 	}
 }
 
@@ -267,7 +261,7 @@ func (r *Raft) commitLogEntries() {
 			}
 		}
 		if acks >= majority {
-			messagesToApply = append(messagesToApply, r.log[r.commitedLength].Message)
+			messagesToApply = append(messagesToApply, r.log[r.commitedLength-r.snapshotter.lastIndex].Message)
 			r.commitedLength++
 		} else {
 			break

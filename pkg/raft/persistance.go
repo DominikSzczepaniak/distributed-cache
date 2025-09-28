@@ -33,9 +33,9 @@ type DataSaverFunctions interface {
 func NewRaftDataSaver(r *Raft, cfg *Config) *DataSaver {
 	return &DataSaver{
 		parent:             r,
-		logsFilename:       cfg.valuesFilename,
-		metadataFilename:   cfg.valuesFilename + ".meta",
-		snapshotFilename:   cfg.valuesFilename + ".snapshot",
+		logsFilename:       cfg.logsFilename,
+		metadataFilename:   cfg.metadataFilename,
+		snapshotFilename:   cfg.snapshotFilename,
 		previousSavedIndex: 0,
 	}
 }
@@ -149,7 +149,6 @@ func (rds *DataSaver) saveValuesManager(
 		fmt.Println("Failed to save logs, error: ", err)
 		return false, err
 	}
-	// rds.previousSavedIndex += savedLines
 
 	return true, nil
 }
@@ -173,10 +172,6 @@ func (rds *DataSaver) SaveValues() (bool, error) {
 	logCopy := make([]LogEntry, len(src))
 	copy(logCopy, src)
 	rds.parent.mu.RUnlock()
-
-	// if len(logCopy) == 0 && currentTerm == 0{
-	// 	return false, nil
-	// }
 
 	ok, err := rds.saveValuesManager(
 		currentTerm,

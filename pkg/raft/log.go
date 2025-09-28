@@ -2,8 +2,6 @@ package raft
 
 import (
 	"context"
-	//"fmt"
-	//"log/slog"
 	"math/rand"
 	"time"
 
@@ -80,12 +78,12 @@ func (rl *LogReplicator) logReplicateLoop() {
 }
 
 func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
-	//slog.Info(fmt.Sprintf("Preparing log request for leader %d", r.id))
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	prefixLen := r.sentLengths[followerId]
-	suffix := r.log[prefixLen:]
+	suffixStartIndex := prefixLen - r.snapshotter.lastIndex
+	suffix := r.log[suffixStartIndex:]
 	prefixTerm := 0
 	if prefixLen > 0 {
 		prefixTerm = r.log[prefixLen-1].Term
@@ -106,7 +104,6 @@ func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 			},
 		}
 	}
-	//slog.Info(fmt.Sprintf("Preparing log request for follower %d finished", followerId))
 	return &raftpb.LogRequestArgs{
 		LeaderId:     int32(r.id),
 		Term:         int32(r.currentTerm),
@@ -118,18 +115,11 @@ func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 }
 
 func (r *Raft) replicateLog(id, followerId int) {
-	//r.mu.RLock()
-	//currentRole := r.currentRole
-	//r.mu.RUnlock()
-
-	//slog.Info(fmt.Sprintf("Replicating log from %d to %d, node role: %s", id, followerId, currentRole))
 	retryCh := make(chan int)
 	done := make(chan struct{})
 	go r.retryAppendEntries(retryCh, done)
 
-	r.mu.RLock()
-	isLeader := r.currentRole == Leader
-	r.mu.RUnlock()
+	isLeader, _ := r.getLeaderData()
 
 	if isLeader {
 		r.handleReplicateLog(followerId, retryCh, done)
@@ -138,12 +128,9 @@ func (r *Raft) replicateLog(id, followerId int) {
 	for {
 		select {
 		case peerId := <-retryCh:
-			r.mu.RLock()
-			isLeader := r.currentRole == Leader
-			r.mu.RUnlock()
+			isLeader, _ := r.getLeaderData()
 
 			if !isLeader {
-				//slog.Info("lost leadership, stopping replicateLog")
 				close(done)
 				return
 			}
@@ -156,28 +143,19 @@ func (r *Raft) replicateLog(id, followerId int) {
 }
 
 func (r *Raft) handleReplicateLog(followerId int, retryCh chan<- int, done chan struct{}) {
-	r.mu.RLock()
-	isLeader := r.currentRole == Leader
-	r.mu.RUnlock()
+	isLeader, _ := r.getLeaderData()
 
 	if !isLeader {
-		//slog.Info("Node is not a leader, returning")
 		return
 	}
 	args := r.prepareLogRequestArgs(followerId)
-	//slog.Info(fmt.Sprintf("Prepared log for replication from %d to %d", r.id, followerId))
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
-		//slog.Info(fmt.Sprintf("Logs for leader %d", r.id))
-		//for _, log := range r.log {
-		//	slog.Info(fmt.Sprintf("term: %d, msgType: %s, key: %d, value: %d", log.term, log.message.msgType, log.message.key, *log.message.value))
-		//}
 
 		peer := r.getPeer(followerId)
 		resp, err := peer.LogRequest(ctx, args)
 		if err != nil {
-			//slog.Error(err.Error())
 			retryCh <- followerId
 			return
 		}

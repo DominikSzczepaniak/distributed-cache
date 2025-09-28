@@ -49,10 +49,27 @@ func (r *Raft) becomeLeader() {
 		if followerId == r.id {
 			continue
 		}
-		r.sentLengths[followerId] = len(r.log)
+		r.sentLengths[followerId] = len(r.log) + r.snapshotter.lastIndex
 		r.ackedLengths[followerId] = 0
 
 		r.replicators[followerId] = NewReplicator(r, followerId)
 		r.replicators[followerId].start()
 	}
+}
+
+func (r *Raft) getLastLogTerm() int {
+	if len(r.log) > 0 {
+		return r.log[len(r.log)-1].Term
+	} else if len(r.log) == 0 && r.snapshotter.lastIndex > 0 {
+		return r.snapshotter.lastTerm
+	}
+	return 0
+}
+
+func (r *Raft) getLeaderData() (bool, int) {
+	r.mu.RLock()
+	isLeader := r.currentRole == Leader
+	leaderID := r.currentLeaderId
+	r.mu.RUnlock()
+	return isLeader, leaderID
 }

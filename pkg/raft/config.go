@@ -7,16 +7,19 @@ import (
 )
 
 type Config struct {
-	valuesFilename string
-	totalNodes     int
-	raftId         int
-	raftAddrs      []string
+	logsFilename      string
+	metadataFilename  string
+	snapshotFilename  string
+	totalNodes        int
+	raftId            int
+	raftAddrs         []string
+	snapshotThreshold int
 }
 
 func LoadConfig() *Config {
-	valuesFilename, exists := os.LookupEnv("VALUES_FILENAME")
-	if !exists || valuesFilename == "" {
-		panic("Specify the name of VALUES_FILENAME environment variable")
+	filename, exists := os.LookupEnv("FILENAME")
+	if !exists || filename == "" {
+		panic("Specify the name of FILENAME environment variable")
 	}
 
 	totalNodesStr, exists := os.LookupEnv("TOTAL_NODES")
@@ -26,6 +29,15 @@ func LoadConfig() *Config {
 	totalNodes, err := strconv.Atoi(totalNodesStr)
 	if err != nil {
 		panic("TOTAL NODES IS NOT A NUMBER!")
+	}
+
+	snapshotThresholdStr, exists := os.LookupEnv("SNAPSHOT_THRESHOLD")
+	if !exists || snapshotThresholdStr == "" {
+		panic("TOTAL NODES NOT DEFINED!")
+	}
+	snapshotThreshold, err := strconv.Atoi(snapshotThresholdStr)
+	if err != nil {
+		panic("SNAPSHOT THRESHOLD IS NOT A NUMBER!")
 	}
 
 	raftIdStr, exists := os.LookupEnv("RAFT_ID")
@@ -47,9 +59,12 @@ func LoadConfig() *Config {
 	}
 
 	return &Config{
-		valuesFilename: valuesFilename,
-		totalNodes:     totalNodes,
-		raftId:         raftId,
-		raftAddrs:      raftAddrs,
+		logsFilename:      filename + ".logs",
+		metadataFilename:  filename + ".meta",
+		snapshotFilename:  filename + ".snap",
+		totalNodes:        totalNodes,
+		raftId:            raftId,
+		raftAddrs:         raftAddrs,
+		snapshotThreshold: snapshotThreshold,
 	}
 }

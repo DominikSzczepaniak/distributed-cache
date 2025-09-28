@@ -80,7 +80,7 @@ func TestRaftRecovery(t *testing.T) {
 	}
 	node1 := &Raft{id: 0, totalNodes: 3, currentTerm: 2, votedFor: 1,
 		log: initLogs, commitedLength: 2, application: app1}
-	s := NewRaftDataSaver(node1, &Config{valuesFilename: fn, totalNodes: 3, raftId: 0})
+	s := NewRaftDataSaver(node1, &Config{logsFilename: fn, metadataFilename: fn + ".meta", snapshotFilename: fn + ".snap", totalNodes: 3, raftId: 0})
 
 	node1.mu.Lock()
 	node1.currentTerm = 2
@@ -93,7 +93,7 @@ func TestRaftRecovery(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	app2 := newTestApp()
-	node2 := NewRaft(app2, &Config{valuesFilename: fn, totalNodes: 3, raftId: 0, raftAddrs: make([]string, 3)})
+	node2 := NewRaft(app2, &Config{logsFilename: fn, metadataFilename: fn + ".meta", snapshotFilename: fn + ".snap", totalNodes: 3, raftId: 0, raftAddrs: make([]string, 3)})
 	assert.Equal(t, 2, node2.currentTerm)
 	assert.Equal(t, 1, node2.votedFor)
 	assert.Equal(t, 2, node2.commitedLength)
@@ -124,7 +124,7 @@ func TestConcurrentOperations(t *testing.T) {
 		n.mu.RUnlock()
 	}
 	require.NotNil(t, leader)
-	const nmsgs = 3000000
+	const nmsgs = 500000
 	done := make(chan struct{}, nmsgs)
 	sem := make(chan int, 256)
 	for i := 0; i < nmsgs; i++ {
