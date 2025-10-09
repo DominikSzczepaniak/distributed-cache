@@ -3,6 +3,7 @@ package raft
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"math"
 	"sync"
@@ -189,7 +190,8 @@ func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 	//we cut to :10 so real :100 which is prefixLen which is good
 	if len(suffix) > 0 && len(r.log)+r.snapshotter.lastIndex > prefixLen {
 		index := int(math.Min(float64(len(r.log)+r.snapshotter.lastIndex), float64(prefixLen+len(suffix))) - 1)
-		relativeIndex := index - r.snapshotter.lastIndex - 1
+		relativeIndex := index - r.snapshotter.lastIndex //this is wrong- its negative
+		slog.Info(fmt.Sprintf("Relative index is %d, log length is %d", relativeIndex, len(r.log)))
 		if r.log[relativeIndex].Term != suffix[index-prefixLen].Term { //here we cutoff
 			relativePrefIndex := prefixLen - r.snapshotter.lastIndex
 			r.log = r.log[:relativePrefIndex]
@@ -208,20 +210,14 @@ func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 			messagesToApply = append(messagesToApply, r.log[i-r.snapshotter.lastIndex].Message)
 		}
 		r.commitedLength = leaderCommit
-		r.mu.Unlock()
 
 		for _, msg := range messagesToApply {
 			r.deliverToApplication(msg)
 		}
-
-		r.mu.Lock()
 	}
 	err := r.decideRunSnapshot()
 	if err != nil {
-		err := r.decideRunSnapshot()
-		if err != nil {
-			return
-		}
+		return
 	}
 }
 
