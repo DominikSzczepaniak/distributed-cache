@@ -123,10 +123,10 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		logOk = r.snapshotter.lastTerm == prefixTerm
 	} else {
 		sliceIndex := prefixLen - r.snapshotter.lastIndex - 1
-		if sliceIndex < 0 {
-			logOk = r.snapshotter.lastTerm == prefixTerm
-		} else {
+		if sliceIndex >= 0 && sliceIndex < len(r.log) {
 			logOk = r.log[sliceIndex].Term == prefixTerm
+		} else {
+			logOk = false
 		}
 	}
 
@@ -210,49 +210,60 @@ func (r *Raft) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty
 }
 
 func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
-	r.mu.RLock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	defaultResponse := &raftpb.InstallSnapshotResponse{Term: int32(r.currentTerm)}
 	if int(in.LeaderTerm) < r.currentTerm {
-		r.mu.RUnlock()
 		return defaultResponse, nil
 	}
-	r.mu.RUnlock()
-	r.mu.Lock()
+	if int(in.LeaderTerm) > r.currentTerm {
+		r.currentTerm = int(in.LeaderTerm)
+		r.currentRole = Follower
+		r.currentLeaderId = int(in.LeaderId)
+		go r.raftElector.ResetTimer()
+	}
 	r.currentLeaderId = int(in.LeaderId) //TODO check if this is correct
-	r.mu.Unlock()
 
 	_, err := r.logSaver.WriteSnapshotData(in.Data, int(in.Offset))
 	if err != nil {
+		return defaultResponse, err
+	}
+
+	if !in.Done {
 		return defaultResponse, nil
 	}
 
-	if in.Done {
-		r.mu.Lock()
-
-		if r.commitedLength >= int(in.LastIncludedIndex) {
-			return defaultResponse, nil
+	lastIncludedIndex := int(in.LastIncludedIndex)
+	lastIncludedTerm := int(in.LastIncludedTerm)
+	currentLastIndex := r.snapshotter.lastIndex + len(r.log)
+	if currentLastIndex > lastIncludedIndex {
+		relativeIndex := lastIncludedIndex - r.snapshotter.lastIndex
+		if relativeIndex >= 0 && relativeIndex < len(r.log) &&
+			r.log[relativeIndex].Term == lastIncludedTerm {
+			r.log = r.log[relativeIndex+1:]
+		} else {
+			r.log = []LogEntry{}
 		}
-
-		if len(r.log) > 0 {
-			lastLogIndex := r.commitedLength
-			if lastLogIndex > int(in.LastIncludedIndex) && r.log[lastLogIndex-1].Term == int(in.LastIncludedTerm) {
-				r.log = r.log[int(in.LastIncludedIndex):]
-			} else {
-				r.log = []LogEntry{}
-			}
-		}
-		snapshot, err := os.ReadFile(r.logSaver.snapshotFilename)
-		if err != nil {
-			return defaultResponse, nil
-		}
-		r.application.RestoreFromSnapshot(snapshot)
-		r.commitedLength = int(in.LastIncludedIndex)
-		go r.logSaver.SaveValues()
-		r.mu.Unlock()
+	} else {
+		r.log = []LogEntry{}
 	}
 
-	r.mu.RLock()
-	term := r.currentTerm
-	r.mu.RUnlock()
-	return &raftpb.InstallSnapshotResponse{Term: int32(term)}, nil
+	snapshot, err := os.ReadFile(r.logSaver.snapshotFilename)
+	if err != nil {
+		return defaultResponse, err
+	}
+	err = r.application.RestoreFromSnapshot(snapshot)
+	if err != nil {
+		return defaultResponse, err
+	}
+	r.snapshotter.lastIndex = lastIncludedIndex
+	r.snapshotter.lastTerm = lastIncludedTerm
+
+	if r.commitedLength < lastIncludedIndex {
+		r.commitedLength = lastIncludedIndex
+	}
+	go r.raftElector.ResetTimer()
+	go r.logSaver.SaveValues()
+	return defaultResponse, nil
 }

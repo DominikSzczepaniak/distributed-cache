@@ -86,17 +86,17 @@ func (a *testApp) RestoreFromSnapshot(data []byte) error {
 	byteOrder := binary.LittleEndian
 
 	var mapLen int32
-	if err := binary.Read(reader, byteOrder, mapLen); err != nil {
+	if err := binary.Read(reader, byteOrder, &mapLen); err != nil {
 		return err
 	}
 	newMap := make(map[int]int)
 
 	for i := 0; i < int(mapLen); i++ {
 		var k64, v64 int64
-		if err := binary.Read(reader, byteOrder, k64); err != nil {
+		if err := binary.Read(reader, byteOrder, &k64); err != nil {
 			return err
 		}
-		if err := binary.Read(reader, byteOrder, v64); err != nil {
+		if err := binary.Read(reader, byteOrder, &v64); err != nil {
 			return err
 		}
 		newMap[int(k64)] = int(v64)

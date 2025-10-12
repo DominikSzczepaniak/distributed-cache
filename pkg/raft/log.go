@@ -82,13 +82,28 @@ func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 	defer r.mu.RUnlock()
 
 	prefixLen := r.sentLengths[followerId]
-	suffixStartIndex := prefixLen - r.snapshotter.lastIndex
-	suffix := r.log[suffixStartIndex:]
-	prefixTerm := 0
-	if prefixLen > 0 {
-		prefixTerm = r.log[prefixLen-1].Term
+
+	if prefixLen < r.snapshotter.lastIndex {
+		r.sendInstallSnapshotRPC(followerId)
+		return &raftpb.LogRequestArgs{LeaderId: int32(r.id), Term: int32(r.currentTerm)}
 	}
 
+	var prefixTerm int
+	if prefixLen == 0 {
+		prefixTerm = 0
+	} else if prefixLen == r.snapshotter.lastIndex {
+		prefixTerm = r.snapshotter.lastTerm
+	} else {
+		relativeIndex := prefixLen - r.snapshotter.lastIndex - 1
+		if relativeIndex < 0 || relativeIndex >= len(r.log) {
+			r.sendInstallSnapshotRPC(followerId)
+			return &raftpb.LogRequestArgs{LeaderId: int32(r.id), Term: int32(r.currentTerm)}
+		}
+		prefixTerm = r.log[relativeIndex].Term
+	}
+
+	suffixStartIndex := prefixLen - r.snapshotter.lastIndex
+	suffix := r.log[suffixStartIndex:]
 	pbSuffix := make([]*raftpb.LogEntry, len(suffix))
 	for i, e := range suffix {
 		var val *wrapperspb.Int32Value

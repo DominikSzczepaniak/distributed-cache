@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-
 	"math"
 	"sync"
 	"sync/atomic"
@@ -67,9 +66,6 @@ func NewRaft(application Application, cfg *Config) *Raft {
 		application: application,
 	}
 	r.logSaver = NewRaftDataSaver(r, cfg)
-	r.raftElector = NewRaftElector(r)
-	r.logReplicator = NewRaftLogReplicator(r)
-	r.heartbeat = newHeartbeat(r)
 	r.snapshotter = newSnapshotter(cfg)
 
 	term, votedFor, commited, savedLog, err := r.logSaver.LoadValues()
@@ -80,6 +76,14 @@ func NewRaft(application Application, cfg *Config) *Raft {
 		r.commitedLength = commited
 		r.log = savedLog
 	}
+	snapshotData, err := r.logSaver.ReadSnapshotData()
+	if err != nil {
+		r.application.RestoreFromSnapshot(snapshotData)
+	}
+
+	r.raftElector = NewRaftElector(r)
+	r.logReplicator = NewRaftLogReplicator(r)
+	r.heartbeat = newHeartbeat(r)
 
 	r.initGRPC(cfg)
 	return r
@@ -140,6 +144,7 @@ func (r *Raft) Broadcast(message Message) {
 		return
 	}
 	r.mu.Lock()
+	slog.Info(fmt.Sprintf("Received new log call, current length: %d", len(r.log)))
 	r.log = append(r.log, LogEntry{
 		Message: message,
 		Term:    r.currentTerm,
@@ -171,43 +176,39 @@ func (r *Raft) deliverToApplication(message Message) (success bool, value int) {
 func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	//normal case no snapshot
-	//loglength 105
-	//prefixlen 102
-	//suffix 3
-	//index 104
-	//obcinamy do :102
 
-	//snapshot case
-	//assume prefixLen = 100
-	//suffix length is 3
-	//snapshot length is 90
-	//log is length 15
+	absoluteLogLength := len(r.log) + r.snapshotter.lastIndex
+	if len(suffix) > 0 && absoluteLogLength > prefixLen {
+		checkIndex := prefixLen
+		relativeCheckIndex := checkIndex - r.snapshotter.lastIndex
+		suffixCheckIndex := 0
 
-	//then index is min(105, 102) = 102
-	//relative index is 102 - 90 - 1 = 11
-	//log[11].Term != suffix[102-100]
-	//we cut to :10 so real :100 which is prefixLen which is good
-	if len(suffix) > 0 && len(r.log)+r.snapshotter.lastIndex > prefixLen {
-		index := int(math.Min(float64(len(r.log)+r.snapshotter.lastIndex), float64(prefixLen+len(suffix))) - 1)
-		relativeIndex := index - r.snapshotter.lastIndex //this is wrong- its negative
-		slog.Info(fmt.Sprintf("Relative index is %d, log length is %d", relativeIndex, len(r.log)))
-		if r.log[relativeIndex].Term != suffix[index-prefixLen].Term { //here we cutoff
-			relativePrefIndex := prefixLen - r.snapshotter.lastIndex
-			r.log = r.log[:relativePrefIndex]
+		if relativeCheckIndex >= 0 && relativeCheckIndex < len(r.log) {
+			if r.log[relativeCheckIndex].Term != suffix[suffixCheckIndex].Term {
+				r.log = r.log[:relativeCheckIndex]
+			}
 		}
 	}
-	if prefixLen+len(suffix) > len(r.log)+r.snapshotter.lastIndex {
-		startAppendingIndex := (len(r.log) + r.snapshotter.lastIndex) - prefixLen
+	if prefixLen+len(suffix) > absoluteLogLength {
+		startAppendingIndex := absoluteLogLength - prefixLen
+		if startAppendingIndex < 0 {
+			startAppendingIndex = 0
+		}
 		if startAppendingIndex < len(suffix) {
 			r.log = append(r.log, suffix[startAppendingIndex:]...)
 		}
 	}
 	if leaderCommit > r.commitedLength {
 		//TODO check correctness
+		maxCommit := len(r.log) + r.snapshotter.lastIndex
+		if leaderCommit > maxCommit {
+			leaderCommit = maxCommit
+		}
+
 		messagesToApply := make([]Message, 0, leaderCommit-r.commitedLength)
 		for i := r.commitedLength; i < leaderCommit; i++ {
-			messagesToApply = append(messagesToApply, r.log[i-r.snapshotter.lastIndex].Message)
+			relativeIndex := i - r.snapshotter.lastIndex
+			messagesToApply = append(messagesToApply, r.log[relativeIndex].Message) //throws error sometimes
 		}
 		r.commitedLength = leaderCommit
 
@@ -271,4 +272,63 @@ func (r *Raft) commitLogEntries() {
 		}
 		r.mu.Lock()
 	}
+}
+
+func (r *Raft) sendInstallSnapshotRPC(followerId int) {
+	slog.Info(fmt.Sprintf("Follower %d is too far behind. Sending snapshot.", followerId))
+
+	peer := r.getPeer(followerId)
+
+	r.mu.RLock()
+	lastIndex := r.snapshotter.lastIndex
+	lastTerm := r.snapshotter.lastTerm
+	currentTerm := r.currentTerm
+	leaderId := r.id
+
+	snapshotData, err := r.logSaver.ReadSnapshotData()
+	if err != nil {
+		r.mu.RUnlock()
+		slog.Error(fmt.Sprintf("Failed to read snapshot data for follower %d: %v", followerId, err))
+		return
+	}
+	r.mu.RUnlock()
+
+	request := &raftpb.InstallSnapshotRequest{
+		LeaderTerm:        int32(currentTerm),
+		LeaderId:          int32(leaderId),
+		LastIncludedIndex: int32(lastIndex),
+		LastIncludedTerm:  int32(lastTerm),
+		Offset:            0,
+		Data:              snapshotData,
+		Done:              true,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
+	defer cancel()
+	resp, err := peer.InstallSnapshot(ctx, request)
+	if err != nil {
+		slog.Warn(fmt.Sprintf("InstallSnapshot RPC to follower %d failed: %v", followerId, err))
+		return
+	}
+
+	// --- Step 4: Process the response ---
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// If the follower's term is higher, we are an outdated leader. Revert to follower.
+	if int(resp.Term) > r.currentTerm {
+		r.currentTerm = int(resp.Term)
+		r.currentRole = Follower
+		r.votedFor = -1
+		// It's a good practice to reset the election timer here as well.
+		go r.raftElector.ResetTimer()
+		return
+	}
+
+	// If the RPC was successful, update the leader's view of the follower's progress.
+	// The follower is now caught up to the snapshot's index.
+	// The next log entry to send will be at lastIndex + 1.
+	r.sentLengths[followerId] = lastIndex + 1
+	r.ackedLengths[followerId] = lastIndex // The follower has acknowledged all entries up to the snapshot.
+	slog.Info(fmt.Sprintf("Successfully installed snapshot on follower %d. Next index is now %d.", followerId, r.sentLengths[followerId]))
 }

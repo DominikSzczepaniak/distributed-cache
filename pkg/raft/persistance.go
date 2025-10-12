@@ -158,6 +158,11 @@ func (rds *DataSaver) SaveValues() (bool, error) {
 	rds.mu.Lock()
 	defer rds.mu.Unlock()
 	rds.parent.mu.RLock()
+	if len(rds.parent.log) == 0 {
+		rds.parent.mu.RUnlock()
+		return false, nil
+	}
+
 	if rds.previousSavedIndex > len(rds.parent.log) {
 		rds.previousSavedIndex = len(rds.parent.log)
 	}

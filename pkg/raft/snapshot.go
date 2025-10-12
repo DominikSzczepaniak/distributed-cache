@@ -3,6 +3,7 @@ package raft
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"runtime"
@@ -81,9 +82,13 @@ func (r *Raft) decideRunSnapshot() error {
 			return err
 		}
 		slog.Info(fmt.Sprintf("Correctly wrote snapshot data. Cutting logs of length %d to %d - end", len(r.log), logLenInSnapshot-1), "gid", gid)
-		r.log = r.log[logLenInSnapshot-1:]
-		r.snapshotter.lastIndex = r.snapshotter.lastIndex + logLenInSnapshot - 1
+		newLastIndex := r.snapshotter.lastIndex + logLenInSnapshot
+
+		r.log = []LogEntry{}
+		r.snapshotter.lastIndex = newLastIndex
 		r.snapshotter.lastTerm = lastTerm
+		r.commitedLength = newLastIndex
+		r.application.RestoreFromSnapshot(snpsht)
 	}
 	return nil
 }
@@ -95,4 +100,24 @@ func getGID() uint64 {
 	b = b[:bytes.IndexByte(b, ' ')]
 	n, _ := strconv.ParseUint(string(b), 10, 64)
 	return n
+}
+
+func (rds *DataSaver) ReadSnapshotData() ([]byte, error) {
+	f, err := os.Open(rds.snapshotFilename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		slog.Error("Opening snapshot file for reading failed", "error", err)
+		return nil, err
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		slog.Error("Reading snapshot data failed", "error", err)
+		return nil, err
+	}
+
+	return data, nil
 }
