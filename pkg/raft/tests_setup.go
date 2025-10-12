@@ -142,7 +142,7 @@ func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
 		totalNodes:        totalNodes,
 		raftId:            id,
 		raftAddrs:         make([]string, totalNodes),
-		snapshotThreshold: 1e7,
+		snapshotThreshold: 50000,
 	}
 	r := &Raft{
 		id:              id,
@@ -233,7 +233,7 @@ func createCluster(t testing.TB, n int) []*Raft {
 			totalNodes:        n,
 			raftId:            id,
 			raftAddrs:         make([]string, n),
-			snapshotThreshold: 1e6,
+			snapshotThreshold: 50000,
 		}
 		r := &Raft{
 			id:              id,

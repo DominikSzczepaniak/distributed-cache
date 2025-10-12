@@ -1,13 +1,10 @@
 package raft
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
-	"runtime"
-	"strconv"
 	"time"
 )
 
@@ -15,7 +12,8 @@ type Snapshot struct {
 	lastIndex int
 	lastTerm  int
 
-	snapshotThreshold int
+	snapshotThreshold  int
+	installingSnapshot bool
 }
 
 func newSnapshotter(cfg *Config) *Snapshot {
@@ -65,23 +63,20 @@ func (rds *DataSaver) WriteSnapshotData(data []byte, offset int) (int, error) {
 func (r *Raft) decideRunSnapshot() error {
 	//this is run inside mutex, acquiring new one is not needed
 	if len(r.log) >= r.snapshotter.snapshotThreshold {
-		gid := getGID()
-		slog.Info(fmt.Sprintf("We decided to run snapshot, because log length is %d, while threshold is %d. Time: %d:%d:%d", len(r.log), r.snapshotter.snapshotThreshold, time.Now().Minute(), time.Now().Second(), time.Now().Nanosecond()), "gid", gid)
+		slog.Info(fmt.Sprintf("We decided to run snapshot, because log length is %d, while threshold is %d. Time: %d:%d:%d", len(r.log), r.snapshotter.snapshotThreshold, time.Now().Minute(), time.Now().Second(), time.Now().Nanosecond()))
 		snpsht, err := r.application.GetSnapshot()
-		slog.Info("Correctly got snapshot", "gid", gid)
 		logLenInSnapshot := len(r.log)
 		lastTerm := r.log[len(r.log)-1].Term
-		slog.Info(fmt.Sprintf("Got data for snapshot. Length of logs: %d, Last term: %d", logLenInSnapshot, lastTerm), "gid", gid)
+		slog.Info(fmt.Sprintf("Got data for snapshot. Length of logs: %d, Last term: %d", logLenInSnapshot, lastTerm))
 		if err != nil {
-			slog.Error(fmt.Sprintf("Getting application snapshot failed %s", err.Error()), "gid", gid)
+			slog.Error(fmt.Sprintf("Getting application snapshot failed %s", err.Error()))
 			return err
 		}
-		slog.Info("Writing snapshot data...", "gid", gid)
 		_, err = r.logSaver.WriteSnapshotData(snpsht, 0)
 		if err != nil {
 			return err
 		}
-		slog.Info(fmt.Sprintf("Correctly wrote snapshot data. Cutting logs of length %d to %d - end", len(r.log), logLenInSnapshot-1), "gid", gid)
+		slog.Info(fmt.Sprintf("Correctly wrote snapshot data. Cutting logs of length %d to %d - end", len(r.log), logLenInSnapshot-1))
 		newLastIndex := r.snapshotter.lastIndex + logLenInSnapshot
 
 		r.log = []LogEntry{}
@@ -91,15 +86,6 @@ func (r *Raft) decideRunSnapshot() error {
 		r.application.RestoreFromSnapshot(snpsht)
 	}
 	return nil
-}
-
-func getGID() uint64 {
-	b := make([]byte, 64)
-	b = b[:runtime.Stack(b, false)]
-	b = bytes.TrimPrefix(b, []byte("goroutine "))
-	b = b[:bytes.IndexByte(b, ' ')]
-	n, _ := strconv.ParseUint(string(b), 10, 64)
-	return n
 }
 
 func (rds *DataSaver) ReadSnapshotData() ([]byte, error) {

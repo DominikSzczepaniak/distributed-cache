@@ -3,6 +3,7 @@ package raft
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"math/rand"
 	"time"
@@ -27,7 +28,7 @@ func NewRaftElector(r *Raft) *Elector {
 		parent: r,
 		rnd:    rand.New(src),
 
-		minElectionTimeout: 100 * time.Millisecond,
+		minElectionTimeout: 150 * time.Millisecond,
 		maxElectionTimeout: 300 * time.Millisecond,
 
 		resetTimerCh:  make(chan struct{}, 1),
@@ -60,8 +61,10 @@ func (re *Elector) electionTimerLoop() {
 		case <-timer.C:
 			re.parent.mu.RLock()
 			isLeader := re.parent.currentRole == Leader
+			isSnapshotWriting := re.parent.snapshotter.installingSnapshot
 			re.parent.mu.RUnlock()
-			if !isLeader {
+			if !isLeader && !isSnapshotWriting {
+				slog.Info(fmt.Sprintf("Starting election for node %d, because isLeader is %t and snapshot is writing is %t", re.parent.id, isLeader, isSnapshotWriting))
 				re.parent.startElection()
 			}
 			timer.Reset(re.nextTimeout())
@@ -75,6 +78,7 @@ func (re *Elector) electionTimerLoop() {
 func (re *Elector) ResetTimer() {
 	select {
 	case re.resetTimerCh <- struct{}{}:
+		slog.Info(fmt.Sprintf("ResetTimer started for node %d", re.parent.id))
 	default:
 	}
 }

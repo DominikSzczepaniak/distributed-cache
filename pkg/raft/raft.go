@@ -144,7 +144,6 @@ func (r *Raft) Broadcast(message Message) {
 		return
 	}
 	r.mu.Lock()
-	slog.Info(fmt.Sprintf("Received new log call, current length: %d", len(r.log)))
 	r.log = append(r.log, LogEntry{
 		Message: message,
 		Term:    r.currentTerm,
@@ -236,7 +235,7 @@ func (r *Raft) logResponse(followerId, term, ack int, success bool) {
 			r.ackedLengths[followerId] = ack
 			r.sentLengths[followerId] = ack
 			r.commitLogEntries()
-		} else if r.sentLengths[followerId] > 0 {
+		} else if r.sentLengths[followerId] > r.snapshotter.lastIndex {
 			r.sentLengths[followerId]--
 			go r.replicateLog(r.id, followerId)
 		}
@@ -275,11 +274,12 @@ func (r *Raft) commitLogEntries() {
 }
 
 func (r *Raft) sendInstallSnapshotRPC(followerId int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	slog.Info(fmt.Sprintf("Follower %d is too far behind. Sending snapshot.", followerId))
 
 	peer := r.getPeer(followerId)
 
-	r.mu.RLock()
 	lastIndex := r.snapshotter.lastIndex
 	lastTerm := r.snapshotter.lastTerm
 	currentTerm := r.currentTerm
@@ -287,11 +287,9 @@ func (r *Raft) sendInstallSnapshotRPC(followerId int) {
 
 	snapshotData, err := r.logSaver.ReadSnapshotData()
 	if err != nil {
-		r.mu.RUnlock()
 		slog.Error(fmt.Sprintf("Failed to read snapshot data for follower %d: %v", followerId, err))
 		return
 	}
-	r.mu.RUnlock()
 
 	request := &raftpb.InstallSnapshotRequest{
 		LeaderTerm:        int32(currentTerm),
@@ -303,7 +301,7 @@ func (r *Raft) sendInstallSnapshotRPC(followerId int) {
 		Done:              true,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*600)
 	defer cancel()
 	resp, err := peer.InstallSnapshot(ctx, request)
 	if err != nil {
@@ -311,24 +309,15 @@ func (r *Raft) sendInstallSnapshotRPC(followerId int) {
 		return
 	}
 
-	// --- Step 4: Process the response ---
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// If the follower's term is higher, we are an outdated leader. Revert to follower.
 	if int(resp.Term) > r.currentTerm {
 		r.currentTerm = int(resp.Term)
 		r.currentRole = Follower
 		r.votedFor = -1
-		// It's a good practice to reset the election timer here as well.
 		go r.raftElector.ResetTimer()
 		return
 	}
 
-	// If the RPC was successful, update the leader's view of the follower's progress.
-	// The follower is now caught up to the snapshot's index.
-	// The next log entry to send will be at lastIndex + 1.
 	r.sentLengths[followerId] = lastIndex + 1
-	r.ackedLengths[followerId] = lastIndex // The follower has acknowledged all entries up to the snapshot.
+	r.ackedLengths[followerId] = lastIndex
 	slog.Info(fmt.Sprintf("Successfully installed snapshot on follower %d. Next index is now %d.", followerId, r.sentLengths[followerId]))
 }

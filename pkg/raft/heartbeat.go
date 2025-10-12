@@ -14,29 +14,29 @@ type Heartbeat struct {
 }
 
 func newHeartbeat(parent *Raft) *Heartbeat {
-	return &Heartbeat{
+	heartbeat := &Heartbeat{
 		parent:        parent,
 		resetTimerCh:  make(chan struct{}, 1),
 		cancelTimerCh: make(chan struct{}, 1),
-		timeout:       20 * time.Millisecond, //TODO might be too aggressive for network
+		timeout:       20 * time.Millisecond,
 	}
+	go heartbeat.heartbeatLoop()
+	return heartbeat
 }
 
 func (h *Heartbeat) sendHeartbeat() {
-	for i := range h.parent.totalNodes {
+	for i := 0; i < h.parent.totalNodes; i++ {
 		if i == h.parent.id {
 			continue
 		}
 
 		peer := h.parent.getPeer(i)
-
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), h.timeout)
 			defer cancel()
 			args := &emptypb.Empty{}
 
 			_, _ = peer.Heartbeat(ctx, args)
-
 		}()
 	}
 }

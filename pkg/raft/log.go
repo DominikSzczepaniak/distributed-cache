@@ -2,6 +2,8 @@ package raft
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"math/rand"
 	"time"
 
@@ -80,11 +82,22 @@ func (rl *LogReplicator) logReplicateLoop() {
 func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if len(r.log) == 0 {
+		return &raftpb.LogRequestArgs{
+			LeaderId:     int32(r.id),
+			Term:         int32(r.currentTerm),
+			PrefixLen:    int32(r.snapshotter.lastIndex),
+			PrefixTerm:   int32(r.snapshotter.lastTerm),
+			CommitLength: int32(r.commitedLength),
+			Suffix:       nil,
+		}
+	}
 
 	prefixLen := r.sentLengths[followerId]
 
 	if prefixLen < r.snapshotter.lastIndex {
-		r.sendInstallSnapshotRPC(followerId)
+		slog.Info(fmt.Sprintf("Decided to send install snapshot rpc from %d to %d, because prefixLen is %d and last index in snapshot is %d", r.id, followerId, prefixLen, r.snapshotter.lastIndex))
+		go r.sendInstallSnapshotRPC(followerId)
 		return &raftpb.LogRequestArgs{LeaderId: int32(r.id), Term: int32(r.currentTerm)}
 	}
 
@@ -96,7 +109,8 @@ func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 	} else {
 		relativeIndex := prefixLen - r.snapshotter.lastIndex - 1
 		if relativeIndex < 0 || relativeIndex >= len(r.log) {
-			r.sendInstallSnapshotRPC(followerId)
+			slog.Info(fmt.Sprintf("Decided to send install snapshot rpc from %d to %d, because relativeIndex is %d and log length is %d", r.id, followerId, relativeIndex, len(r.log)))
+			go r.sendInstallSnapshotRPC(followerId)
 			return &raftpb.LogRequestArgs{LeaderId: int32(r.id), Term: int32(r.currentTerm)}
 		}
 		prefixTerm = r.log[relativeIndex].Term

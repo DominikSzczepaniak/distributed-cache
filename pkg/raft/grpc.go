@@ -210,8 +210,13 @@ func (r *Raft) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty
 }
 
 func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
+	go r.raftElector.ResetTimer()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.snapshotter.installingSnapshot = true
+	defer func() {
+		r.snapshotter.installingSnapshot = false
+	}()
 
 	defaultResponse := &raftpb.InstallSnapshotResponse{Term: int32(r.currentTerm)}
 	if int(in.LeaderTerm) < r.currentTerm {
@@ -223,7 +228,7 @@ func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRe
 		r.currentLeaderId = int(in.LeaderId)
 		go r.raftElector.ResetTimer()
 	}
-	r.currentLeaderId = int(in.LeaderId) //TODO check if this is correct
+	r.currentLeaderId = int(in.LeaderId)
 
 	_, err := r.logSaver.WriteSnapshotData(in.Data, int(in.Offset))
 	if err != nil {

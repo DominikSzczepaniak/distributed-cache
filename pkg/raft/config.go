@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
@@ -39,6 +40,7 @@ func LoadConfig() *Config {
 	if err != nil {
 		panic("SNAPSHOT THRESHOLD IS NOT A NUMBER!")
 	}
+	snapshotThreshold = snapshotThreshold + rand.Intn(snapshotThreshold/10) - snapshotThreshold/20
 
 	raftIdStr, exists := os.LookupEnv("RAFT_ID")
 	if !exists || raftIdStr == "" {
