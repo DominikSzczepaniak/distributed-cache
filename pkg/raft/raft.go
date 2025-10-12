@@ -3,6 +3,7 @@ package raft
 import (
 	"context"
 	"fmt"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 	"log/slog"
 	"math"
 	"sync"
@@ -12,7 +13,6 @@ import (
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 type Raft struct {
@@ -78,12 +78,13 @@ func NewRaft(application Application, cfg *Config) *Raft {
 	}
 	snapshotData, err := r.logSaver.ReadSnapshotData()
 	if err != nil {
-		r.application.RestoreFromSnapshot(snapshotData)
+		_, key := r.application.RestoreFromSnapshot(snapshotData)
+		slog.Info(fmt.Sprintf("When exited restore from snapshot, key value is %d", r.application.GetValue(key)))
 	}
 
+	r.heartbeat = newHeartbeat(r)
 	r.raftElector = NewRaftElector(r)
 	r.logReplicator = NewRaftLogReplicator(r)
-	r.heartbeat = newHeartbeat(r)
 
 	r.initGRPC(cfg)
 	return r
@@ -112,22 +113,19 @@ func (r *Raft) receiveVote(vote VoteResponse) {
 func (r *Raft) forwardToLeader(message Message, leader PeerClient) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
+	ctx = context.WithValue(ctx, forwardHopKey{}, true)
 
 	msg := &raftpb.Message{
 		Type: toProtoMsgType(message.MsgType),
 		Key:  int32(message.Key),
-		Value: &wrapperspb.Int32Value{
-			Value: int32(*message.Value),
-		},
 	}
 	if message.Value != nil {
+		msg.Value = wrapperspb.Int32(int32(*message.Value))
 	}
-	_, err := leader.Forward(ctx, msg)
-
-	if err != nil {
-		_, err = leader.Forward(ctx, msg) //retry once
-		if err != nil {
-			panic("Network error")
+	if _, err := leader.Forward(ctx, msg); err != nil {
+		if _, err2 := leader.Forward(ctx, msg); err2 != nil {
+			slog.Warn("forwardToLeader failed", "from", r.id, "error", err2)
+			return
 		}
 	}
 }
@@ -158,7 +156,7 @@ func (r *Raft) Broadcast(message Message) {
 
 	go r.logSaver.SaveValues()
 
-	for i := range totalNodes {
+	for i := 0; i < totalNodes; i++ {
 		if i == r.id {
 			continue
 		}
@@ -233,10 +231,10 @@ func (r *Raft) logResponse(followerId, term, ack int, success bool) {
 	if r.currentTerm == term && r.currentRole == Leader {
 		if success && ack >= r.ackedLengths[followerId] {
 			r.ackedLengths[followerId] = ack
-			r.sentLengths[followerId] = ack
+			r.sentLengths[followerId] = ack + 1
 			r.commitLogEntries()
-		} else if r.sentLengths[followerId] > r.snapshotter.lastIndex {
-			r.sentLengths[followerId]--
+		} else if r.sentLengths[followerId] > r.snapshotter.lastIndex+1 {
+			r.sentLengths[followerId] = r.sentLengths[followerId] - 1
 			go r.replicateLog(r.id, followerId)
 		}
 	}
@@ -246,9 +244,9 @@ func (r *Raft) commitLogEntries() {
 	majority := int(math.Ceil(float64(r.totalNodes+1) / 2))
 	messagesToApply := make([]Message, 0)
 
-	for r.commitedLength < len(r.log) {
+	for r.commitedLength < r.snapshotter.lastIndex+len(r.log) {
 		acks := 1
-		for j := range r.totalNodes {
+		for j := 0; j < r.totalNodes; j++ {
 			if j == r.id {
 				continue
 			}

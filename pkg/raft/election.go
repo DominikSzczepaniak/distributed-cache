@@ -28,8 +28,8 @@ func NewRaftElector(r *Raft) *Elector {
 		parent: r,
 		rnd:    rand.New(src),
 
-		minElectionTimeout: 150 * time.Millisecond,
-		maxElectionTimeout: 300 * time.Millisecond,
+		minElectionTimeout: 400 * time.Millisecond,
+		maxElectionTimeout: 800 * time.Millisecond,
 
 		resetTimerCh:  make(chan struct{}, 1),
 		cancelTimerCh: make(chan struct{}),
@@ -40,7 +40,7 @@ func NewRaftElector(r *Raft) *Elector {
 
 func (re *Elector) nextTimeout() time.Duration {
 	return re.minElectionTimeout +
-		time.Duration(rand.Int63n(int64(re.maxElectionTimeout-re.minElectionTimeout)))
+		time.Duration(re.rnd.Int63n(int64(re.maxElectionTimeout-re.minElectionTimeout)))
 }
 
 func (re *Elector) electionTimerLoop() {
@@ -78,7 +78,6 @@ func (re *Elector) electionTimerLoop() {
 func (re *Elector) ResetTimer() {
 	select {
 	case re.resetTimerCh <- struct{}{}:
-		slog.Info(fmt.Sprintf("ResetTimer started for node %d", re.parent.id))
 	default:
 	}
 }
@@ -93,6 +92,7 @@ func (r *Raft) startElection() {
 	r.votedFor = r.id
 	r.votesReceived = mapset.NewSet[int]()
 	r.votesReceived.Add(r.id)
+	r.currentLeaderId = -1
 
 	logTerm := r.getLastLogTerm()
 

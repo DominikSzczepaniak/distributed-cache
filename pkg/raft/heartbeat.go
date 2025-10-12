@@ -18,9 +18,9 @@ func newHeartbeat(parent *Raft) *Heartbeat {
 		parent:        parent,
 		resetTimerCh:  make(chan struct{}, 1),
 		cancelTimerCh: make(chan struct{}, 1),
-		timeout:       20 * time.Millisecond,
+		timeout:       100 * time.Millisecond,
 	}
-	go heartbeat.heartbeatLoop()
+	//go heartbeat.heartbeatLoop()
 	return heartbeat
 }
 

@@ -3,6 +3,7 @@ package raft
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"google.golang.org/grpc/credentials/insecure"
@@ -46,7 +47,10 @@ func (r *Raft) serveGRPC(addr string) {
 	}
 }
 
+type forwardHopKey struct{}
+
 func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, error) {
+	slog.Info(fmt.Sprintf("Received Forward on node %d", r.id)) // %+v", msg))
 	var val *int
 	if msg.Value != nil {
 		tmp := int(msg.Value.Value)
@@ -64,7 +68,25 @@ func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, 
 		if leaderID < 0 {
 			return nil, fmt.Errorf("no leader known")
 		}
+		if leaderID == r.id {
+			r.mu.Lock()
+			if r.currentRole != Leader && r.currentLeaderId == r.id {
+				r.currentLeaderId = -1
+			}
+			r.mu.Unlock()
+			return nil, fmt.Errorf("no leader known")
+		}
+		if ctx.Value(forwardHopKey{}) != nil {
+			return nil, fmt.Errorf("redirect loop detected at node=%d to leader=%d", r.id, leaderID)
+		}
+		ctx = context.WithValue(ctx, forwardHopKey{}, true)
+		slog.Info(fmt.Sprintf("Node %d forwards Forward call to %d,"+
+			" %d is leader: %t", r.id, leaderID, r.id, isLeader))
 		peer := r.getPeer(leaderID)
+		if peer == nil {
+			return nil, fmt.Errorf("no peer for node %d", r.id)
+		}
+		slog.Info(fmt.Sprintf("Node %d forwards Forward call to %d", r.id, leaderID))
 		return peer.Forward(ctx, msg)
 	}
 
@@ -99,9 +121,8 @@ func convertLogRequestArgs(args *raftpb.LogRequestArgs) (int, int, int, int, int
 }
 
 func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) {
-	leaderId, term, prefixLen, prefixTerm, commitLength, suffix := convertLogRequestArgs(in)
-	//we have to decrement prefixLen by amount of indexes we have in a snapshot:
-	prefixLen -= r.snapshotter.lastIndex
+	//slog.Info(fmt.Sprintf("Received LogRequest")) // %+v", in))
+	leaderId, term, prevIndex, prevTerm, commitLength, suffix := convertLogRequestArgs(in)
 
 	r.mu.Lock()
 	if r.currentTerm < term {
@@ -112,33 +133,38 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 	}
 	if r.currentTerm == term {
 		r.currentRole = Follower
-		r.currentLeaderId = leaderId
+		if r.id != leaderId {
+			r.currentLeaderId = leaderId
+		} else {
+			r.currentLeaderId = -1
+		}
 	}
-	logLength := len(r.log) + r.snapshotter.lastIndex
-	var logOk bool
-	//TODO might be wrong
-	if logLength < prefixLen {
+	absLastIndex := r.snapshotter.lastIndex + len(r.log)
+	logOk := false
+	switch {
+	case prevIndex == 0:
+		logOk = (prevTerm == 0)
+	case prevIndex > absLastIndex:
 		logOk = false
-	} else if prefixLen == r.snapshotter.lastIndex {
-		logOk = r.snapshotter.lastTerm == prefixTerm
-	} else {
-		sliceIndex := prefixLen - r.snapshotter.lastIndex - 1
-		if sliceIndex >= 0 && sliceIndex < len(r.log) {
-			logOk = r.log[sliceIndex].Term == prefixTerm
+	case prevIndex == r.snapshotter.lastIndex:
+		logOk = (r.snapshotter.lastTerm == prevTerm)
+	default:
+		rel := prevIndex - r.snapshotter.lastIndex - 1
+		if rel >= 0 && rel < len(r.log) {
+			logOk = (r.log[rel].Term == prevTerm)
 		} else {
 			logOk = false
 		}
 	}
-
 	//logOk := (len(r.log) >= prefixLen) && (prefixLen == 0 || r.log[prefixLen-1].Term == prefixTerm) //old version
 
 	if r.currentTerm == term && logOk {
 		r.raftElector.ResetTimer()
 		r.mu.Unlock()
 
-		r.appendEntries(prefixLen, commitLength, suffix)
+		r.appendEntries(prevIndex, commitLength, suffix)
 
-		ack := prefixLen + len(suffix)
+		ack := prevIndex + len(suffix)
 		go r.logSaver.SaveValues()
 
 		return &raftpb.LogResponse{
@@ -167,7 +193,14 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 	candidateLogTerm := int(in.CandidateLogTerm)
 
 	r.mu.Lock()
+	slog.Info(fmt.Sprintf("Received VoteRequest from node %d on node %d, node thinks the leader is %d, node consider itself a leader: %t", in.CandidateId, r.id, r.currentLeaderId, r.currentRole == Leader)) // %+v", in))
 	toPersist := false
+	if r.currentLeaderId == int(in.CandidateId) {
+		r.currentRole = Follower
+		r.votedFor = -1
+		r.currentLeaderId = -1
+		toPersist = true
+	}
 
 	if candidateTerm > r.currentTerm {
 		r.currentTerm = candidateTerm
@@ -182,23 +215,26 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 	if candidateTerm == r.currentTerm && logOk && (r.votedFor == -1 || r.votedFor == candidateId) {
 		r.votedFor = candidateId
 		r.currentRole = Follower
+		r.currentLeaderId = -1
 
 		go r.raftElector.ResetTimer()
+		currentTerm := r.currentTerm
 		r.mu.Unlock()
 		go r.logSaver.SaveValues()
 		return &raftpb.VoteResponse{
 			NodeId:      int32(r.id),
-			CurrentTerm: int32(r.currentTerm),
+			CurrentTerm: int32(currentTerm),
 			Granted:     true,
 		}, nil
 	} else {
+		currentTerm := r.currentTerm
 		r.mu.Unlock()
 		if toPersist {
 			go r.logSaver.SaveValues()
 		}
 		return &raftpb.VoteResponse{
 			NodeId:      int32(r.id),
-			CurrentTerm: int32(r.currentTerm),
+			CurrentTerm: int32(currentTerm),
 			Granted:     false,
 		}, nil
 	}
@@ -213,6 +249,7 @@ func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRe
 	go r.raftElector.ResetTimer()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	slog.Info(fmt.Sprintf("Installing snapshot for node %d, setting installingSnapshot to true", r.id))
 	r.snapshotter.installingSnapshot = true
 	defer func() {
 		r.snapshotter.installingSnapshot = false
@@ -258,9 +295,10 @@ func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRe
 	if err != nil {
 		return defaultResponse, err
 	}
-	err = r.application.RestoreFromSnapshot(snapshot)
-	if err != nil {
+	if err, key := r.application.RestoreFromSnapshot(snapshot); err != nil {
 		return defaultResponse, err
+	} else {
+		slog.Info(fmt.Sprintf("When exited restore from snapshot, key value is %d", r.application.GetValue(key)))
 	}
 	r.snapshotter.lastIndex = lastIncludedIndex
 	r.snapshotter.lastTerm = lastIncludedTerm

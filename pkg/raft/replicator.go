@@ -78,12 +78,13 @@ func (rep *Replicator) replicate() {
 
 	if rep.parent.currentRole == Leader && int(resp.CurrentTerm) == rep.parent.currentTerm {
 		if resp.Success {
-			newAckedLength := int(args.PrefixLen) + len(args.Suffix)
-			rep.parent.sentLengths[rep.followerId] = newAckedLength
-			rep.parent.ackedLengths[rep.followerId] = newAckedLength
+			match := int(resp.Ack)
+			rep.parent.sentLengths[rep.followerId] = match + 1
+			rep.parent.ackedLengths[rep.followerId] = match
 			rep.parent.commitLogEntries()
 		} else {
-			if rep.parent.sentLengths[rep.followerId] > 0 {
+			floor := rep.parent.snapshotter.lastIndex + 1
+			if rep.parent.sentLengths[rep.followerId] > floor {
 				rep.parent.sentLengths[rep.followerId]--
 			}
 		}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -78,7 +79,7 @@ func (a *testApp) GetSnapshot() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (a *testApp) RestoreFromSnapshot(data []byte) error {
+func (a *testApp) RestoreFromSnapshot(data []byte) (error, int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -87,22 +88,33 @@ func (a *testApp) RestoreFromSnapshot(data []byte) error {
 
 	var mapLen int32
 	if err := binary.Read(reader, byteOrder, &mapLen); err != nil {
-		return err
+		return err, 0
 	}
 	newMap := make(map[int]int)
+	var saveKeyValue int
+	var saveValue int
 
 	for i := 0; i < int(mapLen); i++ {
 		var k64, v64 int64
 		if err := binary.Read(reader, byteOrder, &k64); err != nil {
-			return err
+			return err, 0
 		}
 		if err := binary.Read(reader, byteOrder, &v64); err != nil {
-			return err
+			return err, 0
 		}
+		saveKeyValue = int(k64)
+		saveValue = int(v64)
 		newMap[int(k64)] = int(v64)
 	}
 	a.data = newMap
-	return nil
+	slog.Info(fmt.Sprintf("Restore from snapshot in test app, saved key %d and its value %d vs value in the map %d", saveKeyValue, saveValue, a.data[saveKeyValue]))
+	return nil, saveKeyValue
+}
+
+func (a *testApp) GetValue(key int) int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.data[key]
 }
 
 func intPtr(i int) *int { return &i }

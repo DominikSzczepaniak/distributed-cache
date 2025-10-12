@@ -82,42 +82,51 @@ func (rl *LogReplicator) logReplicateLoop() {
 func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	if len(r.log) == 0 {
-		return &raftpb.LogRequestArgs{
-			LeaderId:     int32(r.id),
-			Term:         int32(r.currentTerm),
-			PrefixLen:    int32(r.snapshotter.lastIndex),
-			PrefixTerm:   int32(r.snapshotter.lastTerm),
-			CommitLength: int32(r.commitedLength),
-			Suffix:       nil,
-		}
+	nextIndex := r.sentLengths[followerId]
+	if nextIndex == 0 {
+		nextIndex = r.snapshotter.lastIndex + len(r.log) + 1
 	}
-
-	prefixLen := r.sentLengths[followerId]
-
-	if prefixLen < r.snapshotter.lastIndex {
-		slog.Info(fmt.Sprintf("Decided to send install snapshot rpc from %d to %d, because prefixLen is %d and last index in snapshot is %d", r.id, followerId, prefixLen, r.snapshotter.lastIndex))
+	if nextIndex <= r.snapshotter.lastIndex {
+		slog.Info(fmt.Sprintf(
+			"InstallSnapshot from %d to %d: nextIndex=%d, snapshot.lastIndex=%d",
+			r.id, followerId, nextIndex, r.snapshotter.lastIndex,
+		))
 		go r.sendInstallSnapshotRPC(followerId)
-		return &raftpb.LogRequestArgs{LeaderId: int32(r.id), Term: int32(r.currentTerm)}
-	}
-
-	var prefixTerm int
-	if prefixLen == 0 {
-		prefixTerm = 0
-	} else if prefixLen == r.snapshotter.lastIndex {
-		prefixTerm = r.snapshotter.lastTerm
-	} else {
-		relativeIndex := prefixLen - r.snapshotter.lastIndex - 1
-		if relativeIndex < 0 || relativeIndex >= len(r.log) {
-			slog.Info(fmt.Sprintf("Decided to send install snapshot rpc from %d to %d, because relativeIndex is %d and log length is %d", r.id, followerId, relativeIndex, len(r.log)))
-			go r.sendInstallSnapshotRPC(followerId)
-			return &raftpb.LogRequestArgs{LeaderId: int32(r.id), Term: int32(r.currentTerm)}
+		return &raftpb.LogRequestArgs{
+			LeaderId: int32(r.id),
+			Term:     int32(r.currentTerm),
 		}
-		prefixTerm = r.log[relativeIndex].Term
 	}
-
-	suffixStartIndex := prefixLen - r.snapshotter.lastIndex
-	suffix := r.log[suffixStartIndex:]
+	prevIndex := nextIndex - 1
+	var prevTerm int
+	switch {
+	case prevIndex == 0:
+		prevTerm = 0
+	case prevIndex == r.snapshotter.lastIndex:
+		prevTerm = r.snapshotter.lastTerm
+	default:
+		rel := prevIndex - r.snapshotter.lastIndex - 1
+		if rel < 0 || rel >= len(r.log) {
+			slog.Info(fmt.Sprintf(
+				"InstallSnapshot from %d to %d: rel=%d logLen=%d (prevIndex=%d, snapLast=%d)",
+				r.id, followerId, rel, len(r.log), prevIndex, r.snapshotter.lastIndex,
+			))
+			go r.sendInstallSnapshotRPC(followerId)
+			return &raftpb.LogRequestArgs{
+				LeaderId: int32(r.id),
+				Term:     int32(r.currentTerm),
+			}
+		}
+		prevTerm = r.log[rel].Term
+	}
+	start := nextIndex - r.snapshotter.lastIndex - 1
+	if start < 0 {
+		start = 0
+	}
+	if start > len(r.log) {
+		start = len(r.log)
+	}
+	suffix := r.log[start:]
 	pbSuffix := make([]*raftpb.LogEntry, len(suffix))
 	for i, e := range suffix {
 		var val *wrapperspb.Int32Value
@@ -136,8 +145,8 @@ func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 	return &raftpb.LogRequestArgs{
 		LeaderId:     int32(r.id),
 		Term:         int32(r.currentTerm),
-		PrefixLen:    int32(prefixLen),
-		PrefixTerm:   int32(prefixTerm),
+		PrefixLen:    int32(prevIndex),
+		PrefixTerm:   int32(prevTerm),
 		CommitLength: int32(r.commitedLength),
 		Suffix:       pbSuffix,
 	}
