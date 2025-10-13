@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"math/rand"
 	"path/filepath"
 	"testing"
 	"time"
@@ -126,7 +125,6 @@ func TestConcurrentOperations(t *testing.T) {
 	}
 	require.NotNil(t, leader)
 	const nmsgs = 10_000_000
-	const num_keys = 10_000
 	done := make(chan struct{}, nmsgs)
 	sem := make(chan int, 256)
 	for i := 0; i < nmsgs; i++ {
@@ -136,7 +134,7 @@ func TestConcurrentOperations(t *testing.T) {
 			leader.Broadcast(Message{MsgType: put, Key: key, Value: &val})
 			done <- struct{}{}
 			<-sem
-		}(rand.Intn(num_keys))
+		}(i)
 	}
 	for i := 0; i < nmsgs; i++ {
 		<-done
@@ -144,8 +142,14 @@ func TestConcurrentOperations(t *testing.T) {
 	time.Sleep(10 * time.Second)
 	for _, n := range nodes {
 		//data := n.application.(*testApp).getData()
-		for i := 0; i < num_keys; i++ {
+		for i := 0; i < nmsgs; i++ {
 			assert.Equal(t, i*2, n.application.GetValue(i))
 		}
 	}
 }
+
+//2. install snapshot wysylac w patchach (multipart)
+//3. elekcja lidera jest na innym mutexie????
+//4. akceptuj log w miedzyczasie i JAK SIE SKONCZY SNAPSHOT zaaplikuj operacje z loga
+
+//PRZEGLAD LITERATURY
