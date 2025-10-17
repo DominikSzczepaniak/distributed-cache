@@ -125,7 +125,8 @@ func TestConcurrentOperations(t *testing.T) {
 		n.mu.RUnlock()
 	}
 	require.NotNil(t, leader)
-	const nmsgs = 10_000_000
+	const nmsgs = 4_000_000
+	const num_keys = 100000
 	done := make(chan struct{}, nmsgs)
 	sem := make(chan int, 256)
 	for i := 0; i < nmsgs; i++ {
@@ -135,15 +136,15 @@ func TestConcurrentOperations(t *testing.T) {
 			leader.Broadcast(Message{MsgType: put, Key: key, Value: &val})
 			done <- struct{}{}
 			<-sem
-		}(rand.Intn(1000))
+		}(rand.Intn(num_keys))
 	}
 	for i := 0; i < nmsgs; i++ {
 		<-done
 	}
-	time.Sleep(10 * time.Second)
+	time.Sleep(2 * time.Second)
 	for _, n := range nodes {
 		//data := n.application.(*testApp).getData()
-		for i := 0; i < 1000; i++ {
+		for i := 0; i < num_keys; i++ {
 			assert.Equal(t, i*2, n.application.GetValue(i))
 		}
 	}

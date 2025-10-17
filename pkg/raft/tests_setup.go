@@ -17,6 +17,10 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+const (
+	SNAPSHOT_THRESHOLD = 50000
+)
+
 type testApp struct {
 	mu   sync.RWMutex
 	data map[int]int
@@ -154,7 +158,7 @@ func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
 		totalNodes:        totalNodes,
 		raftId:            id,
 		raftAddrs:         make([]string, totalNodes),
-		snapshotThreshold: 50000,
+		snapshotThreshold: SNAPSHOT_THRESHOLD,
 	}
 	r := &Raft{
 		id:              id,
@@ -251,7 +255,7 @@ func createCluster(t testing.TB, n int) []*Raft {
 			totalNodes:        n,
 			raftId:            id,
 			raftAddrs:         make([]string, n),
-			snapshotThreshold: 50000,
+			snapshotThreshold: SNAPSHOT_THRESHOLD,
 		}
 		r := &Raft{
 			id:              id,
