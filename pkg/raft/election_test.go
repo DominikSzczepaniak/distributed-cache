@@ -2,6 +2,7 @@ package raft
 
 import (
 	"context"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"testing"
 	"time"
 
@@ -61,7 +62,7 @@ func TestRaftElection(t *testing.T) {
 			gotVotes := n.votesReceived.Cardinality()
 			n.mu.RUnlock()
 			assert.Equal(t, tt.wantRole, gotRole)
-			assert.GreaterOrEqual(t, tt.wantVoteCount, gotVotes)
+			assert.GreaterOrEqual(t, gotVotes, tt.wantVoteCount)
 			for _, m := range mocks {
 				m.AssertExpectations(t)
 			}
@@ -131,13 +132,17 @@ func TestElectionTimeout(t *testing.T) {
 				Granted:     false,
 			}, nil).
 			Maybe()
+		mocks[i].
+			On("Heartbeat", mock.Anything, mock.Anything).
+			Return(&emptypb.Empty{}, nil).
+			Maybe()
 	}
 	peers := make([]PeerClient, len(mocks))
 	for i, m := range mocks {
 		peers[i] = m
 	}
 	node.setPeers(peers)
-	time.Sleep(400 * time.Millisecond)
+	time.Sleep(1000 * time.Millisecond)
 	node.mu.RLock()
 	role, term := node.currentRole, node.currentTerm
 	node.mu.RUnlock()

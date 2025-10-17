@@ -31,6 +31,9 @@ func (h *Heartbeat) sendHeartbeat() {
 		}
 
 		peer := h.parent.getPeer(i)
+		if peer == nil {
+			continue
+		}
 		go func(p PeerClient) {
 			ctx, cancel := context.WithTimeout(context.Background(), h.timeout)
 			defer cancel()

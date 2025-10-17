@@ -171,6 +171,7 @@ func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
 		application:     app,
 	}
 	r.heartbeat = newHeartbeat(r)
+	close(r.heartbeat.cancelTimerCh)
 	r.logSaver = NewRaftDataSaver(r, cfg)
 	r.raftElector = NewRaftElector(r)
 	close(r.raftElector.cancelTimerCh)
@@ -199,6 +200,10 @@ func createClusterMocks(t *testing.T, size int) ([]*Raft, []*mockPeerClient) {
 				Ack:         0,
 				Success:     false,
 			}, nil).
+			Maybe()
+		mocks[i].
+			On("Heartbeat", mock.Anything, mock.Anything).
+			Return(&emptypb.Empty{}, nil).
 			Maybe()
 	}
 	peers := make([]PeerClient, size)
