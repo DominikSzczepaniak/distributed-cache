@@ -1,8 +1,11 @@
 package raft
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -12,6 +15,10 @@ import (
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/protobuf/types/known/emptypb"
+)
+
+const (
+	SNAPSHOT_THRESHOLD = 50000
 )
 
 type testApp struct {
@@ -54,6 +61,66 @@ func (a *testApp) getData() map[int]int {
 	return m
 }
 
+func (a *testApp) GetSnapshot() ([]byte, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var buf bytes.Buffer
+	byteOrder := binary.LittleEndian
+
+	mapLen := int32(len(a.data))
+	if err := binary.Write(&buf, byteOrder, mapLen); err != nil {
+		return nil, err
+	}
+
+	for k, v := range a.data {
+		if err := binary.Write(&buf, byteOrder, int64(k)); err != nil {
+			return nil, err
+		}
+		if err := binary.Write(&buf, byteOrder, int64(v)); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+func (a *testApp) RestoreFromSnapshot(data []byte) (error, int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	reader := bytes.NewReader(data)
+	byteOrder := binary.LittleEndian
+
+	var mapLen int32
+	if err := binary.Read(reader, byteOrder, &mapLen); err != nil {
+		return err, 0
+	}
+	newMap := make(map[int]int)
+	var saveKeyValue int
+	var saveValue int
+
+	for i := 0; i < int(mapLen); i++ {
+		var k64, v64 int64
+		if err := binary.Read(reader, byteOrder, &k64); err != nil {
+			return err, 0
+		}
+		if err := binary.Read(reader, byteOrder, &v64); err != nil {
+			return err, 0
+		}
+		saveKeyValue = int(k64)
+		saveValue = int(v64)
+		newMap[int(k64)] = int(v64)
+	}
+	a.data = newMap
+	slog.Info(fmt.Sprintf("Restore from snapshot in test app, saved key %d and its value %d vs value in the map %d", saveKeyValue, saveValue, a.data[saveKeyValue]))
+	return nil, saveKeyValue
+}
+
+func (a *testApp) GetValue(key int) int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.data[key]
+}
+
 func intPtr(i int) *int { return &i }
 
 type mockPeerClient struct{ mock.Mock }
@@ -74,16 +141,24 @@ func (m *mockPeerClient) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emp
 	args := m.Called(ctx, in)
 	return args.Get(0).(*emptypb.Empty), args.Error(1)
 }
+func (m *mockPeerClient) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
+	args := m.Called(ctx, in)
+	return args.Get(0).(*raftpb.InstallSnapshotResponse), args.Error(1)
+}
 
 func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
 	t.Helper()
 	app := newTestApp()
 	tmpDir := t.TempDir()
+	fn := filepath.Join(tmpDir, fmt.Sprintf("node-%d", id))
 	cfg := &Config{
-		valuesFilename: filepath.Join(tmpDir, fmt.Sprintf("node-%d.data", id)),
-		totalNodes:     totalNodes,
-		raftId:         id,
-		raftAddrs:      make([]string, totalNodes),
+		logsFilename:      fn + ".logs",
+		metadataFilename:  fn + ".meta",
+		snapshotFilename:  fn + ".snap",
+		totalNodes:        totalNodes,
+		raftId:            id,
+		raftAddrs:         make([]string, totalNodes),
+		snapshotThreshold: SNAPSHOT_THRESHOLD,
 	}
 	r := &Raft{
 		id:              id,
@@ -99,11 +174,14 @@ func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
 		ackedLengths:    make([]int, totalNodes),
 		application:     app,
 	}
+	r.heartbeat = newHeartbeat(r)
+	close(r.heartbeat.cancelTimerCh)
 	r.logSaver = NewRaftDataSaver(r, cfg)
 	r.raftElector = NewRaftElector(r)
 	close(r.raftElector.cancelTimerCh)
 	r.logReplicator = NewRaftLogReplicator(r)
 	close(r.logReplicator.cancelLogReplicateCh)
+	r.snapshotter = newSnapshotter(cfg)
 
 	initial := make([]PeerClient, totalNodes)
 	r.setPeers(initial)
@@ -126,6 +204,10 @@ func createClusterMocks(t *testing.T, size int) ([]*Raft, []*mockPeerClient) {
 				Ack:         0,
 				Success:     false,
 			}, nil).
+			Maybe()
+		mocks[i].
+			On("Heartbeat", mock.Anything, mock.Anything).
+			Return(&emptypb.Empty{}, nil).
 			Maybe()
 	}
 	peers := make([]PeerClient, size)
@@ -152,6 +234,9 @@ func (p *inMemPeer) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (
 func (p *inMemPeer) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error) {
 	return p.r.Heartbeat(ctx, in)
 }
+func (p *inMemPeer) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
+	return p.r.InstallSnapshot(ctx, in)
+}
 
 func createCluster(t testing.TB, n int) []*Raft {
 	t.Helper()
@@ -162,12 +247,15 @@ func createCluster(t testing.TB, n int) []*Raft {
 	nodes := make([]*Raft, n)
 	for id := 0; id < n; id++ {
 		tmp := t.TempDir()
-		fn := filepath.Join(tmp, fmt.Sprintf("node-%d.data", id))
+		fn := filepath.Join(tmp, fmt.Sprintf("node-%d", id))
 		cfg := &Config{
-			valuesFilename: fn,
-			totalNodes:     n,
-			raftId:         id,
-			raftAddrs:      make([]string, n),
+			logsFilename:      fn + ".logs",
+			metadataFilename:  fn + ".meta",
+			snapshotFilename:  fn + ".snap",
+			totalNodes:        n,
+			raftId:            id,
+			raftAddrs:         make([]string, n),
+			snapshotThreshold: SNAPSHOT_THRESHOLD,
 		}
 		r := &Raft{
 			id:              id,
@@ -183,9 +271,11 @@ func createCluster(t testing.TB, n int) []*Raft {
 			ackedLengths:    make([]int, n),
 			application:     apps[id],
 		}
+		r.heartbeat = newHeartbeat(r)
 		r.logSaver = NewRaftDataSaver(r, cfg)
 		r.raftElector = NewRaftElector(r)
 		r.logReplicator = NewRaftLogReplicator(r)
+		r.snapshotter = newSnapshotter(cfg)
 		nodes[id] = r
 	}
 	peers := make([]PeerClient, n)

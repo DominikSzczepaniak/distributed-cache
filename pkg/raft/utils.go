@@ -11,6 +11,9 @@ func (r *Raft) getPeers() []PeerClient {
 }
 
 func (r *Raft) getPeer(id int) PeerClient {
+	if id == -1 {
+		return nil
+	}
 	return r.peers.Load().([]PeerClient)[id]
 }
 
@@ -27,6 +30,7 @@ func (r *Raft) becomeFollower(term int) {
 	r.currentRole = Follower
 	r.currentTerm = term
 	r.votedFor = -1
+	r.currentLeaderId = -1
 
 	if r.replicators != nil {
 		for _, rep := range r.replicators {
@@ -49,10 +53,28 @@ func (r *Raft) becomeLeader() {
 		if followerId == r.id {
 			continue
 		}
-		r.sentLengths[followerId] = len(r.log)
+		lastLogIndex := r.snapshotter.lastIndex + len(r.log)
+		r.sentLengths[followerId] = lastLogIndex + 1
 		r.ackedLengths[followerId] = 0
 
 		r.replicators[followerId] = NewReplicator(r, followerId)
 		r.replicators[followerId].start()
 	}
+}
+
+func (r *Raft) getLastLogTerm() int {
+	if len(r.log) > 0 {
+		return r.log[len(r.log)-1].Term
+	} else if len(r.log) == 0 && r.snapshotter.lastIndex > 0 {
+		return r.snapshotter.lastTerm
+	}
+	return 0
+}
+
+func (r *Raft) getLeaderData() (bool, int) {
+	r.mu.RLock()
+	isLeader := r.currentRole == Leader
+	leaderID := r.currentLeaderId
+	r.mu.RUnlock()
+	return isLeader, leaderID
 }

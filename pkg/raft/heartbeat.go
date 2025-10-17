@@ -14,30 +14,33 @@ type Heartbeat struct {
 }
 
 func newHeartbeat(parent *Raft) *Heartbeat {
-	return &Heartbeat{
+	heartbeat := &Heartbeat{
 		parent:        parent,
 		resetTimerCh:  make(chan struct{}, 1),
 		cancelTimerCh: make(chan struct{}, 1),
-		timeout:       20 * time.Millisecond, //TODO might be too aggressive for network
+		timeout:       100 * time.Millisecond,
 	}
+	go heartbeat.heartbeatLoop()
+	return heartbeat
 }
 
 func (h *Heartbeat) sendHeartbeat() {
-	for i := range h.parent.totalNodes {
+	for i := 0; i < h.parent.totalNodes; i++ {
 		if i == h.parent.id {
 			continue
 		}
 
 		peer := h.parent.getPeer(i)
-
-		go func() {
+		if peer == nil {
+			continue
+		}
+		go func(p PeerClient) {
 			ctx, cancel := context.WithTimeout(context.Background(), h.timeout)
 			defer cancel()
 			args := &emptypb.Empty{}
 
-			_, _ = peer.Heartbeat(ctx, args)
-
-		}()
+			_, _ = p.Heartbeat(ctx, args)
+		}(peer)
 	}
 }
 
@@ -61,9 +64,9 @@ func (h *Heartbeat) heartbeatLoop() {
 			timer.Reset(h.timeout)
 
 		case <-timer.C:
-			h.parent.mu.RLock()
+			//h.parent.mu.RLock()
 			isLeader := h.parent.currentRole == Leader
-			h.parent.mu.RUnlock()
+			//h.parent.mu.RUnlock()
 			if isLeader {
 				h.sendHeartbeat()
 			}

@@ -2,8 +2,8 @@ package raft
 
 import (
 	"context"
-	//"fmt"
-	//"log/slog"
+	"fmt"
+	"log/slog"
 	"math/rand"
 	"time"
 
@@ -80,17 +80,53 @@ func (rl *LogReplicator) logReplicateLoop() {
 }
 
 func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
-	//slog.Info(fmt.Sprintf("Preparing log request for leader %d", r.id))
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
-	prefixLen := r.sentLengths[followerId]
-	suffix := r.log[prefixLen:]
-	prefixTerm := 0
-	if prefixLen > 0 {
-		prefixTerm = r.log[prefixLen-1].Term
+	nextIndex := r.sentLengths[followerId]
+	if nextIndex == 0 {
+		nextIndex = r.snapshotter.lastIndex + len(r.log) + 1
 	}
-
+	if nextIndex <= r.snapshotter.lastIndex {
+		slog.Info(fmt.Sprintf(
+			"InstallSnapshot from %d to %d: nextIndex=%d, snapshot.lastIndex=%d",
+			r.id, followerId, nextIndex, r.snapshotter.lastIndex,
+		))
+		go r.sendInstallSnapshotRPC(followerId)
+		return &raftpb.LogRequestArgs{
+			LeaderId: int32(r.id),
+			Term:     int32(r.currentTerm),
+		}
+	}
+	prevIndex := nextIndex - 1
+	var prevTerm int
+	switch {
+	case prevIndex == 0:
+		prevTerm = 0
+	case prevIndex == r.snapshotter.lastIndex:
+		prevTerm = r.snapshotter.lastTerm
+	default:
+		rel := prevIndex - r.snapshotter.lastIndex - 1
+		if rel < 0 || rel >= len(r.log) {
+			slog.Info(fmt.Sprintf(
+				"InstallSnapshot from %d to %d: rel=%d logLen=%d (prevIndex=%d, snapLast=%d)",
+				r.id, followerId, rel, len(r.log), prevIndex, r.snapshotter.lastIndex,
+			))
+			go r.sendInstallSnapshotRPC(followerId)
+			return &raftpb.LogRequestArgs{
+				LeaderId: int32(r.id),
+				Term:     int32(r.currentTerm),
+			}
+		}
+		prevTerm = r.log[rel].Term
+	}
+	start := nextIndex - r.snapshotter.lastIndex - 1
+	if start < 0 {
+		start = 0
+	}
+	if start > len(r.log) {
+		start = len(r.log)
+	}
+	suffix := r.log[start:]
 	pbSuffix := make([]*raftpb.LogEntry, len(suffix))
 	for i, e := range suffix {
 		var val *wrapperspb.Int32Value
@@ -106,30 +142,22 @@ func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 			},
 		}
 	}
-	//slog.Info(fmt.Sprintf("Preparing log request for follower %d finished", followerId))
 	return &raftpb.LogRequestArgs{
 		LeaderId:     int32(r.id),
 		Term:         int32(r.currentTerm),
-		PrefixLen:    int32(prefixLen),
-		PrefixTerm:   int32(prefixTerm),
+		PrefixLen:    int32(prevIndex),
+		PrefixTerm:   int32(prevTerm),
 		CommitLength: int32(r.commitedLength),
 		Suffix:       pbSuffix,
 	}
 }
 
 func (r *Raft) replicateLog(id, followerId int) {
-	//r.mu.RLock()
-	//currentRole := r.currentRole
-	//r.mu.RUnlock()
-
-	//slog.Info(fmt.Sprintf("Replicating log from %d to %d, node role: %s", id, followerId, currentRole))
 	retryCh := make(chan int)
 	done := make(chan struct{})
 	go r.retryAppendEntries(retryCh, done)
 
-	r.mu.RLock()
-	isLeader := r.currentRole == Leader
-	r.mu.RUnlock()
+	isLeader, _ := r.getLeaderData()
 
 	if isLeader {
 		r.handleReplicateLog(followerId, retryCh, done)
@@ -138,12 +166,9 @@ func (r *Raft) replicateLog(id, followerId int) {
 	for {
 		select {
 		case peerId := <-retryCh:
-			r.mu.RLock()
-			isLeader := r.currentRole == Leader
-			r.mu.RUnlock()
+			isLeader, _ := r.getLeaderData()
 
 			if !isLeader {
-				//slog.Info("lost leadership, stopping replicateLog")
 				close(done)
 				return
 			}
@@ -156,28 +181,19 @@ func (r *Raft) replicateLog(id, followerId int) {
 }
 
 func (r *Raft) handleReplicateLog(followerId int, retryCh chan<- int, done chan struct{}) {
-	r.mu.RLock()
-	isLeader := r.currentRole == Leader
-	r.mu.RUnlock()
+	isLeader, _ := r.getLeaderData()
 
 	if !isLeader {
-		//slog.Info("Node is not a leader, returning")
 		return
 	}
 	args := r.prepareLogRequestArgs(followerId)
-	//slog.Info(fmt.Sprintf("Prepared log for replication from %d to %d", r.id, followerId))
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
-		//slog.Info(fmt.Sprintf("Logs for leader %d", r.id))
-		//for _, log := range r.log {
-		//	slog.Info(fmt.Sprintf("term: %d, msgType: %s, key: %d, value: %d", log.term, log.message.msgType, log.message.key, *log.message.value))
-		//}
 
 		peer := r.getPeer(followerId)
 		resp, err := peer.LogRequest(ctx, args)
 		if err != nil {
-			//slog.Error(err.Error())
 			retryCh <- followerId
 			return
 		}

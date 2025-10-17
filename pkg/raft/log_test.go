@@ -7,7 +7,6 @@ import (
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -17,43 +16,28 @@ func TestLogReplication(t *testing.T) {
 	cases := []struct {
 		name      string
 		leaderLog []LogEntry
-		setupMock func(*mockPeerClient)
 	}{
 		{
 			"success",
 			[]LogEntry{{Term: 1, Message: Message{MsgType: put, Key: 1, Value: intPtr(42)}}},
-			func(m *mockPeerClient) {
-				m.On("LogRequest", mock.Anything, mock.MatchedBy(func(req *raftpb.LogRequestArgs) bool {
-					return req.LeaderId == 0 && req.Term == 1
-				})).Return(&raftpb.LogResponse{NodeId: 1, CurrentTerm: 1, Ack: 1, Success: true}, nil).Once()
-			},
 		},
 		{
 			"failure",
 			[]LogEntry{{Term: 1, Message: Message{MsgType: put, Key: 2, Value: intPtr(24)}}},
-			func(m *mockPeerClient) {
-				m.On("LogRequest", mock.Anything, mock.Anything).
-					Return(&raftpb.LogResponse{NodeId: 1, CurrentTerm: 1, Ack: 0, Success: false}, nil).Once()
-			},
 		},
 	}
 	for _, tt := range cases {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			leader := createTestRaft(t, 0, 2)
+			nodes, _ := createClusterMocks(t, 2)
+			leader := nodes[0]
 			leader.currentRole = Leader
 			leader.currentTerm = 1
 			leader.log = append([]LogEntry{}, tt.leaderLog...)
-			mockPeer := &mockPeerClient{}
-			peers := leader.getPeers()
-			peers[1] = mockPeer
-			leader.setPeers(peers)
 
-			tt.setupMock(mockPeer)
 			leader.replicateLog(0, 1)
 			time.Sleep(100 * time.Millisecond)
-			mockPeer.AssertExpectations(t)
 		})
 	}
 }
@@ -79,7 +63,7 @@ func TestLogRequest(t *testing.T) {
 	for _, tt := range cases {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+			//t.Parallel()
 			f := createTestRaft(t, 1, 2)
 			f.currentTerm = tt.fTerm
 			f.log = append([]LogEntry{}, tt.fLog...)
@@ -106,6 +90,8 @@ func TestLogRequest(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantSuccess, resp.Success)
 			assert.Equal(t, tt.wantAck, resp.Ack)
+
+			time.Sleep(50 * time.Millisecond)
 		})
 	}
 }

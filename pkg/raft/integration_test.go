@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"math/rand"
 	"path/filepath"
 	"testing"
 	"time"
@@ -80,7 +81,7 @@ func TestRaftRecovery(t *testing.T) {
 	}
 	node1 := &Raft{id: 0, totalNodes: 3, currentTerm: 2, votedFor: 1,
 		log: initLogs, commitedLength: 2, application: app1}
-	s := NewRaftDataSaver(node1, &Config{valuesFilename: fn, totalNodes: 3, raftId: 0})
+	s := NewRaftDataSaver(node1, &Config{logsFilename: fn, metadataFilename: fn + ".meta", snapshotFilename: fn + ".snap", totalNodes: 3, raftId: 0})
 
 	node1.mu.Lock()
 	node1.currentTerm = 2
@@ -93,7 +94,7 @@ func TestRaftRecovery(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	app2 := newTestApp()
-	node2 := NewRaft(app2, &Config{valuesFilename: fn, totalNodes: 3, raftId: 0, raftAddrs: make([]string, 3)})
+	node2 := NewRaft(app2, &Config{logsFilename: fn, metadataFilename: fn + ".meta", snapshotFilename: fn + ".snap", totalNodes: 3, raftId: 0, raftAddrs: make([]string, 3)})
 	assert.Equal(t, 2, node2.currentTerm)
 	assert.Equal(t, 1, node2.votedFor)
 	assert.Equal(t, 2, node2.commitedLength)
@@ -114,7 +115,7 @@ func TestConcurrentOperations(t *testing.T) {
 		t.Skip("short")
 	}
 	nodes := createCluster(t, 3)
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(1000 * time.Millisecond)
 	var leader *Raft
 	for _, n := range nodes {
 		n.mu.RLock()
@@ -124,7 +125,8 @@ func TestConcurrentOperations(t *testing.T) {
 		n.mu.RUnlock()
 	}
 	require.NotNil(t, leader)
-	const nmsgs = 3000000
+	const nmsgs = 4_000_000
+	const num_keys = 100000
 	done := make(chan struct{}, nmsgs)
 	sem := make(chan int, 256)
 	for i := 0; i < nmsgs; i++ {
@@ -134,16 +136,22 @@ func TestConcurrentOperations(t *testing.T) {
 			leader.Broadcast(Message{MsgType: put, Key: key, Value: &val})
 			done <- struct{}{}
 			<-sem
-		}(i)
+		}(rand.Intn(num_keys))
 	}
 	for i := 0; i < nmsgs; i++ {
 		<-done
 	}
 	time.Sleep(2 * time.Second)
 	for _, n := range nodes {
-		data := n.application.(*testApp).getData()
-		for i := 0; i < nmsgs; i++ {
-			assert.Equal(t, i*2, data[i])
+		//data := n.application.(*testApp).getData()
+		for i := 0; i < num_keys; i++ {
+			assert.Equal(t, i*2, n.application.GetValue(i))
 		}
 	}
 }
+
+//2. install snapshot wysylac w patchach (multipart)
+//3. elekcja lidera jest na innym mutexie????
+//4. akceptuj log w miedzyczasie i JAK SIE SKONCZY SNAPSHOT zaaplikuj operacje z loga
+
+//PRZEGLAD LITERATURY

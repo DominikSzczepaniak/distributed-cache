@@ -14,6 +14,7 @@ type DataSaver struct {
 	parent             *Raft
 	logsFilename       string
 	metadataFilename   string
+	snapshotFilename   string
 	previousSavedIndex int
 
 	mu sync.Mutex
@@ -32,8 +33,9 @@ type DataSaverFunctions interface {
 func NewRaftDataSaver(r *Raft, cfg *Config) *DataSaver {
 	return &DataSaver{
 		parent:             r,
-		logsFilename:       cfg.valuesFilename,
-		metadataFilename:   cfg.valuesFilename + ".meta",
+		logsFilename:       cfg.logsFilename,
+		metadataFilename:   cfg.metadataFilename,
+		snapshotFilename:   cfg.snapshotFilename,
 		previousSavedIndex: 0,
 	}
 }
@@ -101,7 +103,7 @@ func (rds *DataSaver) saveMetadata(currentTerm, votedFor, committedLength int, f
 	return nil
 }
 
-func (rds *DataSaver) handleLogFileExistanceAndCreation(path string) (*os.File, error) {
+func (rds *DataSaver) handleFileExistanceAndCreation(path string) (*os.File, error) {
 	dir := filepath.Dir(path)
 	if err := ensureDir(dir); err != nil {
 		return nil, fmt.Errorf("ensure values dir %q: %w", dir, err)
@@ -123,7 +125,7 @@ func (rds *DataSaver) saveValuesManager(
 	currentTerm, votedFor, committedLength int,
 	logs []LogEntry,
 ) (bool, error) {
-	logFile, err := rds.handleLogFileExistanceAndCreation(rds.logsFilename)
+	logFile, err := rds.handleFileExistanceAndCreation(rds.logsFilename)
 	if err != nil {
 		fmt.Println("Failed to create logs file, error: ", err)
 		return false, err
@@ -147,7 +149,6 @@ func (rds *DataSaver) saveValuesManager(
 		fmt.Println("Failed to save logs, error: ", err)
 		return false, err
 	}
-	// rds.previousSavedIndex += savedLines
 
 	return true, nil
 }
@@ -157,10 +158,15 @@ func (rds *DataSaver) SaveValues() (bool, error) {
 	rds.mu.Lock()
 	defer rds.mu.Unlock()
 	rds.parent.mu.RLock()
+
 	if rds.previousSavedIndex > len(rds.parent.log) {
 		rds.previousSavedIndex = len(rds.parent.log)
 	}
 	idx := rds.previousSavedIndex
+	if idx == len(rds.parent.log) {
+		rds.parent.mu.RUnlock()
+		return false, nil
+	}
 
 	currentTerm := rds.parent.currentTerm
 	votedFor := rds.parent.votedFor
@@ -171,10 +177,6 @@ func (rds *DataSaver) SaveValues() (bool, error) {
 	logCopy := make([]LogEntry, len(src))
 	copy(logCopy, src)
 	rds.parent.mu.RUnlock()
-
-	// if len(logCopy) == 0 && currentTerm == 0{
-	// 	return false, nil
-	// }
 
 	ok, err := rds.saveValuesManager(
 		currentTerm,

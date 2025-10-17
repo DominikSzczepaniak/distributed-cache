@@ -3,8 +3,8 @@ package raft
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
-	//"log/slog"
 	"math/rand"
 	"time"
 
@@ -28,8 +28,8 @@ func NewRaftElector(r *Raft) *Elector {
 		parent: r,
 		rnd:    rand.New(src),
 
-		minElectionTimeout: 100 * time.Millisecond,
-		maxElectionTimeout: 300 * time.Millisecond,
+		minElectionTimeout: 400 * time.Millisecond,
+		maxElectionTimeout: 800 * time.Millisecond,
 
 		resetTimerCh:  make(chan struct{}, 1),
 		cancelTimerCh: make(chan struct{}),
@@ -40,7 +40,7 @@ func NewRaftElector(r *Raft) *Elector {
 
 func (re *Elector) nextTimeout() time.Duration {
 	return re.minElectionTimeout +
-		time.Duration(rand.Int63n(int64(re.maxElectionTimeout-re.minElectionTimeout)))
+		time.Duration(re.rnd.Int63n(int64(re.maxElectionTimeout-re.minElectionTimeout)))
 }
 
 func (re *Elector) electionTimerLoop() {
@@ -61,8 +61,10 @@ func (re *Elector) electionTimerLoop() {
 		case <-timer.C:
 			re.parent.mu.RLock()
 			isLeader := re.parent.currentRole == Leader
+			isSnapshotWriting := re.parent.snapshotter.installingSnapshot
 			re.parent.mu.RUnlock()
-			if !isLeader {
+			if !isLeader && !isSnapshotWriting {
+				slog.Info(fmt.Sprintf("Starting election for node %d, because isLeader is %t and snapshot is writing is %t", re.parent.id, isLeader, isSnapshotWriting))
 				re.parent.startElection()
 			}
 			timer.Reset(re.nextTimeout())
@@ -76,7 +78,6 @@ func (re *Elector) electionTimerLoop() {
 func (re *Elector) ResetTimer() {
 	select {
 	case re.resetTimerCh <- struct{}{}:
-		//slog.Info(fmt.Sprintf("Restarted timer for %d", re.parent.id))
 	default:
 	}
 }
@@ -91,13 +92,11 @@ func (r *Raft) startElection() {
 	r.votedFor = r.id
 	r.votesReceived = mapset.NewSet[int]()
 	r.votesReceived.Add(r.id)
+	r.currentLeaderId = -1
 
-	logTerm := 0
-	if len(r.log) > 0 {
-		logTerm = r.log[len(r.log)-1].Term
-	}
+	logTerm := r.getLastLogTerm()
 
-	voteData := VoteRequestData{r.id, r.currentTerm, len(r.log), logTerm}
+	voteData := VoteRequestData{r.id, r.currentTerm, len(r.log) + r.snapshotter.lastIndex, logTerm}
 	totalNodes := r.totalNodes
 
 	r.mu.Unlock()
@@ -124,11 +123,9 @@ func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
 			CandidateLogTerm:   int32(data.candidateLogTerm),
 		})
 		if err != nil {
-			//slog.Error(fmt.Sprintf("Vote request failed %s", err))
 			return
 		}
 
-		//slog.Info(fmt.Sprintf("Got vote response on node %d, granted %t\n", nodeId, resp.Granted))
 		r.receiveVote(VoteResponse{int(resp.NodeId), int(resp.CurrentTerm), resp.Granted})
 	}()
 }

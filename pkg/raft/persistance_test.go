@@ -1,6 +1,7 @@
 package raft
 
 import (
+	mapset "github.com/deckarep/golang-set/v2"
 	"os"
 	"path/filepath"
 	"testing"
@@ -45,12 +46,30 @@ func TestDataSaver_SaveLoad(t *testing.T) {
 			dir := t.TempDir()
 			fn := filepath.Join(dir, "s.data")
 
-			node := createTestRaft(t, 0, 3)
+			app := newTestApp()
 			cfg := &Config{
-				valuesFilename: fn,
-				totalNodes:     3,
-				raftId:         0,
+				logsFilename:     fn,
+				metadataFilename: fn + ".meta",
+				snapshotFilename: fn + ".snap",
+				totalNodes:       3,
+				raftId:           0,
 			}
+
+			node := &Raft{
+				id:              0,
+				totalNodes:      3,
+				currentTerm:     0,
+				votedFor:        -1,
+				log:             []LogEntry{},
+				commitedLength:  0,
+				currentRole:     Follower,
+				currentLeaderId: -1,
+				votesReceived:   mapset.NewSet[int](),
+				sentLengths:     make([]int, 3),
+				ackedLengths:    make([]int, 3),
+				application:     app,
+			}
+			node.snapshotter = newSnapshotter(cfg)
 			s := NewRaftDataSaver(node, cfg)
 
 			node.mu.Lock()
@@ -63,15 +82,19 @@ func TestDataSaver_SaveLoad(t *testing.T) {
 
 			// save & load
 			ok, err := s.SaveValues()
+			if !ok {
+				assert.Nil(t, tt.logs, "SaveValues returns false when logs are empty")
+				return
+			}
 			require.NoError(t, err)
 			assert.True(t, ok, "SaveValues should succeed")
 
 			term, vf, cl, loaded, err := s.LoadValues()
 			require.NoError(t, err)
 
-			assert.Equal(t, int(tt.currTerm), term)
-			assert.Equal(t, int(tt.votedFor), vf)
-			assert.Equal(t, int(tt.commitLen), cl)
+			assert.Equal(t, tt.currTerm, term)
+			assert.Equal(t, tt.votedFor, vf)
+			assert.Equal(t, tt.commitLen, cl)
 			assert.Equal(t, len(tt.logs), len(loaded))
 
 			for i := range tt.logs {
@@ -93,10 +116,13 @@ func TestDataSaver_SaveLoad(t *testing.T) {
 func TestDataSaver_InvalidPath(t *testing.T) {
 	t.Parallel()
 	node := createTestRaft(t, 0, 3)
+	fn := "/invalid/path/nope.data"
 	cfg := &Config{
-		valuesFilename: "/invalid/path/nope.data",
-		totalNodes:     3,
-		raftId:         0,
+		logsFilename:     fn,
+		metadataFilename: fn + ".meta",
+		snapshotFilename: fn + ".snap",
+		totalNodes:       3,
+		raftId:           0,
 	}
 	s := NewRaftDataSaver(node, cfg)
 
@@ -105,7 +131,9 @@ func TestDataSaver_InvalidPath(t *testing.T) {
 	node.currentTerm = 1
 	node.votedFor = 0
 	node.commitedLength = 0
-	node.log = nil
+	node.log = []LogEntry{
+		{Term: 1, Message: Message{MsgType: put, Key: 1, Value: intPtr(42)}},
+	}
 	node.mu.Unlock()
 
 	ok, err := s.SaveValues()
@@ -123,9 +151,9 @@ func TestDataSaver_CorruptedFile(t *testing.T) {
 
 	node := createTestRaft(t, 0, 3)
 	cfg := &Config{
-		valuesFilename: fn,
-		totalNodes:     3,
-		raftId:         0,
+		logsFilename: fn, metadataFilename: fn + ".meta", snapshotFilename: fn + ".snap",
+		totalNodes: 3,
+		raftId:     0,
 	}
 	s := NewRaftDataSaver(node, cfg)
 
