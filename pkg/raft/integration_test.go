@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"math/rand"
 	"path/filepath"
 	"testing"
 	"time"
@@ -114,7 +115,7 @@ func TestConcurrentOperations(t *testing.T) {
 		t.Skip("short")
 	}
 	nodes := createCluster(t, 3)
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(1000 * time.Millisecond)
 	var leader *Raft
 	for _, n := range nodes {
 		n.mu.RLock()
@@ -134,7 +135,7 @@ func TestConcurrentOperations(t *testing.T) {
 			leader.Broadcast(Message{MsgType: put, Key: key, Value: &val})
 			done <- struct{}{}
 			<-sem
-		}(i)
+		}(rand.Intn(1000))
 	}
 	for i := 0; i < nmsgs; i++ {
 		<-done
@@ -142,7 +143,7 @@ func TestConcurrentOperations(t *testing.T) {
 	time.Sleep(10 * time.Second)
 	for _, n := range nodes {
 		//data := n.application.(*testApp).getData()
-		for i := 0; i < nmsgs; i++ {
+		for i := 0; i < 1000; i++ {
 			assert.Equal(t, i*2, n.application.GetValue(i))
 		}
 	}

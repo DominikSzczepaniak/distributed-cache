@@ -170,6 +170,7 @@ func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
 		ackedLengths:    make([]int, totalNodes),
 		application:     app,
 	}
+	r.heartbeat = newHeartbeat(r)
 	r.logSaver = NewRaftDataSaver(r, cfg)
 	r.raftElector = NewRaftElector(r)
 	close(r.raftElector.cancelTimerCh)
@@ -261,6 +262,7 @@ func createCluster(t testing.TB, n int) []*Raft {
 			ackedLengths:    make([]int, n),
 			application:     apps[id],
 		}
+		r.heartbeat = newHeartbeat(r)
 		r.logSaver = NewRaftDataSaver(r, cfg)
 		r.raftElector = NewRaftElector(r)
 		r.logReplicator = NewRaftLogReplicator(r)
