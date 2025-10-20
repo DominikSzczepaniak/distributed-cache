@@ -125,7 +125,7 @@ func TestConcurrentOperations(t *testing.T) {
 		n.mu.RUnlock()
 	}
 	require.NotNil(t, leader)
-	const nmsgs = 4_000_000
+	const nmsgs = 8_000_000
 	const num_keys = 100000
 	done := make(chan struct{}, nmsgs)
 	sem := make(chan int, 256)

@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+	"io"
 	"log/slog"
 	"math"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -270,52 +272,91 @@ func (r *Raft) commitLogEntries() {
 		r.mu.Lock()
 	}
 }
-
 func (r *Raft) sendInstallSnapshotRPC(followerId int) {
+	const chunkSize = 128 * 1024
+
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	slog.Info(fmt.Sprintf("Follower %d is too far behind. Sending snapshot.", followerId))
+	slog.Info(fmt.Sprintf("Follower %d is too far behind. Sending snapshot in blocks.", followerId))
 
 	peer := r.getPeer(followerId)
-
 	lastIndex := r.snapshotter.lastIndex
 	lastTerm := r.snapshotter.lastTerm
 	currentTerm := r.currentTerm
 	leaderId := r.id
+	snapPath := r.logSaver.snapshotFilename
+	r.mu.Unlock()
 
-	snapshotData, err := r.logSaver.ReadSnapshotData()
+	f, err := os.Open(snapPath)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Failed to read snapshot data for follower %d: %v", followerId, err))
+		slog.Error(fmt.Sprintf("Failed to open snapshot file for follower %d: %v", followerId, err))
 		return
 	}
+	defer f.Close()
 
-	request := &raftpb.InstallSnapshotRequest{
-		LeaderTerm:        int32(currentTerm),
-		LeaderId:          int32(leaderId),
-		LastIncludedIndex: int32(lastIndex),
-		LastIncludedTerm:  int32(lastTerm),
-		Offset:            0,
-		Data:              snapshotData,
-		Done:              true,
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*600)
-	defer cancel()
-	resp, err := peer.InstallSnapshot(ctx, request)
+	stat, err := f.Stat()
 	if err != nil {
-		slog.Warn(fmt.Sprintf("InstallSnapshot RPC to follower %d failed: %v", followerId, err))
+		slog.Error(fmt.Sprintf("Failed to stat snapshot file for follower %d: %v", followerId, err))
 		return
 	}
+	totalSize := int(stat.Size())
 
-	if int(resp.Term) > r.currentTerm {
-		r.currentTerm = int(resp.Term)
-		r.currentRole = Follower
-		r.votedFor = -1
-		go r.raftElector.ResetTimer()
-		return
+	buf := make([]byte, chunkSize)
+	offset := 0
+
+	for {
+		n, readErr := f.Read(buf)
+		if n == 0 && readErr == io.EOF {
+			break
+		}
+		if readErr != nil && readErr != io.EOF {
+			slog.Error(fmt.Sprintf("Error reading snapshot file for follower %d: %v", followerId, readErr))
+			return
+		}
+
+		done := (offset + n) >= totalSize
+		dataChunk := append([]byte(nil), buf[:n]...)
+
+		req := &raftpb.InstallSnapshotRequest{
+			LeaderTerm:        int32(currentTerm),
+			LeaderId:          int32(leaderId),
+			LastIncludedIndex: int32(lastIndex),
+			LastIncludedTerm:  int32(lastTerm),
+			Offset:            int32(offset),
+			Data:              dataChunk,
+			Done:              done,
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+		resp, err := peer.InstallSnapshot(ctx, req)
+		cancel()
+		if err != nil {
+			slog.Warn(fmt.Sprintf("InstallSnapshot RPC to follower %d failed at offset %d: %v", followerId, offset, err))
+			return
+		}
+
+		if int(resp.Term) > r.currentTerm {
+			r.mu.Lock()
+			if int(resp.Term) > r.currentTerm {
+				r.currentTerm = int(resp.Term)
+				r.currentRole = Follower
+				r.votedFor = -1
+				go r.raftElector.ResetTimer()
+			}
+			r.mu.Unlock()
+			return
+		}
+
+		offset += n
+
+		if done {
+			break
+		}
 	}
 
+	r.mu.Lock()
 	r.sentLengths[followerId] = lastIndex + 1
 	r.ackedLengths[followerId] = lastIndex
-	slog.Info(fmt.Sprintf("Successfully installed snapshot on follower %d. Next index is now %d.", followerId, r.sentLengths[followerId]))
+	slog.Info(fmt.Sprintf("Successfully installed snapshot on follower %d (%d bytes in blocks). Next index is now %d.",
+		followerId, totalSize, r.sentLengths[followerId]))
+	r.mu.Unlock()
 }
