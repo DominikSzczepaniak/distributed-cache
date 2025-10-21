@@ -11,7 +11,6 @@ import (
 )
 
 func TestDataSaver_SaveLoad(t *testing.T) {
-	t.Parallel()
 	tests := []struct {
 		name      string
 		currTerm  int
@@ -19,13 +18,6 @@ func TestDataSaver_SaveLoad(t *testing.T) {
 		commitLen int
 		logs      []LogEntry
 	}{
-		{
-			name:      "empty",
-			currTerm:  0,
-			votedFor:  -1,
-			commitLen: 0,
-			logs:      nil,
-		},
 		{
 			name:      "with_data",
 			currTerm:  2,
@@ -80,14 +72,12 @@ func TestDataSaver_SaveLoad(t *testing.T) {
 			copy(node.log, tt.logs)
 			node.mu.Unlock()
 
-			// save & load
 			ok, err := s.SaveValues()
-			if !ok {
-				assert.Nil(t, tt.logs, "SaveValues returns false when logs are empty")
-				return
-			}
 			require.NoError(t, err)
 			assert.True(t, ok, "SaveValues should succeed")
+
+			saveErr := s.WaitForPendingSaves()
+			require.NoError(t, saveErr)
 
 			term, vf, cl, loaded, err := s.LoadValues()
 			require.NoError(t, err)
@@ -113,6 +103,74 @@ func TestDataSaver_SaveLoad(t *testing.T) {
 	}
 }
 
+func TestDataSaver_SaveEmpty(t *testing.T) {
+	tests := []struct {
+		name      string
+		currTerm  int
+		votedFor  int
+		commitLen int
+		logs      []LogEntry
+	}{
+		{
+			name:      "empty",
+			currTerm:  0,
+			votedFor:  -1,
+			commitLen: 0,
+			logs:      []LogEntry{},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			fn := filepath.Join(dir, "s.data")
+
+			app := newTestApp()
+			cfg := &Config{
+				logsFilename:     fn,
+				metadataFilename: fn + ".meta",
+				snapshotFilename: fn + ".snap",
+				totalNodes:       3,
+				raftId:           0,
+			}
+
+			node := &Raft{
+				id:              0,
+				totalNodes:      3,
+				currentTerm:     0,
+				votedFor:        -1,
+				log:             []LogEntry{},
+				commitedLength:  0,
+				currentRole:     Follower,
+				currentLeaderId: -1,
+				votesReceived:   mapset.NewSet[int](),
+				sentLengths:     make([]int, 0),
+				ackedLengths:    make([]int, 0),
+				application:     app,
+			}
+			node.snapshotter = newSnapshotter(cfg)
+			s := NewRaftDataSaver(node, cfg)
+
+			node.mu.Lock()
+			node.currentTerm = tt.currTerm
+			node.votedFor = tt.votedFor
+			node.commitedLength = tt.commitLen
+			node.log = make([]LogEntry, len(tt.logs))
+			copy(node.log, tt.logs)
+			node.mu.Unlock()
+
+			ok, err := s.SaveValues()
+			require.NoError(t, err)
+			assert.True(t, ok, "SaveValues should succeed")
+
+			saveErr := s.WaitForPendingSaves()
+			require.NoError(t, saveErr)
+		})
+	}
+}
+
 func TestDataSaver_InvalidPath(t *testing.T) {
 	t.Parallel()
 	node := createTestRaft(t, 0, 3)
@@ -126,7 +184,6 @@ func TestDataSaver_InvalidPath(t *testing.T) {
 	}
 	s := NewRaftDataSaver(node, cfg)
 
-	// set minimal valid state
 	node.mu.Lock()
 	node.currentTerm = 1
 	node.votedFor = 0
@@ -136,9 +193,11 @@ func TestDataSaver_InvalidPath(t *testing.T) {
 	}
 	node.mu.Unlock()
 
-	ok, err := s.SaveValues()
-	assert.False(t, ok, "SaveValues should return ok=false on invalid path")
-	require.Error(t, err)
+	ok, _ := s.SaveValues()
+	require.True(t, ok, "SaveValues should queue request")
+
+	saveErr := s.WaitForPendingSaves()
+	assert.Error(t, saveErr, "Should fail on invalid path")
 }
 
 func TestDataSaver_CorruptedFile(t *testing.T) {

@@ -129,7 +129,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		r.currentTerm = term
 		r.votedFor = -1
 
-		go r.raftElector.ResetTimer()
+		r.raftElector.ResetTimer()
 	}
 	if r.currentTerm == term {
 		r.currentRole = Follower
@@ -207,7 +207,7 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 		r.currentRole = Follower
 		r.votedFor = -1
 
-		go r.raftElector.ResetTimer()
+		r.raftElector.ResetTimer()
 		toPersist = true
 	}
 	lastTerm := r.getLastLogTerm()
@@ -217,7 +217,7 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 		r.currentRole = Follower
 		r.currentLeaderId = -1
 
-		go r.raftElector.ResetTimer()
+		r.raftElector.ResetTimer()
 		currentTerm := r.currentTerm
 		r.mu.Unlock()
 		go r.logSaver.SaveValues()
@@ -246,14 +246,10 @@ func (r *Raft) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty
 }
 
 func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
-	go r.raftElector.ResetTimer()
+	r.raftElector.ResetTimer()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	slog.Info(fmt.Sprintf("Installing snapshot for node %d, setting installingSnapshot to true", r.id))
-	r.snapshotter.installingSnapshot = true
-	defer func() {
-		r.snapshotter.installingSnapshot = false
-	}()
 
 	defaultResponse := &raftpb.InstallSnapshotResponse{Term: int32(r.currentTerm)}
 	if int(in.LeaderTerm) < r.currentTerm {
@@ -263,7 +259,7 @@ func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRe
 		r.currentTerm = int(in.LeaderTerm)
 		r.currentRole = Follower
 		r.currentLeaderId = int(in.LeaderId)
-		go r.raftElector.ResetTimer()
+		r.raftElector.ResetTimer()
 	}
 	r.currentLeaderId = int(in.LeaderId)
 
@@ -306,7 +302,7 @@ func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRe
 	if r.commitedLength < lastIncludedIndex {
 		r.commitedLength = lastIncludedIndex
 	}
-	go r.raftElector.ResetTimer()
+	r.raftElector.ResetTimer()
 	go r.logSaver.SaveValues()
 	return defaultResponse, nil
 }

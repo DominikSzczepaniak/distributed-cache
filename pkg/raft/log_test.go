@@ -32,12 +32,43 @@ func TestLogReplication(t *testing.T) {
 			t.Parallel()
 			nodes, _ := createClusterMocks(t, 2)
 			leader := nodes[0]
+
+			leader.mu.Lock()
 			leader.currentRole = Leader
 			leader.currentTerm = 1
 			leader.log = append([]LogEntry{}, tt.leaderLog...)
 
-			leader.replicateLog(0, 1)
-			time.Sleep(100 * time.Millisecond)
+			// Initialize replicators (like becomeLeader does)
+			leader.replicators = make([]*Replicator, leader.totalNodes)
+			for followerId := 0; followerId < leader.totalNodes; followerId++ {
+				if followerId == leader.id {
+					continue
+				}
+				lastLogIndex := leader.snapshotter.lastIndex + len(leader.log)
+				leader.sentLengths[followerId] = lastLogIndex + 1
+				leader.ackedLengths[followerId] = 0
+
+				leader.replicators[followerId] = NewReplicator(leader, followerId)
+				leader.replicators[followerId].start()
+			}
+			leader.mu.Unlock()
+
+			// Signal replicators to replicate
+			for i := 0; i < leader.totalNodes; i++ {
+				if i != leader.id && leader.replicators[i] != nil {
+					leader.replicators[i].signal()
+				}
+			}
+			time.Sleep(200 * time.Millisecond)
+
+			// Cleanup: stop replicators
+			leader.mu.Lock()
+			for _, rep := range leader.replicators {
+				if rep != nil {
+					rep.stop()
+				}
+			}
+			leader.mu.Unlock()
 		})
 	}
 }
@@ -63,7 +94,6 @@ func TestLogRequest(t *testing.T) {
 	for _, tt := range cases {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			//t.Parallel()
 			f := createTestRaft(t, 1, 2)
 			f.currentTerm = tt.fTerm
 			f.log = append([]LogEntry{}, tt.fLog...)
@@ -99,15 +129,17 @@ func TestLogRequest(t *testing.T) {
 func TestLogCommitment(t *testing.T) {
 	t.Parallel()
 	leader := createTestRaft(t, 0, 3)
+	msg := Message{MsgType: put, Key: 1, Value: intPtr(42)}
+
+	leader.mu.Lock()
 	leader.currentRole = Leader
 	leader.currentTerm = 1
-	msg := Message{MsgType: put, Key: 1, Value: intPtr(42)}
 	leader.log = append(leader.log, LogEntry{Term: 1, Message: msg})
 	leader.ackedLengths[0] = 1
 	leader.ackedLengths[1] = 1
-	leader.mu.Lock()
 	leader.commitLogEntries()
 	leader.mu.Unlock()
+
 	assert.Equal(t, 1, leader.commitedLength)
 	data := leader.application.(*testApp).getData()
 	assert.Equal(t, 42, data[1])

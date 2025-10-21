@@ -19,6 +19,16 @@ type DataSaver struct {
 
 	mu sync.Mutex
 
+	saveQueue chan saveRequest
+	stopCh    chan struct{}
+
+	numWorkers int
+
+	pendingSaves sync.WaitGroup
+
+	lastSaveErr error
+	errMu       sync.Mutex
+
 	DataSaverFunctions
 }
 
@@ -30,14 +40,57 @@ type DataSaverFunctions interface {
 	loadLog() ([]LogEntry, error)
 }
 
+type saveRequest struct {
+}
+
 func NewRaftDataSaver(r *Raft, cfg *Config) *DataSaver {
-	return &DataSaver{
+	numWorkers := 4
+	ds := &DataSaver{
 		parent:             r,
 		logsFilename:       cfg.logsFilename,
 		metadataFilename:   cfg.metadataFilename,
 		snapshotFilename:   cfg.snapshotFilename,
 		previousSavedIndex: 0,
+		saveQueue:          make(chan saveRequest, 1024),
+		stopCh:             make(chan struct{}),
+		numWorkers:         numWorkers,
 	}
+	for i := 0; i < numWorkers; i++ {
+		go ds.saveWorker()
+	}
+	return ds
+}
+
+func (rds *DataSaver) saveWorker() {
+	for {
+		select {
+		case <-rds.saveQueue:
+			err := rds.doSaveValues()
+			rds.errMu.Lock()
+			rds.lastSaveErr = err
+			rds.errMu.Unlock()
+			rds.pendingSaves.Done()
+		case <-rds.stopCh:
+			return
+		}
+	}
+}
+
+func (rds *DataSaver) SaveValues() (bool, error) {
+	select {
+	case rds.saveQueue <- saveRequest{}:
+		rds.pendingSaves.Add(1)
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func (rds *DataSaver) WaitForPendingSaves() error {
+	rds.pendingSaves.Wait()
+	rds.errMu.Lock()
+	defer rds.errMu.Unlock()
+	return rds.lastSaveErr
 }
 
 func ensureDir(filename string) error {
@@ -153,7 +206,7 @@ func (rds *DataSaver) saveValuesManager(
 	return true, nil
 }
 
-func (rds *DataSaver) SaveValues() (bool, error) {
+func (rds *DataSaver) doSaveValues() error {
 
 	rds.mu.Lock()
 	defer rds.mu.Unlock()
@@ -165,7 +218,7 @@ func (rds *DataSaver) SaveValues() (bool, error) {
 	idx := rds.previousSavedIndex
 	if idx == len(rds.parent.log) {
 		rds.parent.mu.RUnlock()
-		return false, nil
+		return nil
 	}
 
 	currentTerm := rds.parent.currentTerm
@@ -185,7 +238,7 @@ func (rds *DataSaver) SaveValues() (bool, error) {
 		logCopy,
 	)
 	if err != nil || !ok {
-		return ok, err
+		return err
 	}
 	rds.parent.mu.RLock()
 	lengthNow := len(rds.parent.log)
@@ -196,7 +249,7 @@ func (rds *DataSaver) SaveValues() (bool, error) {
 		newIndex = lengthNow
 	}
 	rds.previousSavedIndex = newIndex
-	return true, nil
+	return nil
 }
 
 // ------
