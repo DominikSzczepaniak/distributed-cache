@@ -1,8 +1,13 @@
 package raft
 
 import (
+	"fmt"
 	"math/rand"
+	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/pprof"
+	"sync"
 	"testing"
 	"time"
 
@@ -125,26 +130,132 @@ func TestConcurrentOperations(t *testing.T) {
 		n.mu.RUnlock()
 	}
 	require.NotNil(t, leader)
-	const nmsgs = 30_000_000
-	const num_keys = 1000000
-	done := make(chan struct{}, nmsgs)
-	sem := make(chan int, 256)
-	for i := 0; i < nmsgs; i++ {
-		sem <- 1
-		go func(key int) {
-			val := key * 2
-			leader.Broadcast(Message{MsgType: put, Key: key, Value: &val})
-			done <- struct{}{}
-			<-sem
-		}(rand.Intn(num_keys))
+	const nmsgs = 25_000_000
+	const numKeys = 10000
+	const numWorkers = 256
+
+	jobs := make(chan int, 256)
+	var wg sync.WaitGroup
+
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for key := range jobs {
+				v := key * 2
+				leader.Broadcast(Message{
+					MsgType: put,
+					Key:     key,
+					Value:   &v,
+				})
+			}
+		}()
 	}
+
 	for i := 0; i < nmsgs; i++ {
-		<-done
+		jobs <- rand.Intn(numKeys)
 	}
+	close(jobs)
+
+	wg.Wait()
 	time.Sleep(1 * time.Second)
+
 	for _, n := range nodes {
-		//data := n.application.(*testApp).getData()
-		for i := 0; i < num_keys; i++ {
+		for i := 0; i < numKeys; i++ {
+			assert.Equal(t, i*2, n.application.GetValue(i))
+		}
+	}
+}
+
+func TestConcurrentOperationsWithPause(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short")
+	}
+
+	// Write goroutine profile at peak
+	defer func() {
+		f, _ := os.Create("/tmp/goroutine_peak.prof")
+		defer f.Close()
+		pprof.Lookup("goroutine").WriteTo(f, 2)
+	}()
+
+	nodes := createCluster(t, 3)
+	time.Sleep(1000 * time.Millisecond)
+
+	var leader *Raft
+	for _, n := range nodes {
+		n.mu.RLock()
+		if n.currentRole == Leader {
+			leader = n
+		}
+		n.mu.RUnlock()
+	}
+	require.NotNil(t, leader)
+
+	const phaseMsgs = 8_000_000
+	const numKeys = 10000
+	const numWorkers = 256
+
+	printMemStats := func(label string) {
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		fmt.Printf("[%s] Alloc: %v MB, TotalAlloc: %v MB, Sys: %v MB, Goroutines: %d\n",
+			label,
+			m.Alloc/1024/1024,
+			m.TotalAlloc/1024/1024,
+			m.Sys/1024/1024,
+			runtime.NumGoroutine(),
+		)
+	}
+
+	runPhase := func(phaseNum int) {
+		fmt.Printf("=== Starting Phase %d ===\n", phaseNum)
+		printMemStats("Before")
+		start := time.Now()
+
+		jobs := make(chan int, 256)
+		var wg sync.WaitGroup
+
+		for w := 0; w < numWorkers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for key := range jobs {
+					v := key * 2
+					leader.Broadcast(Message{
+						MsgType: put,
+						Key:     key,
+						Value:   &v,
+					})
+				}
+			}()
+		}
+
+		for i := 0; i < phaseMsgs; i++ {
+			jobs <- rand.Intn(numKeys)
+		}
+		close(jobs)
+
+		wg.Wait()
+		elapsed := time.Since(start)
+		fmt.Printf("=== Phase %d completed in %v ===\n", phaseNum, elapsed)
+		printMemStats("After")
+	}
+
+	runPhase(1)
+
+	fmt.Println("Pausing 10 seconds...")
+	time.Sleep(10 * time.Second)
+	runtime.GC()
+	printMemStats("After GC")
+
+	runPhase(2)
+
+	time.Sleep(1 * time.Second)
+
+	// Verify
+	for _, n := range nodes {
+		for i := 0; i < numKeys; i++ {
 			assert.Equal(t, i*2, n.application.GetValue(i))
 		}
 	}

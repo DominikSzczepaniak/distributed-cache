@@ -40,12 +40,11 @@ type Raft struct {
 	peers atomic.Value
 	conns []*grpc.ClientConn
 
-	raftElector   *Elector
-	logReplicator *LogReplicator
-	logSaver      *DataSaver
-	heartbeat     *Heartbeat
-	replicators   []*Replicator
-	snapshotter   *Snapshot
+	raftElector *Elector
+	logSaver    *DataSaver
+	heartbeat   *Heartbeat
+	replicators []*Replicator
+	snapshotter *Snapshot
 
 	raftpb.UnimplementedRaftServer
 }
@@ -86,7 +85,7 @@ func NewRaft(application Application, cfg *Config) *Raft {
 
 	r.heartbeat = newHeartbeat(r)
 	r.raftElector = NewRaftElector(r)
-	r.logReplicator = NewRaftLogReplicator(r)
+	//r.logReplicator = NewRaftLogReplicator(r)
 
 	r.initGRPC(cfg)
 	return r
@@ -98,7 +97,7 @@ func (r *Raft) receiveVote(vote VoteResponse) {
 	if r.currentTerm < vote.currentTerm {
 		r.currentTerm = vote.currentTerm
 		r.currentRole = Follower
-		go r.raftElector.ResetTimer()
+		r.raftElector.ResetTimer()
 		return
 	}
 	if vote.granted && r.currentTerm == vote.currentTerm && r.currentRole == Candidate {
@@ -152,18 +151,17 @@ func (r *Raft) Broadcast(message Message) {
 
 	totalNodes := r.totalNodes
 
-	replicatorsToSignal := make([]*Replicator, len(r.replicators))
-	copy(replicatorsToSignal, r.replicators)
+	reps := r.replicators
 	r.mu.Unlock()
 
-	go r.logSaver.SaveValues()
+	go r.logSaver.SaveValues() //TODO TEST THIS ON CRASHES - IMPORTANT
 
 	for i := 0; i < totalNodes; i++ {
 		if i == r.id {
 			continue
 		}
-		if r.replicators[i] != nil {
-			replicatorsToSignal[i].signal()
+		if reps != nil && reps[i] != nil {
+			reps[i].signal()
 		}
 	}
 }
@@ -231,8 +229,10 @@ func (r *Raft) logResponse(followerId, term, ack int, success bool) {
 			r.sentLengths[followerId] = ack + 1
 			r.commitLogEntries()
 		} else if r.sentLengths[followerId] > r.snapshotter.lastIndex+1 {
-			r.sentLengths[followerId] = r.sentLengths[followerId] - 1
-			go r.replicateLog(r.id, followerId)
+			r.sentLengths[followerId]--
+			if r.replicators != nil && r.replicators[followerId] != nil {
+				r.replicators[followerId].signal()
+			}
 		}
 	}
 }
@@ -335,7 +335,7 @@ func (r *Raft) sendInstallSnapshotRPC(followerId int) {
 				r.currentTerm = int(resp.Term)
 				r.currentRole = Follower
 				r.votedFor = -1
-				go r.raftElector.ResetTimer()
+				r.raftElector.ResetTimer()
 			}
 			r.mu.Unlock()
 			return

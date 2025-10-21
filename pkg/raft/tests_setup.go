@@ -179,8 +179,8 @@ func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
 	r.logSaver = NewRaftDataSaver(r, cfg)
 	r.raftElector = NewRaftElector(r)
 	close(r.raftElector.cancelTimerCh)
-	r.logReplicator = NewRaftLogReplicator(r)
-	close(r.logReplicator.cancelLogReplicateCh)
+	//r.logReplicator = NewRaftLogReplicator(r)
+	//close(r.logReplicator.cancelLogReplicateCh)
 	r.snapshotter = newSnapshotter(cfg)
 
 	initial := make([]PeerClient, totalNodes)
@@ -274,7 +274,7 @@ func createCluster(t testing.TB, n int) []*Raft {
 		r.heartbeat = newHeartbeat(r)
 		r.logSaver = NewRaftDataSaver(r, cfg)
 		r.raftElector = NewRaftElector(r)
-		r.logReplicator = NewRaftLogReplicator(r)
+		//r.logReplicator = NewRaftLogReplicator(r)
 		r.snapshotter = newSnapshotter(cfg)
 		nodes[id] = r
 	}

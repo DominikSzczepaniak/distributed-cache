@@ -2,9 +2,17 @@ package raft
 
 import (
 	"context"
+	"fmt"
+	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 	"log/slog"
 	"time"
 )
+
+type LogEntry struct {
+	Term    int
+	Message Message
+}
 
 type Replicator struct {
 	parent     *Raft
@@ -55,6 +63,19 @@ func (rep *Replicator) signal() {
 }
 
 func (rep *Replicator) replicate() {
+	rep.parent.mu.RLock()
+	nextIndex := rep.parent.sentLengths[rep.followerId]
+	if nextIndex == 0 {
+		nextIndex = rep.parent.snapshotter.lastIndex + len(rep.parent.log) + 1
+	}
+	needsSnapshot := nextIndex <= rep.parent.snapshotter.lastIndex
+	rep.parent.mu.RUnlock()
+
+	if needsSnapshot {
+		rep.parent.sendInstallSnapshotRPC(rep.followerId)
+		return
+	}
+
 	args := rep.parent.prepareLogRequestArgs(rep.followerId)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -88,5 +109,73 @@ func (rep *Replicator) replicate() {
 				rep.parent.sentLengths[rep.followerId]--
 			}
 		}
+	}
+}
+
+func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	nextIndex := r.sentLengths[followerId]
+	if nextIndex == 0 {
+		nextIndex = r.snapshotter.lastIndex + len(r.log) + 1
+	}
+	if nextIndex <= r.snapshotter.lastIndex {
+		slog.Info(fmt.Sprintf(
+			"InstallSnapshot from %d to %d: nextIndex=%d, snapshot.lastIndex=%d",
+			r.id, followerId, nextIndex, r.snapshotter.lastIndex,
+		))
+		go r.sendInstallSnapshotRPC(followerId)
+		return &raftpb.LogRequestArgs{
+			LeaderId: int32(r.id),
+			Term:     int32(r.currentTerm),
+		}
+	}
+	prevIndex := nextIndex - 1
+	var prevTerm int
+	switch {
+	case prevIndex == 0:
+		prevTerm = 0
+	case prevIndex == r.snapshotter.lastIndex:
+		prevTerm = r.snapshotter.lastTerm
+	default:
+		rel := prevIndex - r.snapshotter.lastIndex - 1
+		if rel < 0 || rel >= len(r.log) {
+			return &raftpb.LogRequestArgs{
+				LeaderId: int32(r.id),
+				Term:     int32(r.currentTerm),
+			}
+		}
+		prevTerm = r.log[rel].Term
+	}
+	start := nextIndex - r.snapshotter.lastIndex - 1
+	if start < 0 {
+		start = 0
+	}
+	if start > len(r.log) {
+		start = len(r.log)
+	}
+	suffix := r.log[start:]
+	pbSuffix := make([]*raftpb.LogEntry, len(suffix))
+	for i, e := range suffix {
+		var val *wrapperspb.Int32Value
+		if e.Message.Value != nil {
+			val = wrapperspb.Int32(int32(*e.Message.Value))
+		}
+		pbSuffix[i] = &raftpb.LogEntry{
+			Term: int32(e.Term),
+			Message: &raftpb.Message{
+				Type:  toProtoMsgType(e.Message.MsgType),
+				Key:   int32(e.Message.Key),
+				Value: val,
+			},
+		}
+	}
+	return &raftpb.LogRequestArgs{
+		LeaderId:     int32(r.id),
+		Term:         int32(r.currentTerm),
+		PrefixLen:    int32(prevIndex),
+		PrefixTerm:   int32(prevTerm),
+		CommitLength: int32(r.commitedLength),
+		Suffix:       pbSuffix,
 	}
 }

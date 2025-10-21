@@ -19,6 +19,11 @@ type DataSaver struct {
 
 	mu sync.Mutex
 
+	saveQueue chan saveRequest
+	stopCh    chan struct{}
+
+	numWorkers int
+
 	DataSaverFunctions
 }
 
@@ -30,13 +35,40 @@ type DataSaverFunctions interface {
 	loadLog() ([]LogEntry, error)
 }
 
+type saveRequest struct {
+}
+
 func NewRaftDataSaver(r *Raft, cfg *Config) *DataSaver {
+	numWorkers := 4
 	return &DataSaver{
 		parent:             r,
 		logsFilename:       cfg.logsFilename,
 		metadataFilename:   cfg.metadataFilename,
 		snapshotFilename:   cfg.snapshotFilename,
 		previousSavedIndex: 0,
+		saveQueue:          make(chan saveRequest, 1024),
+		stopCh:             make(chan struct{}),
+		numWorkers:         numWorkers,
+	}
+}
+
+func (rds *DataSaver) saveWorker() {
+	for {
+		select {
+		case <-rds.saveQueue:
+			rds.doSaveValues()
+		case <-rds.stopCh:
+			return
+		}
+	}
+}
+
+func (rds *DataSaver) SaveValues() (bool, error) {
+	select {
+	case rds.saveQueue <- saveRequest{}:
+		return true, nil
+	default:
+		return false, nil
 	}
 }
 
@@ -153,7 +185,7 @@ func (rds *DataSaver) saveValuesManager(
 	return true, nil
 }
 
-func (rds *DataSaver) SaveValues() (bool, error) {
+func (rds *DataSaver) doSaveValues() (bool, error) {
 
 	rds.mu.Lock()
 	defer rds.mu.Unlock()

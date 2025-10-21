@@ -36,7 +36,8 @@ func TestLogReplication(t *testing.T) {
 			leader.currentTerm = 1
 			leader.log = append([]LogEntry{}, tt.leaderLog...)
 
-			leader.replicateLog(0, 1)
+			leader.replicators[0].signal()
+			leader.replicators[1].signal()
 			time.Sleep(100 * time.Millisecond)
 		})
 	}
