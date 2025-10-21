@@ -24,6 +24,11 @@ type DataSaver struct {
 
 	numWorkers int
 
+	pendingSaves sync.WaitGroup
+
+	lastSaveErr error
+	errMu       sync.Mutex
+
 	DataSaverFunctions
 }
 
@@ -40,7 +45,7 @@ type saveRequest struct {
 
 func NewRaftDataSaver(r *Raft, cfg *Config) *DataSaver {
 	numWorkers := 4
-	return &DataSaver{
+	ds := &DataSaver{
 		parent:             r,
 		logsFilename:       cfg.logsFilename,
 		metadataFilename:   cfg.metadataFilename,
@@ -50,13 +55,21 @@ func NewRaftDataSaver(r *Raft, cfg *Config) *DataSaver {
 		stopCh:             make(chan struct{}),
 		numWorkers:         numWorkers,
 	}
+	for i := 0; i < numWorkers; i++ {
+		go ds.saveWorker()
+	}
+	return ds
 }
 
 func (rds *DataSaver) saveWorker() {
 	for {
 		select {
 		case <-rds.saveQueue:
-			rds.doSaveValues()
+			err := rds.doSaveValues()
+			rds.errMu.Lock()
+			rds.lastSaveErr = err
+			rds.errMu.Unlock()
+			rds.pendingSaves.Done()
 		case <-rds.stopCh:
 			return
 		}
@@ -66,10 +79,18 @@ func (rds *DataSaver) saveWorker() {
 func (rds *DataSaver) SaveValues() (bool, error) {
 	select {
 	case rds.saveQueue <- saveRequest{}:
+		rds.pendingSaves.Add(1)
 		return true, nil
 	default:
 		return false, nil
 	}
+}
+
+func (rds *DataSaver) WaitForPendingSaves() error {
+	rds.pendingSaves.Wait()
+	rds.errMu.Lock()
+	defer rds.errMu.Unlock()
+	return rds.lastSaveErr
 }
 
 func ensureDir(filename string) error {
@@ -185,7 +206,7 @@ func (rds *DataSaver) saveValuesManager(
 	return true, nil
 }
 
-func (rds *DataSaver) doSaveValues() (bool, error) {
+func (rds *DataSaver) doSaveValues() error {
 
 	rds.mu.Lock()
 	defer rds.mu.Unlock()
@@ -197,7 +218,7 @@ func (rds *DataSaver) doSaveValues() (bool, error) {
 	idx := rds.previousSavedIndex
 	if idx == len(rds.parent.log) {
 		rds.parent.mu.RUnlock()
-		return false, nil
+		return nil
 	}
 
 	currentTerm := rds.parent.currentTerm
@@ -217,7 +238,7 @@ func (rds *DataSaver) doSaveValues() (bool, error) {
 		logCopy,
 	)
 	if err != nil || !ok {
-		return ok, err
+		return err
 	}
 	rds.parent.mu.RLock()
 	lengthNow := len(rds.parent.log)
@@ -228,7 +249,7 @@ func (rds *DataSaver) doSaveValues() (bool, error) {
 		newIndex = lengthNow
 	}
 	rds.previousSavedIndex = newIndex
-	return true, nil
+	return nil
 }
 
 // ------

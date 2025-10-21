@@ -3,10 +3,8 @@ package raft
 import (
 	"fmt"
 	"math/rand"
-	"os"
 	"path/filepath"
 	"runtime"
-	"runtime/pprof"
 	"sync"
 	"testing"
 	"time"
@@ -172,13 +170,6 @@ func TestConcurrentOperationsWithPause(t *testing.T) {
 		t.Skip("short")
 	}
 
-	// Write goroutine profile at peak
-	defer func() {
-		f, _ := os.Create("/tmp/goroutine_peak.prof")
-		defer f.Close()
-		pprof.Lookup("goroutine").WriteTo(f, 2)
-	}()
-
 	nodes := createCluster(t, 3)
 	time.Sleep(1000 * time.Millisecond)
 
@@ -253,16 +244,9 @@ func TestConcurrentOperationsWithPause(t *testing.T) {
 
 	time.Sleep(1 * time.Second)
 
-	// Verify
 	for _, n := range nodes {
 		for i := 0; i < numKeys; i++ {
 			assert.Equal(t, i*2, n.application.GetValue(i))
 		}
 	}
 }
-
-//2. install snapshot wysylac w patchach (multipart)
-//3. elekcja lidera jest na innym mutexie????
-//4. akceptuj log w miedzyczasie i JAK SIE SKONCZY SNAPSHOT zaaplikuj operacje z loga
-
-//PRZEGLAD LITERATURY
