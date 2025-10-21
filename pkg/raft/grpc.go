@@ -250,10 +250,6 @@ func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRe
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	slog.Info(fmt.Sprintf("Installing snapshot for node %d, setting installingSnapshot to true", r.id))
-	r.snapshotter.installingSnapshot = true
-	defer func() {
-		r.snapshotter.installingSnapshot = false
-	}()
 
 	defaultResponse := &raftpb.InstallSnapshotResponse{Term: int32(r.currentTerm)}
 	if int(in.LeaderTerm) < r.currentTerm {

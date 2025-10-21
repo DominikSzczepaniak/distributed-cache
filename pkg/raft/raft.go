@@ -204,16 +204,11 @@ func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 			leaderCommit = maxCommit
 		}
 
-		messagesToApply := make([]Message, 0, leaderCommit-r.commitedLength)
 		for i := r.commitedLength; i < leaderCommit; i++ {
 			relativeIndex := i - r.snapshotter.lastIndex
-			messagesToApply = append(messagesToApply, r.log[relativeIndex].Message) //throws error sometimes
+			r.deliverToApplication(r.log[relativeIndex].Message)
 		}
 		r.commitedLength = leaderCommit
-
-		for _, msg := range messagesToApply {
-			r.deliverToApplication(msg)
-		}
 	}
 	err := r.decideRunSnapshot()
 	if err != nil {

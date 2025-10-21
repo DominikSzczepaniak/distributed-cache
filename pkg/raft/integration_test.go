@@ -125,8 +125,8 @@ func TestConcurrentOperations(t *testing.T) {
 		n.mu.RUnlock()
 	}
 	require.NotNil(t, leader)
-	const nmsgs = 8_000_000
-	const num_keys = 100000
+	const nmsgs = 30_000_000
+	const num_keys = 1000000
 	done := make(chan struct{}, nmsgs)
 	sem := make(chan int, 256)
 	for i := 0; i < nmsgs; i++ {
@@ -141,7 +141,7 @@ func TestConcurrentOperations(t *testing.T) {
 	for i := 0; i < nmsgs; i++ {
 		<-done
 	}
-	time.Sleep(2 * time.Second)
+	time.Sleep(1 * time.Second)
 	for _, n := range nodes {
 		//data := n.application.(*testApp).getData()
 		for i := 0; i < num_keys; i++ {
