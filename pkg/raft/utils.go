@@ -1,20 +1,53 @@
 package raft
 
-func (r *Raft) setPeers(in []PeerClient) {
-	buf := make([]PeerClient, len(in))
-	copy(buf, in)
-	r.peers.Store(buf)
-}
+import (
+	"fmt"
+	"log/slog"
+	"math"
+)
 
 func (r *Raft) getPeers() []PeerClient {
-	return r.peers.Load().([]PeerClient)
+	if r.connMgr != nil {
+		return r.connMgr.GetPeers()
+	}
+	if r.testPeers != nil {
+		return r.testPeers
+	}
+	return nil
 }
 
 func (r *Raft) getPeer(id int) PeerClient {
 	if id == -1 {
 		return nil
 	}
-	return r.peers.Load().([]PeerClient)[id]
+	if r.connMgr != nil {
+		return r.connMgr.GetPeer(id)
+	}
+	if r.testPeers != nil && id >= 0 && id < len(r.testPeers) {
+		return r.testPeers[id]
+	}
+	return nil
+}
+
+func (r *Raft) isPeerAvailable(nodeId int) bool {
+	if r.connMgr != nil {
+		return r.connMgr.IsPeerAvailable(nodeId)
+	}
+	return true
+}
+
+func (r *Raft) getAvailablePeerCount() int {
+	if r.connMgr != nil {
+		return r.connMgr.GetAvailablePeerCount()
+	}
+	if r.testPeers != nil {
+		return len(r.testPeers) - 1
+	}
+	return r.totalNodes - 1
+}
+
+func (r *Raft) setPeers(peers []PeerClient) {
+	r.testPeers = peers
 }
 
 func (r *Raft) getCurrentRole() Role {
@@ -47,6 +80,19 @@ func (r *Raft) becomeFollower(term int) {
 func (r *Raft) becomeLeader() {
 	r.currentRole = Leader
 	r.currentLeaderId = r.id
+
+	majority := int(math.Ceil(float64(r.totalNodes+1) / 2))
+	availableCount := r.getAvailablePeerCount()
+
+	if availableCount < majority-1 {
+		slog.Warn(fmt.Sprintf(
+			"Node %d became leader with only %d/%d peers available (need %d for quorum)",
+			r.id, availableCount, r.totalNodes-1, majority-1))
+	} else {
+		slog.Info(fmt.Sprintf(
+			"Node %d became leader with %d/%d peers available",
+			r.id, availableCount, r.totalNodes-1))
+	}
 
 	r.replicators = make([]*Replicator, r.totalNodes)
 	for followerId := 0; followerId < r.totalNodes; followerId++ {

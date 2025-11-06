@@ -5,7 +5,23 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
+
+type StartupMode int
+
+const (
+	StartAlways StartupMode = iota
+	WaitForQuorum
+	WaitForAnyPeer
+)
+
+type RetryConfig struct {
+	InitialBackoff time.Duration
+	MaxBackoff     time.Duration
+	Multiplier     float64
+	MaxRetries     int
+}
 
 type Config struct {
 	logsFilename      string
@@ -15,6 +31,38 @@ type Config struct {
 	raftId            int
 	raftAddrs         []string
 	snapshotThreshold int
+
+	connectionRetryConfig RetryConfig
+	connectionTimeout     time.Duration
+	healthCheckInterval   time.Duration
+	startupMode           StartupMode
+}
+
+func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
+	if val := os.Getenv(key); val != "" {
+		if d, err := time.ParseDuration(val); err == nil {
+			return d
+		}
+	}
+	return defaultVal
+}
+
+func getEnvFloat(key string, defaultVal float64) float64 {
+	if val := os.Getenv(key); val != "" {
+		if f, err := strconv.ParseFloat(val, 64); err == nil {
+			return f
+		}
+	}
+	return defaultVal
+}
+
+func getEnvInt(key string, defaultVal int) int {
+	if val := os.Getenv(key); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			return i
+		}
+	}
+	return defaultVal
 }
 
 func LoadConfig() *Config {
@@ -60,7 +108,7 @@ func LoadConfig() *Config {
 		panic("Number of nodes must be equal to number of Raft addresses")
 	}
 
-	return &Config{
+	cfg := &Config{
 		logsFilename:      filename + ".logs",
 		metadataFilename:  filename + ".meta",
 		snapshotFilename:  filename + ".snap",
@@ -68,5 +116,17 @@ func LoadConfig() *Config {
 		raftId:            raftId,
 		raftAddrs:         raftAddrs,
 		snapshotThreshold: snapshotThreshold,
+
+		connectionRetryConfig: RetryConfig{
+			InitialBackoff: getEnvDuration("RAFT_INITIAL_BACKOFF", 1*time.Second),
+			MaxBackoff:     getEnvDuration("RAFT_MAX_BACKOFF", 30*time.Second),
+			Multiplier:     getEnvFloat("RAFT_BACKOFF_MULTIPLIER", 2.0),
+			MaxRetries:     getEnvInt("RAFT_MAX_RETRIES", -1),
+		},
+		connectionTimeout:   getEnvDuration("RAFT_CONN_TIMEOUT", 5*time.Second),
+		healthCheckInterval: getEnvDuration("RAFT_HEALTH_CHECK_INTERVAL", 10*time.Second),
+		startupMode:         StartAlways,
 	}
+
+	return cfg
 }

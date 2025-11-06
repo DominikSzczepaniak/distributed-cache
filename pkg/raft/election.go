@@ -111,7 +111,17 @@ func (r *Raft) startElection() {
 }
 
 func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
+	if !r.isPeerAvailable(nodeId) {
+		slog.Debug(fmt.Sprintf("Node %d: Skipping vote request to unavailable peer %d", r.id, nodeId))
+		return
+	}
+
 	peer := r.getPeer(nodeId)
+	if peer == nil {
+		slog.Debug(fmt.Sprintf("Node %d: No peer client for node %d", r.id, nodeId))
+		return
+	}
+
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
@@ -123,6 +133,7 @@ func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
 			CandidateLogTerm:   int32(data.candidateLogTerm),
 		})
 		if err != nil {
+			slog.Warn(fmt.Sprintf("Node %d: VoteRequest to peer %d failed: %v", r.id, nodeId, err))
 			return
 		}
 

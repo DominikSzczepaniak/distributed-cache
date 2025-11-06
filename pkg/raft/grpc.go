@@ -4,36 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/types/known/emptypb"
-
 	"net"
+	"os"
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
-
-func (r *Raft) initGRPC(cfg *Config) {
-	peers := make([]PeerClient, r.totalNodes)
-	r.conns = make([]*grpc.ClientConn, r.totalNodes)
-
-	for i, addr := range cfg.raftAddrs {
-		conn, err := grpc.NewClient(
-			addr,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
-		if err != nil {
-			panic(fmt.Sprintf("failed to dial %s: %v", addr, err))
-		}
-
-		r.conns[i] = conn
-		peers[i] = NewGRPCPeerClient(conn)
-	}
-	r.setPeers(peers)
-	go r.serveGRPC(cfg.raftAddrs[r.id])
-}
 
 func (r *Raft) serveGRPC(addr string) {
 	lis, err := net.Listen("tcp", addr)

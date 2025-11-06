@@ -3,18 +3,16 @@ package raft
 import (
 	"context"
 	"fmt"
-	"google.golang.org/protobuf/types/known/wrapperspb"
 	"io"
 	"log/slog"
 	"math"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
-	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 type Raft struct {
@@ -37,8 +35,8 @@ type Raft struct {
 
 	application Application
 
-	peers atomic.Value
-	conns []*grpc.ClientConn
+	connMgr   *ConnectionManager
+	testPeers []PeerClient
 
 	raftElector *Elector
 	logSaver    *DataSaver
@@ -85,9 +83,11 @@ func NewRaft(application Application, cfg *Config) *Raft {
 
 	r.heartbeat = newHeartbeat(r)
 	r.raftElector = NewRaftElector(r)
-	//r.logReplicator = NewRaftLogReplicator(r)
 
-	r.initGRPC(cfg)
+	r.connMgr = NewConnectionManager(r.id, r.totalNodes, cfg.raftAddrs, cfg)
+
+	go r.serveGRPC(cfg.raftAddrs[r.id])
+
 	return r
 }
 

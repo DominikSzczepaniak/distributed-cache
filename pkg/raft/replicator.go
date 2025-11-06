@@ -63,6 +63,12 @@ func (rep *Replicator) signal() {
 }
 
 func (rep *Replicator) replicate() {
+	if !rep.parent.isPeerAvailable(rep.followerId) {
+		slog.Debug(fmt.Sprintf("Node %d: Skipping replication to unavailable peer %d",
+			rep.parent.id, rep.followerId))
+		return
+	}
+
 	rep.parent.mu.RLock()
 	nextIndex := rep.parent.sentLengths[rep.followerId]
 	if nextIndex == 0 {
@@ -76,16 +82,23 @@ func (rep *Replicator) replicate() {
 		return
 	}
 
+	peer := rep.parent.getPeer(rep.followerId)
+	if peer == nil {
+		slog.Debug(fmt.Sprintf("Node %d: No peer client for follower %d",
+			rep.parent.id, rep.followerId))
+		return
+	}
+
 	args := rep.parent.prepareLogRequestArgs(rep.followerId)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	peer := rep.parent.getPeer(rep.followerId)
 	resp, err := peer.LogRequest(ctx, args)
 
 	if err != nil {
-		slog.Error("LogRequest RPC failed", "followerId", rep.followerId, "error", err)
+		slog.Warn(fmt.Sprintf("Node %d: LogRequest to follower %d failed: %v",
+			rep.parent.id, rep.followerId, err))
 		return
 	}
 
