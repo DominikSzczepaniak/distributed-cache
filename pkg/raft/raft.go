@@ -166,8 +166,39 @@ func (r *Raft) Broadcast(message Message) {
 	}
 }
 
+// BroadcastSync sends a message and waits for response with timeout
+func (r *Raft) BroadcastSync(message Message, timeout time.Duration) (bool, int, error) {
+	responseChan := make(chan BroadcastResponse, 1)
+	message.ResponseChan = responseChan
+
+	r.Broadcast(message)
+
+	select {
+	case resp := <-responseChan:
+		return resp.Success, resp.Value, resp.Error
+	case <-time.After(timeout):
+		return false, 0, fmt.Errorf("timeout waiting for response after %v", timeout)
+	}
+}
+
 func (r *Raft) deliverToApplication(message Message) (success bool, value int) {
-	return r.application.AppendMessage(message)
+	success, value = r.application.AppendMessage(message)
+
+	// Send response if channel provided (for synchronous operations)
+	if message.ResponseChan != nil {
+		select {
+		case message.ResponseChan <- BroadcastResponse{
+			Success: success,
+			Value:   value,
+			Error:   nil,
+		}:
+			// Response sent successfully
+		default:
+			// Channel closed or full, ignore
+		}
+	}
+
+	return success, value
 }
 
 func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
@@ -354,4 +385,41 @@ func (r *Raft) sendInstallSnapshotRPC(followerId int) {
 	slog.Info(fmt.Sprintf("Successfully installed snapshot on follower %d (%d bytes in blocks). Next index is now %d.",
 		followerId, totalSize, r.sentLengths[followerId]))
 	r.mu.Unlock()
+}
+
+// Helper methods for API layer
+
+// GetApplication returns the application interface for direct reads
+func (r *Raft) GetApplication() Application {
+	return r.application
+}
+
+// IsLeader returns true if this node is the current leader
+func (r *Raft) IsLeader() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.currentRole == Leader
+}
+
+// ClusterStatus represents the current state of the cluster
+type ClusterStatus struct {
+	NodeID     int
+	Role       string
+	Term       int
+	LeaderID   int
+	TotalNodes int
+}
+
+// GetStatus returns the current cluster status
+func (r *Raft) GetStatus() ClusterStatus {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return ClusterStatus{
+		NodeID:     r.id,
+		Role:       string(r.currentRole),
+		Term:       r.currentTerm,
+		LeaderID:   r.currentLeaderId,
+		TotalNodes: r.totalNodes,
+	}
 }

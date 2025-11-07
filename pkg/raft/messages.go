@@ -6,6 +6,13 @@ type Message struct {
 	MsgType MessageType
 	Key     int
 	Value   *int
+
+	// Response channel for synchronous operations
+	ResponseChan chan<- BroadcastResponse
+
+	// Idempotency support for retry logic
+	IdempotencyToken string
+	ClientID         string
 }
 
 type MessageType string

@@ -20,3 +20,9 @@ type VoteResponse struct {
 	currentTerm int
 	granted     bool
 }
+
+type BroadcastResponse struct {
+	Success bool
+	Value   int
+	Error   error
+}

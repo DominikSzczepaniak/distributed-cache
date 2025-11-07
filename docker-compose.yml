@@ -21,12 +21,22 @@ services:
       RAFT_MAX_RETRIES: "-1"
       RAFT_CONN_TIMEOUT: "5s"
       RAFT_HEALTH_CHECK_INTERVAL: "10s"
+
+      # HTTP API configuration
+      API_ADDR: ":8080"
+
+      # Retry configuration
+      API_RETRY_MAX_ATTEMPTS: "3"
+      API_RETRY_INITIAL_DELAY: "100ms"
+      API_RETRY_MAX_DELAY: "5s"
+      API_IDEMPOTENCY_TTL: "5m"
     volumes:
       - ./data/node0:/data
     networks:
       - raft-network
     ports:
       - "9000:9000"
+      - "8080:8080"
     restart: unless-stopped
 
   raft-node-1:
@@ -49,12 +59,22 @@ services:
       RAFT_MAX_RETRIES: "-1"
       RAFT_CONN_TIMEOUT: "5s"
       RAFT_HEALTH_CHECK_INTERVAL: "10s"
+
+      # HTTP API configuration
+      API_ADDR: ":8080"
+
+      # Retry configuration
+      API_RETRY_MAX_ATTEMPTS: "3"
+      API_RETRY_INITIAL_DELAY: "100ms"
+      API_RETRY_MAX_DELAY: "5s"
+      API_IDEMPOTENCY_TTL: "5m"
     volumes:
       - ./data/node1:/data
     networks:
       - raft-network
     ports:
       - "9001:9000"
+      - "8081:8080"
     restart: unless-stopped
 
   raft-node-2:
@@ -77,12 +97,22 @@ services:
       RAFT_MAX_RETRIES: "-1"
       RAFT_CONN_TIMEOUT: "5s"
       RAFT_HEALTH_CHECK_INTERVAL: "10s"
+
+      # HTTP API configuration
+      API_ADDR: ":8080"
+
+      # Retry configuration
+      API_RETRY_MAX_ATTEMPTS: "3"
+      API_RETRY_INITIAL_DELAY: "100ms"
+      API_RETRY_MAX_DELAY: "5s"
+      API_IDEMPOTENCY_TTL: "5m"
     volumes:
       - ./data/node2:/data
     networks:
       - raft-network
     ports:
       - "9002:9000"
+      - "8082:8080"
     restart: unless-stopped
 
 networks:

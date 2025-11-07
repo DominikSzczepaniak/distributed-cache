@@ -5,11 +5,13 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 
+	"github.com/dominikszczepaniak/distributed-cache/pkg/api"
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft"
 )
 
@@ -133,9 +135,22 @@ func main() {
 	app := NewSimpleKVStore()
 
 	// Create Raft instance
-	raft.NewRaft(app, cfg)
+	r := raft.NewRaft(app, cfg)
 
 	slog.Info("Raft node started successfully")
+
+	// Start HTTP API server
+	apiAddr := os.Getenv("API_ADDR")
+	if apiAddr == "" {
+		apiAddr = ":8080"
+	}
+
+	apiServer := api.NewServer(r, apiAddr)
+	go func() {
+		if err := apiServer.Start(); err != nil && err != http.ErrServerClosed {
+			slog.Error(fmt.Sprintf("API server error: %v", err))
+		}
+	}()
 
 	// Wait for shutdown signal
 	sigCh := make(chan os.Signal, 1)
@@ -143,6 +158,11 @@ func main() {
 
 	sig := <-sigCh
 	slog.Info(fmt.Sprintf("Received signal %v, shutting down...", sig))
+
+	// Shutdown API server
+	if err := apiServer.Stop(); err != nil {
+		slog.Error(fmt.Sprintf("Error stopping API server: %v", err))
+	}
 
 	// Note: ConnectionManager cleanup happens automatically via goroutine context cancellation
 	slog.Info("Raft node stopped")
