@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft"
+	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 // Server provides HTTP API for the Raft cluster
@@ -126,23 +128,27 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Execute with retry
+	// Execute with retry - use Forward() gRPC for automatic leader routing
 	var success bool
 	var broadcastErr error
 
 	retryFunc := func(ctx context.Context) error {
-		msg := raft.Message{
-			MsgType:          "PUT",
-			Key:              req.Key,
-			Value:            &req.Value,
+		msg := &raftpb.Message{
+			Type:             raftpb.Message_PUT,
+			Key:              int32(req.Key),
+			Value:            wrapperspb.Int32(int32(req.Value)),
 			IdempotencyToken: idempotencyToken,
-			ClientID:         getClientID(r),
+			ClientId:         getClientID(r),
 		}
 
-		var err error
-		success, _, err = s.raft.BroadcastSync(msg, 5*time.Second)
-		broadcastErr = err
-		return err
+		resp, err := s.raft.Forward(ctx, msg)
+		if err != nil {
+			broadcastErr = err
+			return err
+		}
+
+		success = resp.Success
+		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -182,6 +188,7 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGet handles GET operations with optional stale reads
+// Uses Raft's ForwardGet() mechanism for automatic leader forwarding
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, key int) {
 	// Check if stale reads allowed
 	stale := r.URL.Query().Get("stale") == "true"
@@ -190,47 +197,39 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, key int) {
 	var found bool
 
 	if stale {
-		// Read directly from local application (may be stale)
+		// Stale reads: read directly from local application (may be slightly outdated)
 		value = s.raft.GetApplication().GetValue(key)
-		found = true // Simplification - assume exists
+		found = true
 	} else {
-		// Linearizable read: verify leadership first
-		if !s.raft.IsLeader() {
-			// Check leader cache
-			leaderID, leaderAddr, cached := s.leaderCache.Get()
-			if !cached {
-				// Query current leader
-				status := s.raft.GetStatus()
-				leaderID = status.LeaderID
-				// TODO: Map leaderID to address (would need address mapping)
-				// For now, return error
-				http.Error(w, fmt.Sprintf("Not leader. Leader is node %d", leaderID), http.StatusServiceUnavailable)
-				return
-			}
+		// Linearizable reads: use Raft's ForwardGet() for automatic leader routing
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
 
-			// Redirect to leader
-			if leaderAddr != "" {
-				http.Redirect(w, r, fmt.Sprintf("http://%s/kv/%d", leaderAddr, key), http.StatusTemporaryRedirect)
-				return
-			}
+		resp, err := s.raft.ForwardGet(ctx, &raftpb.GetRequest{
+			Key: int32(key),
+		})
 
-			http.Error(w, "No leader available", http.StatusServiceUnavailable)
+		if err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				http.Error(w, "Request timeout", http.StatusGatewayTimeout)
+			} else {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
 			return
 		}
 
-		// Leader serves read
-		value = s.raft.GetApplication().GetValue(key)
-		found = true
+		value = int(resp.Value)
+		found = resp.Found
 	}
 
-	resp := GetResponse{
+	respBody := GetResponse{
 		Key:   key,
 		Value: value,
 		Found: found,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(respBody)
 }
 
 // handleDelete handles DELETE operations with retry and idempotency
@@ -257,23 +256,27 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key int) {
 		return
 	}
 
-	// Execute with retry
+	// Execute with retry - use Forward() gRPC for automatic leader routing
 	var success bool
 	var broadcastErr error
 
 	retryFunc := func(ctx context.Context) error {
-		msg := raft.Message{
-			MsgType:          "DELETE",
-			Key:              key,
+		msg := &raftpb.Message{
+			Type:             raftpb.Message_DELETE,
+			Key:              int32(key),
 			Value:            nil,
 			IdempotencyToken: idempotencyToken,
-			ClientID:         getClientID(r),
+			ClientId:         getClientID(r),
 		}
 
-		var err error
-		success, _, err = s.raft.BroadcastSync(msg, 5*time.Second)
-		broadcastErr = err
-		return err
+		resp, err := s.raft.Forward(ctx, msg)
+		if err != nil {
+			broadcastErr = err
+			return err
+		}
+
+		success = resp.Success
+		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)

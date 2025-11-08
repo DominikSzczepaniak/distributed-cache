@@ -21,11 +21,11 @@ type ConnectionManager struct {
 	peerAvailable []atomic.Bool
 	lastContact   []time.Time
 
-	selfID      int
-	totalNodes  int
-	addrs       []string
-	retryCfg    RetryConfig
-	connTimeout time.Duration
+	selfID         int
+	totalNodes     int
+	addrs          []string
+	retryCfg       RetryConfig
+	connTimeout    time.Duration
 	healthInterval time.Duration
 
 	ctx    context.Context

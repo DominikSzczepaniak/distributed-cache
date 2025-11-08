@@ -11,38 +11,38 @@ import (
 
 // RetryConfig holds configuration for retry logic
 type RetryConfig struct {
-	MaxAttempts      int
-	InitialDelay     time.Duration
-	MaxDelay         time.Duration
-	Multiplier       float64
-	Jitter           bool
+	MaxAttempts       int
+	InitialDelay      time.Duration
+	MaxDelay          time.Duration
+	Multiplier        float64
+	Jitter            bool
 	EnableIdempotency bool
 }
 
 // DefaultRetryConfigs provides sensible defaults for different operations
 var DefaultRetryConfigs = map[string]RetryConfig{
 	"PUT": {
-		MaxAttempts:      3,
-		InitialDelay:     100 * time.Millisecond,
-		MaxDelay:         5 * time.Second,
-		Multiplier:       2.0,
-		Jitter:           true,
+		MaxAttempts:       3,
+		InitialDelay:      100 * time.Millisecond,
+		MaxDelay:          5 * time.Second,
+		Multiplier:        2.0,
+		Jitter:            true,
 		EnableIdempotency: true,
 	},
 	"DELETE": {
-		MaxAttempts:      3,
-		InitialDelay:     100 * time.Millisecond,
-		MaxDelay:         5 * time.Second,
-		Multiplier:       2.0,
-		Jitter:           true,
+		MaxAttempts:       3,
+		InitialDelay:      100 * time.Millisecond,
+		MaxDelay:          5 * time.Second,
+		Multiplier:        2.0,
+		Jitter:            true,
 		EnableIdempotency: true,
 	},
 	"GET": {
-		MaxAttempts:      2,
-		InitialDelay:     50 * time.Millisecond,
-		MaxDelay:         2 * time.Second,
-		Multiplier:       2.0,
-		Jitter:           true,
+		MaxAttempts:       2,
+		InitialDelay:      50 * time.Millisecond,
+		MaxDelay:          2 * time.Second,
+		Multiplier:        2.0,
+		Jitter:            true,
 		EnableIdempotency: false,
 	},
 }
