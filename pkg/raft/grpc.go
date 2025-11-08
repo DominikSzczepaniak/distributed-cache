@@ -56,6 +56,13 @@ func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Forwar
 			r.mu.Unlock()
 			return nil, fmt.Errorf("no leader known")
 		}
+
+		// Check peer availability before attempting forward to prevent hanging on stale connections
+		if !r.isPeerAvailable(leaderID) {
+			slog.Warn(fmt.Sprintf("Node %d: Leader %d is not available, cannot forward request", r.id, leaderID))
+			return nil, fmt.Errorf("leader %d is not available", leaderID)
+		}
+
 		if ctx.Value(forwardHopKey{}) != nil {
 			return nil, fmt.Errorf("redirect loop detected at node=%d to leader=%d", r.id, leaderID)
 		}
@@ -90,6 +97,13 @@ func (r *Raft) ForwardGet(ctx context.Context, req *raftpb.GetRequest) (*raftpb.
 		if leaderID < 0 {
 			return nil, fmt.Errorf("no leader known")
 		}
+
+		// Check peer availability before attempting forward to prevent hanging on stale connections
+		if !r.isPeerAvailable(leaderID) {
+			slog.Warn(fmt.Sprintf("Node %d: Leader %d is not available, cannot forward GET request", r.id, leaderID))
+			return nil, fmt.Errorf("leader %d is not available", leaderID)
+		}
+
 		if ctx.Value(forwardHopKey{}) != nil {
 			return nil, fmt.Errorf("redirect loop detected at node=%d to leader=%d", r.id, leaderID)
 		}
