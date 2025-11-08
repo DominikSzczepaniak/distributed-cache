@@ -5,11 +5,11 @@ echo "🛑 Stopping Raft Cluster..."
 echo ""
 
 echo "📊 Current cluster status:"
-docker-compose ps
+docker compose ps
 
 echo ""
 echo "Stopping all nodes..."
-docker-compose down
+docker compose down
 
 echo ""
 echo "✅ Cluster stopped successfully"
