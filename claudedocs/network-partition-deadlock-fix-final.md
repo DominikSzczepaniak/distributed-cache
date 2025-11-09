@@ -240,14 +240,55 @@ During the investigation, we added stale leader detection code that turned out t
    - Alert on abnormally long lock holds
    - Track goroutine counts for leak detection
 
-## Conclusion
+## Post-Fix Validation: Removal Test Results
 
-**The real problem:** Missing `defer` on mutex unlock in error-prone gRPC handlers
+After successfully fixing the deadlock, we attempted to remove the stale leader detection code to verify if the mutex fix alone was sufficient.
 
-**Not the problem:** Stale leader detection, peer availability checks, or complex distributed consensus issues
+### Removal Attempt
 
-**Time spent:** ~4 hours of debugging
-**Actual fix:** 2 functions refactored (~30 minutes of work)
-**Lines changed:** ~60 lines
+**Code Removed:**
+- `verifyLeadership()` from raft.go
+- `stepDownAsLeader()` from raft.go
+- `handlePeerReconnect()` from raft.go
+- `SetPeerReconnectCallback()` from connection_manager.go
+- `CheckPeerAvailabilityNow()` from connection_manager.go
+- Peer reconnection callback mechanism
 
-**Key takeaway:** Sometimes the simplest explanation is the correct one. Check basic concurrency patterns before diving into distributed systems theory.
+**Test Result:** **FAILED**
+
+```
+--- ✅ Leader found: raft-node-2 ---
+--- 🔌 Isolating leader 'raft-node-2' from network 'raft-cluster' ---
+--- 🕵️ Finding leader (excluding: raft-node-2) ---
+--- ❌ ERROR: Could not find a leader after 30 seconds. ---
+```
+
+**Root Cause of Failure:** Without the stale leader detection code, the remaining nodes (raft-node-0 and raft-node-1) could not elect a new leader after the partition. The cluster became stuck in a leaderless state.
+
+**After Restoring Code:** Test passed immediately on first attempt.
+
+### Conclusion: Both Fixes Are Necessary
+
+**The complete solution requires TWO fixes:**
+
+1. **Mutex Fix (Primary Issue):**
+   - Refactored `LogRequest()` and `VoteRequest()` to single lock/unlock pattern
+   - Prevents deadlock when network errors occur during gRPC operations
+   - Holds lock only for state reads/updates, releases before expensive operations
+
+2. **Stale Leader Detection (Secondary Issue):**
+   - `verifyLeadership()` ensures leaders verify quorum before serving reads
+   - Peer reconnection callbacks detect when network topology changes
+   - `CheckPeerAvailabilityNow()` provides fresh availability data for critical operations
+   - Prevents stale leaders from blocking cluster operations
+   - **Critical for leader election after network partition**
+
+**Why Both Are Needed:**
+- Mutex fix alone: Prevents deadlock on GET requests BUT cluster cannot elect new leader
+- Stale leader detection alone: Would still deadlock without proper mutex handling
+- Together: Full network partition recovery with proper state reconciliation
+
+**Time spent:** ~5 hours total (including removal test)
+**Lines changed:** ~60 lines (mutex fix) + ~150 lines (stale leader detection)
+
+**Final takeaway:** Complex distributed systems problems often have multiple contributing factors. The mutex handling was the immediate deadlock cause, but the stale leader detection code is essential for proper Raft consensus during network partitions. Both simple concurrency bugs AND distributed systems logic matter.
