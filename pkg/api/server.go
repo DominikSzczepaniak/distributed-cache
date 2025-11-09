@@ -17,7 +17,6 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-// Server provides HTTP API for the Raft cluster
 type Server struct {
 	raft             *raft.Raft
 	listenAddr       string
@@ -27,7 +26,6 @@ type Server struct {
 	leaderCache      *LeaderCache
 }
 
-// NewServer creates a new API server
 func NewServer(r *raft.Raft, listenAddr string) *Server {
 	return &Server{
 		raft:             r,
@@ -38,15 +36,12 @@ func NewServer(r *raft.Raft, listenAddr string) *Server {
 	}
 }
 
-// Start starts the HTTP server
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
 
-	// KV endpoints
 	mux.HandleFunc("/kv", s.handleKV)
 	mux.HandleFunc("/kv/", s.handleKVWithKey)
 
-	// Status endpoints
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/leader", s.handleLeader)
@@ -60,7 +55,6 @@ func (s *Server) Start() error {
 	return s.httpServer.ListenAndServe()
 }
 
-// Stop stops the HTTP server gracefully
 func (s *Server) Stop() error {
 	if s.httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -70,7 +64,6 @@ func (s *Server) Stop() error {
 	return nil
 }
 
-// handleKV routes POST requests to handlePut
 func (s *Server) handleKV(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
@@ -80,9 +73,7 @@ func (s *Server) handleKV(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleKVWithKey routes GET/DELETE requests to respective handlers
 func (s *Server) handleKVWithKey(w http.ResponseWriter, r *http.Request) {
-	// Extract key from URL path
 	keyStr := strings.TrimPrefix(r.URL.Path, "/kv/")
 	key, err := strconv.Atoi(keyStr)
 	if err != nil {
@@ -100,7 +91,6 @@ func (s *Server) handleKVWithKey(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handlePut handles PUT operations with retry and idempotency
 func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 	var req PutRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -108,14 +98,11 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get or generate idempotency token
 	idempotencyToken := r.Header.Get("Idempotency-Key")
 	if idempotencyToken == "" {
-		// Generate from request content
 		idempotencyToken = s.generateIdempotencyToken(&req, getClientID(r))
 	}
 
-	// Check idempotency cache
 	if cachedResp, found := s.idempotencyCache.Get(idempotencyToken); found {
 		slog.Info(fmt.Sprintf("Returning cached response for token: %s", idempotencyToken))
 		resp := PutResponse{
@@ -128,7 +115,6 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Execute with retry - use Forward() gRPC for automatic leader routing
 	var success bool
 	var broadcastErr error
 
@@ -157,7 +143,6 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 	err := s.retrier.ExecuteWithRetry(ctx, retryFunc)
 
 	if err != nil {
-		// Check specific error types
 		if ctx.Err() == context.DeadlineExceeded {
 			http.Error(w, "Request timeout after retries", http.StatusGatewayTimeout)
 			return
@@ -170,7 +155,6 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cache successful response
 	s.idempotencyCache.Set(idempotencyToken, raft.BroadcastResponse{
 		Success: success,
 		Value:   0,
@@ -187,21 +171,16 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// handleGet handles GET operations with optional stale reads
-// Uses Raft's ForwardGet() mechanism for automatic leader forwarding
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, key int) {
-	// Check if stale reads allowed
 	stale := r.URL.Query().Get("stale") == "true"
 
 	var value int
 	var found bool
 
 	if stale {
-		// Stale reads: read directly from local application (may be slightly outdated)
 		value = s.raft.GetApplication().GetValue(key)
 		found = true
 	} else {
-		// Linearizable reads: use Raft's ForwardGet() for automatic leader routing
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 
@@ -232,18 +211,14 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, key int) {
 	json.NewEncoder(w).Encode(respBody)
 }
 
-// handleDelete handles DELETE operations with retry and idempotency
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key int) {
-	// Get or generate idempotency token
 	idempotencyToken := r.Header.Get("Idempotency-Key")
 	if idempotencyToken == "" {
-		// Generate from request content
 		h := sha256.New()
 		h.Write([]byte(fmt.Sprintf("DELETE:%s:%d", getClientID(r), key)))
 		idempotencyToken = hex.EncodeToString(h.Sum(nil))
 	}
 
-	// Check idempotency cache
 	if cachedResp, found := s.idempotencyCache.Get(idempotencyToken); found {
 		slog.Info(fmt.Sprintf("Returning cached DELETE response for token: %s", idempotencyToken))
 		resp := DeleteResponse{
@@ -256,7 +231,6 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key int) {
 		return
 	}
 
-	// Execute with retry - use Forward() gRPC for automatic leader routing
 	var success bool
 	var broadcastErr error
 
@@ -297,7 +271,6 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key int) {
 		return
 	}
 
-	// Cache successful response
 	s.idempotencyCache.Set(idempotencyToken, raft.BroadcastResponse{
 		Success: success,
 		Value:   0,
@@ -314,7 +287,6 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key int) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// handleHealth returns simple health check
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(HealthResponse{
@@ -322,7 +294,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleStatus returns cluster status
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	status := s.raft.GetStatus()
 
@@ -338,7 +309,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// handleLeader returns leader information
 func (s *Server) handleLeader(w http.ResponseWriter, r *http.Request) {
 	status := s.raft.GetStatus()
 
@@ -351,8 +321,6 @@ func (s *Server) handleLeader(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// Helper functions
-
 func (s *Server) generateIdempotencyToken(req *PutRequest, clientID string) string {
 	h := sha256.New()
 	h.Write([]byte(fmt.Sprintf("%s:%d:%d", clientID, req.Key, req.Value)))
@@ -360,7 +328,6 @@ func (s *Server) generateIdempotencyToken(req *PutRequest, clientID string) stri
 }
 
 func getClientID(r *http.Request) string {
-	// Use IP address or client-provided ID
 	clientID := r.Header.Get("X-Client-ID")
 	if clientID == "" {
 		clientID = r.RemoteAddr

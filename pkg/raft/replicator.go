@@ -20,7 +20,6 @@ type Replicator struct {
 	signalCh   chan struct{}
 	stopCh     chan struct{}
 
-	// Heartbeat failure tracking for quorum-based step-down
 	consecutiveFailures    int
 	maxConsecutiveFailures int // Leader steps down after this many failures
 	lastHeartbeatSuccess   time.Time
@@ -71,12 +70,6 @@ func (rep *Replicator) signal() {
 }
 
 func (rep *Replicator) replicate() {
-	// Stage 3: Lock Contention Reduction
-	// CRITICAL: Do NOT hold locks during RPC calls (network I/O)
-	// Lock is only held for:
-	//   1. Reading state needed for replication (minimal RLock)
-	//   2. Updating state after RPC completes (minimal Lock)
-
 	if !rep.parent.isPeerAvailable(rep.followerId) {
 		slog.Debug(fmt.Sprintf("Node %d: Skipping replication to unavailable peer %d",
 			rep.parent.id, rep.followerId))
@@ -85,7 +78,6 @@ func (rep *Replicator) replicate() {
 		return
 	}
 
-	// Phase 1: Minimal RLock - Copy state needed for replication
 	rep.parent.mu.RLock()
 	fmt.Printf("[LOCK] Acquired RLock for parent.mu in replicate (read state)\n")
 	nextIndex := rep.parent.sentLengths[rep.followerId]
@@ -97,7 +89,6 @@ func (rep *Replicator) replicate() {
 	rep.parent.mu.RUnlock()
 	fmt.Printf("[LOCK] Released RLock for parent.mu in replicate (read state)\n")
 
-	// Not a leader anymore - stop replicating
 	if currentRole != Leader {
 		return
 	}
@@ -116,42 +107,33 @@ func (rep *Replicator) replicate() {
 		return
 	}
 
-	// Phase 2: Prepare RPC args (this acquires RLock internally)
 	args := rep.parent.prepareLogRequestArgs(rep.followerId)
 
-	// Phase 3: Make RPC call WITHOUT holding ANY locks
-	// This is the critical optimization - RPC can take 500ms-2s
-	// We DO NOT want to hold locks during network I/O
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
 	slog.Debug(fmt.Sprintf("Node %d: Sending LogRequest to follower %d (nextIndex=%d, suffix=%d entries)",
 		rep.parent.id, rep.followerId, nextIndex, len(args.Suffix)))
 
-	resp, err := peer.LogRequest(ctx, args) // NO LOCK HELD HERE
+	resp, err := peer.LogRequest(ctx, args)
 
-	// Phase 4: Handle RPC failure - increment failure counter
 	if err != nil {
 		slog.Warn(fmt.Sprintf("Node %d: LogRequest to follower %d failed (attempt %d): %v",
 			rep.parent.id, rep.followerId, rep.consecutiveFailures+1, err))
 		rep.consecutiveFailures++
-		rep.parent.checkQuorumHealth() // Stage 2: Check if we lost quorum
+		rep.parent.checkQuorumHealth()
 		return
 	}
 
-	// Phase 5: RPC succeeded - reset failure counter
 	rep.consecutiveFailures = 0
 	rep.lastHeartbeatSuccess = time.Now()
 
 	slog.Info(fmt.Sprintf("Node %d: LogRequest to follower %d succeeded (success=%t, ack=%d, term=%d)",
 		rep.parent.id, rep.followerId, resp.Success, resp.Ack, resp.CurrentTerm))
 
-	// Phase 6: Minimal Lock - Update state based on RPC response
-	// Only hold lock for state updates, not during RPC
 	rep.parent.mu.Lock()
 	fmt.Printf("[LOCK] Acquired lock for parent.mu in replicate (update state)\n")
 
-	// Re-validate role and term after acquiring lock (state may have changed)
 	if resp.CurrentTerm > int32(rep.parent.currentTerm) {
 		slog.Info(fmt.Sprintf("Node %d: Follower %d has higher term (%d > %d), stepping down",
 			rep.parent.id, rep.followerId, resp.CurrentTerm, rep.parent.currentTerm))
@@ -161,7 +143,6 @@ func (rep *Replicator) replicate() {
 		return
 	}
 
-	// Only update state if still leader in same term
 	if rep.parent.currentRole == Leader && int(resp.CurrentTerm) == rep.parent.currentTerm {
 		if resp.Success {
 			match := int(resp.Ack)

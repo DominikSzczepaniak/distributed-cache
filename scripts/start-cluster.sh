@@ -4,7 +4,6 @@ set -e
 echo "🚀 Starting Raft Cluster..."
 echo ""
 
-# Create data directories if they don't exist
 mkdir -p data/node0 data/node1 data/node2
 
 echo "📦 Building Docker images..."

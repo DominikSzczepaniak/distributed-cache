@@ -15,7 +15,6 @@ import (
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft"
 )
 
-// SimpleKVStore implements the raft.Application interface
 type SimpleKVStore struct {
 	mu   sync.RWMutex
 	data map[int]int
@@ -117,7 +116,6 @@ func (s *SimpleKVStore) GetValue(key int) int {
 }
 
 func main() {
-	// Configure structured logging
 	opts := &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}
@@ -126,20 +124,16 @@ func main() {
 
 	slog.Info("Starting Raft node...")
 
-	// Load configuration from environment
 	cfg := raft.LoadConfig()
 
 	slog.Info("Node configuration loaded from environment")
 
-	// Create application
 	app := NewSimpleKVStore()
 
-	// Create Raft instance
 	r := raft.NewRaft(app, cfg)
 
 	slog.Info("Raft node started successfully")
 
-	// Start HTTP API server
 	apiAddr := os.Getenv("API_ADDR")
 	if apiAddr == "" {
 		apiAddr = ":8080"
@@ -152,18 +146,15 @@ func main() {
 		}
 	}()
 
-	// Wait for shutdown signal
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	sig := <-sigCh
 	slog.Info(fmt.Sprintf("Received signal %v, shutting down...", sig))
 
-	// Shutdown API server
 	if err := apiServer.Stop(); err != nil {
 		slog.Error(fmt.Sprintf("Error stopping API server: %v", err))
 	}
 
-	// Note: ConnectionManager cleanup happens automatically via goroutine context cancellation
 	slog.Info("Raft node stopped")
 }

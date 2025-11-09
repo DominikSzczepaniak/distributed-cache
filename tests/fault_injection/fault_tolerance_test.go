@@ -14,8 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- Types (mirroring pkg/api/types.go for test clarity) ---
-
 type PutRequest struct {
 	Key   int `json:"key"`
 	Value int `json:"value"`
@@ -40,61 +38,46 @@ var nodeAPIAddresses = map[string]string{
 
 const raftNetwork = "raft-cluster"
 
-// --- Test Main ---
-
 func TestMain(m *testing.M) {
-	// Setup: Start the cluster before running tests
 	if err := startCluster(); err != nil {
 		fmt.Printf("Failed to start cluster: %v\n", err)
-		m.Run() // Proceed to run tests which will then fail.
+		m.Run()
 		return
 	}
 
-	// Run all tests
 	exitCode := m.Run()
 
-	// Teardown: Stop the cluster after all tests have run
 	if err := stopCluster(); err != nil {
 		fmt.Printf("Failed to stop cluster: %v\n", err)
 	}
 
-	// Exit
-	// os.Exit(exitCode) // This is commented out to avoid premature exit of the test runner
 	_ = exitCode
 }
-
-// --- Fault Tolerance Tests ---
 
 func TestLeaderFailureAndRecovery(t *testing.T) {
 	require.NoError(t, waitForClusterReady(t), "Cluster should be ready before test")
 
-	// 1. Identify Leader
 	leader, err := findLeader(t)
 	require.NoError(t, err, "Should be able to find the initial leader")
 	t.Logf("Initial leader is %s", leader)
 
-	// 2. Stop the leader node
 	t.Logf("Stopping leader node: %s", leader)
 	require.NoError(t, stopNode(leader), "Should be able to stop the leader")
 
-	// 3. Verify New Leader
 	var newLeader string
 	require.Eventually(t, func() bool {
-		newLeader, err = findLeader(t, leader) // Exclude the old leader from the search
+		newLeader, err = findLeader(t, leader)
 		return err == nil && newLeader != ""
 	}, 30*time.Second, 2*time.Second, "A new leader should be elected")
 	t.Logf("New leader elected: %s", newLeader)
 
-	// 4. Write Data to new leader
 	testKey, testValue := 101, 1001
 	t.Logf("Writing '%d=%d' to new leader %s", testKey, testValue, newLeader)
 	require.NoError(t, setKeyValue(t, nodeAPIAddresses[newLeader], testKey, testValue), "Should be able to write to the new leader")
 
-	// 5. Restart the original leader node
 	t.Logf("Restarting original leader node: %s", leader)
 	require.NoError(t, startNode(leader), "Should be able to restart the original leader")
 
-	// 6. Verify State Sync
 	t.Logf("Verifying data synchronization on restarted node %s", leader)
 	require.Eventually(t, func() bool {
 		value, err := getKeyValue(t, nodeAPIAddresses[leader], testKey)
@@ -104,11 +87,8 @@ func TestLeaderFailureAndRecovery(t *testing.T) {
 	t.Log("TestLeaderFailureAndRecovery successful!")
 }
 
-// --- Helper Functions ---
-
 func runCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
-	// For debugging, let's see the output
 	// var out bytes.Buffer
 	// var stderr bytes.Buffer
 	// cmd.Stdout = &out

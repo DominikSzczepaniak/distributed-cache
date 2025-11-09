@@ -172,7 +172,6 @@ func (r *Raft) Broadcast(message Message) {
 	}
 }
 
-// BroadcastSync sends a message and waits for response with timeout
 func (r *Raft) BroadcastSync(message Message, timeout time.Duration) (bool, int, error) {
 	responseChan := make(chan BroadcastResponse, 1)
 	message.ResponseChan = responseChan
@@ -190,7 +189,6 @@ func (r *Raft) BroadcastSync(message Message, timeout time.Duration) (bool, int,
 func (r *Raft) deliverToApplication(message Message) (success bool, value int) {
 	success, value = r.application.AppendMessage(message)
 
-	// Send response if channel provided (for synchronous operations)
 	if message.ResponseChan != nil {
 		select {
 		case message.ResponseChan <- BroadcastResponse{
@@ -198,9 +196,7 @@ func (r *Raft) deliverToApplication(message Message) (success bool, value int) {
 			Value:   value,
 			Error:   nil,
 		}:
-			// Response sent successfully
 		default:
-			// Channel closed or full, ignore
 		}
 	}
 
@@ -419,14 +415,10 @@ func (r *Raft) sendInstallSnapshotRPC(followerId int) {
 	fmt.Printf("[LOCK] Released lock for Raft.mu in sendInstallSnapshotRPC (end)\n")
 }
 
-// Helper methods for API layer
-
-// GetApplication returns the application interface for direct reads
 func (r *Raft) GetApplication() Application {
 	return r.application
 }
 
-// IsLeader returns true if this node is the current leader
 func (r *Raft) IsLeader() bool {
 	r.mu.RLock()
 	fmt.Printf("[LOCK] Acquired RLock for Raft.mu in IsLeader\n")
@@ -437,7 +429,6 @@ func (r *Raft) IsLeader() bool {
 	return r.currentRole == Leader
 }
 
-// ClusterStatus represents the current state of the cluster
 type ClusterStatus struct {
 	NodeID     int
 	Role       string
@@ -446,7 +437,6 @@ type ClusterStatus struct {
 	TotalNodes int
 }
 
-// GetStatus returns the current cluster status
 func (r *Raft) GetStatus() ClusterStatus {
 	r.mu.RLock()
 	fmt.Printf("[LOCK] Acquired RLock for Raft.mu in GetStatus\n")

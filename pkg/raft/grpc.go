@@ -70,7 +70,6 @@ func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Forwar
 		return peer.Forward(ctx, msg)
 	}
 
-	// Leader: use BroadcastSync to wait for commit
 	success, value, err := r.BroadcastSync(internal, 5*time.Second)
 	if err != nil {
 		return nil, err
@@ -82,7 +81,6 @@ func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Forwar
 	}, nil
 }
 
-// ForwardGet handles GET requests with automatic forwarding to leader
 func (r *Raft) ForwardGet(ctx context.Context, req *raftpb.GetRequest) (*raftpb.GetResponse, error) {
 	slog.Info(fmt.Sprintf("Received ForwardGet on node %d for key %d", r.id, req.Key))
 
@@ -104,7 +102,6 @@ func (r *Raft) ForwardGet(ctx context.Context, req *raftpb.GetRequest) (*raftpb.
 		return peer.ForwardGet(ctx, req)
 	}
 
-	// Leader serves the read
 	value := r.application.GetValue(int(req.Key))
 	return &raftpb.GetResponse{
 		Key:   req.Key,
@@ -145,7 +142,6 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 	r.mu.Lock()
 	fmt.Printf("[LOCK] Acquired lock for Raft.mu in LogRequest\n")
 
-	// Log incoming LogRequest with key details
 	oldRole := r.currentRole
 	oldLeader := r.currentLeaderId
 

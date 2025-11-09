@@ -1,9 +1,7 @@
 #!/bin/bash
 
-# Exit immediately if a command exits with a non-zero status.
 set -e
 
-# Make sure we are in the root of the project
 cd "$(dirname "$0")/.."
 
 echo "Running e2e tests..."

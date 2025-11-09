@@ -1,7 +1,5 @@
 package api
 
-// Request and response types for HTTP API
-
 type PutRequest struct {
 	Key   int `json:"key"`
 	Value int `json:"value"`

@@ -17,27 +17,22 @@ import (
 	"github.com/google/uuid"
 )
 
-// CLI provides an interactive command-line interface for the Raft cluster
 type CLI struct {
-	client       *http.Client
-	baseURL      string
-	retrier      *api.Retrier
-	maxRedirects int
+	client  *http.Client
+	baseURL string
+	retrier *api.Retrier
 }
 
-// NewCLI creates a new CLI instance
 func NewCLI(baseURL string) *CLI {
 	return &CLI{
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				// Don't auto-follow redirects, handle manually
 				return http.ErrUseLastResponse
 			},
 		},
-		baseURL:      baseURL,
-		retrier:      api.NewRetrier(api.DefaultRetryConfigs["PUT"]),
-		maxRedirects: 3,
+		baseURL: baseURL,
+		retrier: api.NewRetrier(api.DefaultRetryConfigs["PUT"]),
 	}
 }
 
@@ -65,7 +60,6 @@ func main() {
 	cli.Run()
 }
 
-// Run starts the interactive CLI loop
 func (c *CLI) Run() {
 	scanner := bufio.NewScanner(os.Stdin)
 
@@ -87,7 +81,6 @@ func (c *CLI) Run() {
 	}
 }
 
-// executeCommand parses and executes a command
 func (c *CLI) executeCommand(line string) error {
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
@@ -123,7 +116,6 @@ func (c *CLI) executeCommand(line string) error {
 	return nil
 }
 
-// cmdPut handles PUT operations
 func (c *CLI) cmdPut(args []string) error {
 	if len(args) != 2 {
 		return fmt.Errorf("usage: put <key> <value>")
@@ -139,10 +131,8 @@ func (c *CLI) cmdPut(args []string) error {
 		return fmt.Errorf("invalid value: %v", err)
 	}
 
-	// Generate idempotency token
 	idempotencyToken := uuid.New().String()
 
-	// Execute with retry
 	retryFunc := func(ctx context.Context) error {
 		req := map[string]int{"key": key, "value": value}
 		body, _ := json.Marshal(req)
@@ -157,16 +147,14 @@ func (c *CLI) cmdPut(args []string) error {
 		}
 		defer resp.Body.Close()
 
-		// Handle redirects to leader
 		if resp.StatusCode == http.StatusTemporaryRedirect {
 			location := resp.Header.Get("Location")
 			if location != "" {
-				// Update baseURL and retry
 				lastSlash := strings.LastIndex(location, "/")
 				if lastSlash > 0 {
 					c.baseURL = location[:lastSlash]
 				}
-				return fmt.Errorf("redirecting to leader") // Trigger retry
+				return fmt.Errorf("redirecting to leader")
 			}
 		}
 
@@ -175,7 +163,6 @@ func (c *CLI) cmdPut(args []string) error {
 			return fmt.Errorf("server error (status %d): %s", resp.StatusCode, string(bodyBytes))
 		}
 
-		// Check for cache hit
 		cacheStatus := resp.Header.Get("X-Cache")
 		if cacheStatus == "HIT" {
 			fmt.Printf("  (idempotent retry detected - returned cached result)\n")
@@ -196,7 +183,6 @@ func (c *CLI) cmdPut(args []string) error {
 	return nil
 }
 
-// cmdGet handles GET operations
 func (c *CLI) cmdGet(args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: get <key> [--stale]")
@@ -207,7 +193,6 @@ func (c *CLI) cmdGet(args []string) error {
 		return fmt.Errorf("invalid key: %v", err)
 	}
 
-	// Check for --stale flag
 	stale := false
 	if len(args) > 1 && args[1] == "--stale" {
 		stale = true
@@ -245,7 +230,6 @@ func (c *CLI) cmdGet(args []string) error {
 	return nil
 }
 
-// cmdDelete handles DELETE operations
 func (c *CLI) cmdDelete(args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: delete <key>")
@@ -256,10 +240,8 @@ func (c *CLI) cmdDelete(args []string) error {
 		return fmt.Errorf("invalid key: %v", err)
 	}
 
-	// Generate idempotency token
 	idempotencyToken := uuid.New().String()
 
-	// Execute with retry
 	retryFunc := func(ctx context.Context) error {
 		httpReq, _ := http.NewRequestWithContext(ctx, http.MethodDelete, fmt.Sprintf("%s/kv/%d", c.baseURL, key), nil)
 		httpReq.Header.Set("Idempotency-Key", idempotencyToken)
@@ -275,7 +257,6 @@ func (c *CLI) cmdDelete(args []string) error {
 			return fmt.Errorf("server error (status %d): %s", resp.StatusCode, string(bodyBytes))
 		}
 
-		// Check for cache hit
 		cacheStatus := resp.Header.Get("X-Cache")
 		if cacheStatus == "HIT" {
 			fmt.Printf("  (idempotent retry detected - returned cached result)\n")
@@ -296,7 +277,6 @@ func (c *CLI) cmdDelete(args []string) error {
 	return nil
 }
 
-// cmdStatus shows cluster status
 func (c *CLI) cmdStatus(args []string) error {
 	resp, err := c.client.Get(c.baseURL + "/status")
 	if err != nil {
@@ -319,7 +299,6 @@ func (c *CLI) cmdStatus(args []string) error {
 	return nil
 }
 
-// cmdLeader shows leader information
 func (c *CLI) cmdLeader(args []string) error {
 	resp, err := c.client.Get(c.baseURL + "/leader")
 	if err != nil {
@@ -339,7 +318,6 @@ func (c *CLI) cmdLeader(args []string) error {
 	return nil
 }
 
-// cmdHealth checks node health
 func (c *CLI) cmdHealth(args []string) error {
 	resp, err := c.client.Get(c.baseURL + "/health")
 	if err != nil {
@@ -356,7 +334,6 @@ func (c *CLI) cmdHealth(args []string) error {
 	return nil
 }
 
-// cmdHelp shows available commands
 func (c *CLI) cmdHelp() {
 	fmt.Println("Available Commands:")
 	fmt.Println("----------------------------------------")

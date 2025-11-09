@@ -4,7 +4,6 @@ set -e
 echo "🧹 Cleaning Raft Data..."
 echo ""
 
-# Check if cluster is running
 if docker compose ps | grep -q "Up"; then
     echo "⚠️  Cluster is still running. Stopping first..."
     docker compose down

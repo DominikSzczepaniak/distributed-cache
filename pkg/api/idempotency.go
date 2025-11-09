@@ -8,33 +8,28 @@ import (
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft"
 )
 
-// IdempotencyCache caches responses for write operations to support idempotent retries
 type IdempotencyCache struct {
 	mu      sync.RWMutex
 	entries map[string]*IdempotencyCacheEntry
 	ttl     time.Duration
 }
 
-// IdempotencyCacheEntry stores a cached response
 type IdempotencyCacheEntry struct {
 	Response    raft.BroadcastResponse
 	CompletedAt time.Time
 }
 
-// NewIdempotencyCache creates a new idempotency cache with specified TTL
 func NewIdempotencyCache(ttl time.Duration) *IdempotencyCache {
 	cache := &IdempotencyCache{
 		entries: make(map[string]*IdempotencyCacheEntry),
 		ttl:     ttl,
 	}
 
-	// Start cleanup goroutine
 	go cache.cleanupExpired()
 
 	return cache
 }
 
-// Get retrieves cached response if available and not expired
 func (c *IdempotencyCache) Get(token string) (*raft.BroadcastResponse, bool) {
 	c.mu.RLock()
 	fmt.Printf("[LOCK] Acquired RLock for IdempotencyCache in Get\n")
@@ -48,7 +43,6 @@ func (c *IdempotencyCache) Get(token string) (*raft.BroadcastResponse, bool) {
 		return nil, false
 	}
 
-	// Check if expired
 	if time.Since(entry.CompletedAt) > c.ttl {
 		return nil, false
 	}
@@ -56,7 +50,6 @@ func (c *IdempotencyCache) Get(token string) (*raft.BroadcastResponse, bool) {
 	return &entry.Response, true
 }
 
-// Set caches a response
 func (c *IdempotencyCache) Set(token string, response raft.BroadcastResponse) {
 	c.mu.Lock()
 	fmt.Printf("[LOCK] Acquired Lock for IdempotencyCache in Set\n")
@@ -71,7 +64,6 @@ func (c *IdempotencyCache) Set(token string, response raft.BroadcastResponse) {
 	}
 }
 
-// cleanupExpired removes expired entries periodically
 func (c *IdempotencyCache) cleanupExpired() {
 	ticker := time.NewTicker(c.ttl / 2)
 	defer ticker.Stop()
