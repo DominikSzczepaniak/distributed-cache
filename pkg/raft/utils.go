@@ -60,14 +60,9 @@ func (r *Raft) getCurrentRole() Role {
 	return r.currentRole
 }
 
-func (r *Raft) becomeFollower(term int) {
-	r.mu.Lock()
-	fmt.Printf("[LOCK] Acquired lock for Raft.mu in becomeFollower\n")
-	defer func() {
-		r.mu.Unlock()
-		fmt.Printf("[LOCK] Released lock for Raft.mu in becomeFollower\n")
-	}()
-
+// becomeFollowerUnlocked transitions to follower state
+// MUST be called with r.mu held
+func (r *Raft) becomeFollowerUnlocked(term int) {
 	r.currentRole = Follower
 	r.currentTerm = term
 	r.votedFor = -1
@@ -83,6 +78,17 @@ func (r *Raft) becomeFollower(term int) {
 	}
 
 	r.raftElector.ResetTimer()
+}
+
+func (r *Raft) becomeFollower(term int) {
+	r.mu.Lock()
+	fmt.Printf("[LOCK] Acquired lock for Raft.mu in becomeFollower\n")
+	defer func() {
+		r.mu.Unlock()
+		fmt.Printf("[LOCK] Released lock for Raft.mu in becomeFollower\n")
+	}()
+
+	r.becomeFollowerUnlocked(term)
 }
 
 func (r *Raft) becomeLeader() {
@@ -134,4 +140,66 @@ func (r *Raft) getLeaderData() (bool, int) {
 	r.mu.RUnlock()
 	fmt.Printf("[LOCK] Released RLock for Raft.mu in getLeaderData\n")
 	return isLeader, leaderID
+}
+
+// checkQuorumHealth implements Stage 2: Quorum-Based Leader Step-Down
+// A leader that cannot reach a majority of followers should step down
+// to prevent "zombie leader" scenarios during network partitions.
+//
+// This method is called by replicators after RPC failures.
+// It checks if the leader has lost contact with a quorum and steps down if so.
+func (r *Raft) checkQuorumHealth() {
+	r.mu.Lock()
+	fmt.Printf("[LOCK] Acquired lock for Raft.mu in checkQuorumHealth\n")
+	defer func() {
+		r.mu.Unlock()
+		fmt.Printf("[LOCK] Released lock for Raft.mu in checkQuorumHealth\n")
+	}()
+
+	// Only leaders need to check quorum
+	if r.currentRole != Leader {
+		return
+	}
+
+	// Count how many replicators have exceeded failure threshold
+	failedFollowers := 0
+	healthyFollowers := 0
+
+	for i, rep := range r.replicators {
+		if i == r.id || rep == nil {
+			continue
+		}
+
+		if rep.consecutiveFailures >= rep.maxConsecutiveFailures {
+			failedFollowers++
+			slog.Debug(fmt.Sprintf("Node %d: Follower %d has %d consecutive failures",
+				r.id, i, rep.consecutiveFailures))
+		} else {
+			healthyFollowers++
+		}
+	}
+
+	// Calculate quorum requirement
+	// In a 3-node cluster: need 2 nodes (majority)
+	// In a 5-node cluster: need 3 nodes (majority)
+	majority := int(math.Ceil(float64(r.totalNodes+1) / 2))
+	// Leader counts as 1, so we need (majority - 1) healthy followers
+	requiredHealthyFollowers := majority - 1
+
+	slog.Info(fmt.Sprintf("Node %d quorum check: %d healthy, %d failed, need %d healthy followers (role=%s term=%d)",
+		r.id, healthyFollowers, failedFollowers, requiredHealthyFollowers, r.currentRole, r.currentTerm))
+
+	// If we don't have enough healthy followers to maintain quorum, step down
+	if healthyFollowers < requiredHealthyFollowers {
+		slog.Warn(fmt.Sprintf(
+			"Node %d STEPPING DOWN: lost quorum (only %d/%d healthy followers, need %d) - becoming Follower at term %d",
+			r.id, healthyFollowers, r.totalNodes-1, requiredHealthyFollowers, r.currentTerm))
+
+		// Step down to follower state without incrementing term
+		// A new election will determine the next leader
+		r.becomeFollowerUnlocked(r.currentTerm)
+
+		slog.Info(fmt.Sprintf("Node %d: Stepped down to Follower (term=%d, leader=%d)",
+			r.id, r.currentTerm, r.currentLeaderId))
+	}
 }

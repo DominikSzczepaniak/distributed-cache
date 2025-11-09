@@ -140,20 +140,37 @@ func convertLogRequestArgs(args *raftpb.LogRequestArgs) (int, int, int, int, int
 }
 
 func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) {
-	//slog.Info(fmt.Sprintf("Received LogRequest")) // %+v", in))
 	leaderId, term, prevIndex, prevTerm, commitLength, suffix := convertLogRequestArgs(in)
 
 	r.mu.Lock()
 	fmt.Printf("[LOCK] Acquired lock for Raft.mu in LogRequest\n")
+
+	// Log incoming LogRequest with key details
+	oldRole := r.currentRole
+	oldLeader := r.currentLeaderId
+
+	slog.Info(fmt.Sprintf("Node %d received LogRequest from leader=%d term=%d (myTerm=%d myRole=%s myLeader=%d) suffix=%d entries",
+		r.id, leaderId, term, r.currentTerm, r.currentRole, r.currentLeaderId, len(suffix)))
+
 	if r.currentTerm < term {
+		slog.Info(fmt.Sprintf("Node %d: Updating term from %d to %d (LogRequest from leader %d)",
+			r.id, r.currentTerm, term, leaderId))
 		r.currentTerm = term
 		r.votedFor = -1
-
 		r.raftElector.ResetTimer()
 	}
+
 	if r.currentTerm == term {
+		if oldRole != Follower {
+			slog.Info(fmt.Sprintf("Node %d: Stepping down from %s to Follower (term=%d leader=%d)",
+				r.id, oldRole, term, leaderId))
+		}
 		r.currentRole = Follower
 		if r.id != leaderId {
+			if oldLeader != leaderId {
+				slog.Info(fmt.Sprintf("Node %d: Updating leader from %d to %d",
+					r.id, oldLeader, leaderId))
+			}
 			r.currentLeaderId = leaderId
 		} else {
 			r.currentLeaderId = -1
@@ -179,6 +196,8 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 	//logOk := (len(r.log) >= prefixLen) && (prefixLen == 0 || r.log[prefixLen-1].Term == prefixTerm) //old version
 
 	if r.currentTerm == term && logOk {
+		slog.Info(fmt.Sprintf("Node %d: LogRequest SUCCESS - appending %d entries (prevIndex=%d commitLen=%d)",
+			r.id, len(suffix), prevIndex, commitLength))
 		r.raftElector.ResetTimer()
 		r.mu.Unlock()
 		fmt.Printf("[LOCK] Released lock for Raft.mu in LogRequest (logOk)\n")
@@ -188,6 +207,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		ack := prevIndex + len(suffix)
 		go r.logSaver.SaveValues()
 
+		slog.Info(fmt.Sprintf("Node %d: LogRequest completed, ack=%d", r.id, ack))
 		return &raftpb.LogResponse{
 			NodeId:      int32(r.id),
 			CurrentTerm: int32(r.currentTerm),
@@ -196,6 +216,8 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		}, nil
 	} else {
 		currentTerm := r.currentTerm
+		slog.Warn(fmt.Sprintf("Node %d: LogRequest REJECTED - term=%d logOk=%t (prevIndex=%d absLastIndex=%d prevTerm=%d)",
+			r.id, currentTerm, logOk, prevIndex, absLastIndex, prevTerm))
 		r.mu.Unlock()
 		fmt.Printf("[LOCK] Released lock for Raft.mu in LogRequest (else)\n")
 		r.logSaver.SaveValues()

@@ -215,6 +215,9 @@ func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 		fmt.Printf("[LOCK] Released lock for Raft.mu in appendEntries\n")
 	}()
 
+	slog.Info(fmt.Sprintf("Node %d: appendEntries called (prefixLen=%d leaderCommit=%d suffixLen=%d myLogLen=%d myCommit=%d)",
+		r.id, prefixLen, leaderCommit, len(suffix), len(r.log)+r.snapshotter.lastIndex, r.commitedLength))
+
 	absoluteLogLength := len(r.log) + r.snapshotter.lastIndex
 	if len(suffix) > 0 && absoluteLogLength > prefixLen {
 		checkIndex := prefixLen
@@ -243,11 +246,18 @@ func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 			leaderCommit = maxCommit
 		}
 
+		slog.Info(fmt.Sprintf("Node %d: Committing entries from %d to %d (leaderCommit=%d)",
+			r.id, r.commitedLength, leaderCommit, leaderCommit))
+
 		for i := r.commitedLength; i < leaderCommit; i++ {
 			relativeIndex := i - r.snapshotter.lastIndex
-			r.deliverToApplication(r.log[relativeIndex].Message)
+			msg := r.log[relativeIndex].Message
+			slog.Info(fmt.Sprintf("Node %d: Delivering entry %d to application (key=%d value=%v type=%s)",
+				r.id, i, msg.Key, msg.Value, msg.MsgType))
+			r.deliverToApplication(msg)
 		}
 		r.commitedLength = leaderCommit
+		slog.Info(fmt.Sprintf("Node %d: Commit complete, commitedLength now %d", r.id, r.commitedLength))
 	}
 	err := r.decideRunSnapshot()
 	if err != nil {
