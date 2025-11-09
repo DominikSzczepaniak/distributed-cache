@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -119,7 +120,7 @@ func ensureDir(filename string) error {
 // ------
 
 func (rds *DataSaver) saveLog(logs []LogEntry, f *os.File) (int, error) {
-	fmt.Printf("Saving logs, length: %d\n", len(logs))
+	slog.Debug(fmt.Sprintf("Saving logs, length: %d", len(logs)))
 	encoder := gob.NewEncoder(f)
 	savedLines := 0
 	for _, entry := range logs {
@@ -180,26 +181,26 @@ func (rds *DataSaver) saveValuesManager(
 ) (bool, error) {
 	logFile, err := rds.handleFileExistanceAndCreation(rds.logsFilename)
 	if err != nil {
-		fmt.Println("Failed to create logs file, error: ", err)
+		slog.Error(fmt.Sprintf("Failed to create logs file: %v", err))
 		return false, err
 	}
 	defer logFile.Close()
 
 	metadataFile, err := os.Create(rds.metadataFilename)
 	if err != nil {
-		fmt.Println("Failed to create metadata file, error: ", err)
+		slog.Error(fmt.Sprintf("Failed to create metadata file: %v", err))
 		return false, err
 	}
 	defer metadataFile.Close()
 
 	err = rds.saveMetadata(currentTerm, votedFor, committedLength, metadataFile)
 	if err != nil {
-		fmt.Println("Failed to save metadata, error: ", err)
+		slog.Error(fmt.Sprintf("Failed to save metadata: %v", err))
 		return false, err
 	}
 	_, err = rds.saveLog(logs, logFile)
 	if err != nil {
-		fmt.Println("Failed to save logs, error: ", err)
+		slog.Error(fmt.Sprintf("Failed to save logs: %v", err))
 		return false, err
 	}
 
@@ -225,7 +226,7 @@ func (rds *DataSaver) doSaveValues() error {
 	votedFor := rds.parent.votedFor
 	committedLength := rds.parent.commitedLength
 
-	fmt.Println("SaveValues idx: ", idx)
+	slog.Debug(fmt.Sprintf("SaveValues idx: %d", idx))
 	src := rds.parent.log[idx:]
 	logCopy := make([]LogEntry, len(src))
 	copy(logCopy, src)
@@ -321,7 +322,7 @@ func (rds *DataSaver) LoadValues() (int, int, int, []LogEntry, error) {
 
 	logFile, err := rds.openFileForReading(rds.logsFilename)
 	if err != nil {
-		fmt.Println("Error opening log file, error: ", err)
+		slog.Error(fmt.Sprintf("Error opening log file: %v", err))
 		return 0, 0, 0, nil, err
 	}
 	defer logFile.Close()
@@ -339,7 +340,7 @@ func (rds *DataSaver) LoadValues() (int, int, int, []LogEntry, error) {
 
 	logs, err := rds.loadLogs(logFile)
 	if err != nil {
-		fmt.Println("Error reading log file, error: ", err)
+		slog.Error(fmt.Sprintf("Error reading log file: %v", err))
 		return 0, 0, 0, nil, err
 	}
 	rds.previousSavedIndex = len(logs)

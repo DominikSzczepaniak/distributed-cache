@@ -69,7 +69,7 @@ func NewRaft(application Application, cfg *Config) *Raft {
 
 	term, votedFor, commited, savedLog, err := r.logSaver.LoadValues()
 	if err == nil {
-		fmt.Printf("Loaded values from file: %d %d %d, log length: %d\n", term, votedFor, commited, len(savedLog))
+		slog.Info(fmt.Sprintf("Loaded values from file: term=%d votedFor=%d committed=%d logLength=%d", term, votedFor, commited, len(savedLog)))
 		r.currentTerm = term
 		r.votedFor = votedFor
 		r.commitedLength = commited

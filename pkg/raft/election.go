@@ -60,11 +60,11 @@ func (re *Elector) electionTimerLoop() {
 
 		case <-timer.C:
 			re.parent.mu.RLock()
-			fmt.Printf("[LOCK] Acquired RLock for parent.mu in electionTimerLoop\n")
+			slog.Debug("[LOCK] Acquired RLock for parent.mu in electionTimerLoop")
 			isLeader := re.parent.currentRole == Leader
 			isSnapshotWriting := re.parent.snapshotter.installingSnapshot
 			re.parent.mu.RUnlock()
-			fmt.Printf("[LOCK] Released RLock for parent.mu in electionTimerLoop\n")
+			slog.Debug("[LOCK] Released RLock for parent.mu in electionTimerLoop")
 			if !isLeader && !isSnapshotWriting {
 				slog.Info(fmt.Sprintf("Starting election for node %d, because isLeader is %t and snapshot is writing is %t", re.parent.id, isLeader, isSnapshotWriting))
 				re.parent.startElection()
@@ -86,10 +86,10 @@ func (re *Elector) ResetTimer() {
 
 func (r *Raft) startElection() {
 	r.mu.Lock()
-	fmt.Printf("[LOCK] Acquired lock for Raft.mu in startElection\n")
+	slog.Debug("[LOCK] Acquired lock for Raft.mu in startElection")
 
 	r.raftElector.ResetTimer()
-	fmt.Printf("Election started for node %d\n", r.id)
+	slog.Debug(fmt.Sprintf("Election started for node %d", r.id))
 	r.currentRole = Candidate
 	r.currentTerm++
 	r.votedFor = r.id
@@ -103,13 +103,13 @@ func (r *Raft) startElection() {
 	totalNodes := r.totalNodes
 
 	r.mu.Unlock()
-	fmt.Printf("[LOCK] Released lock for Raft.mu in startElection\n")
+	slog.Debug("[LOCK] Released lock for Raft.mu in startElection")
 
 	for i := 0; i < totalNodes; i++ {
 		if i == r.id {
 			continue
 		}
-		fmt.Printf("Sending vote request to node %d from %d\n", i, r.id)
+		slog.Debug(fmt.Sprintf("Sending vote request to node %d from %d", i, r.id))
 		go r.sendVoteRequest(voteData, i)
 	}
 }

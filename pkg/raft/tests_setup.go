@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -16,6 +17,14 @@ import (
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
+
+func init() {
+	// Disable verbose logging in tests unless explicitly requested
+	// This prevents 250M+ log lines from being generated during TestConcurrentOperations
+	if os.Getenv("RAFT_TEST_VERBOSE") == "" {
+		slog.SetLogLoggerLevel(slog.LevelError)
+	}
+}
 
 const (
 	SNAPSHOT_THRESHOLD = 50000
