@@ -228,9 +228,17 @@ func (rds *DataSaver) doSaveValues() error {
 	votedFor := rds.parent.votedFor
 	committedLength := rds.parent.commitedLength
 
-	slog.Debug(fmt.Sprintf("SaveValues idx: %d", idx))
+	// Limit batch size to prevent memory exhaustion and long lock holds
+	const maxBatchSize = 10000
 	src := rds.parent.log[idx:]
-	logCopy := make([]LogEntry, len(src))
+	batchSize := len(src)
+	if batchSize > maxBatchSize {
+		batchSize = maxBatchSize
+		src = src[:maxBatchSize]
+	}
+
+	slog.Debug(fmt.Sprintf("SaveValues idx: %d, batchSize: %d, totalPending: %d", idx, batchSize, len(rds.parent.log)-idx))
+	logCopy := make([]LogEntry, batchSize)
 	copy(logCopy, src)
 	rds.parent.mu.RUnlock()
 
@@ -252,6 +260,17 @@ func (rds *DataSaver) doSaveValues() error {
 		newIndex = lengthNow
 	}
 	rds.previousSavedIndex = newIndex
+
+	// If there's more to save, re-queue another batch
+	if newIndex < lengthNow {
+		select {
+		case rds.saveQueue <- saveRequest{}:
+			rds.pendingSaves.Add(1)
+		default:
+			// Queue full, next operation will trigger save
+		}
+	}
+
 	return nil
 }
 
