@@ -13,6 +13,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+type PeerReconnectCallback func(peerID int)
+
 type ConnectionManager struct {
 	mu sync.RWMutex
 
@@ -27,6 +29,8 @@ type ConnectionManager struct {
 	retryCfg       RetryConfig
 	connTimeout    time.Duration
 	healthInterval time.Duration
+
+	onPeerReconnect PeerReconnectCallback
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -193,10 +197,19 @@ func (cm *ConnectionManager) performHealthCheck() {
 
 		switch state {
 		case connectivity.Ready, connectivity.Idle:
-			if !cm.peerAvailable[i].Load() {
+			wasUnavailable := !cm.peerAvailable[i].Load()
+			if wasUnavailable {
 				slog.Info(fmt.Sprintf("Node %d: Peer %d is now available (state: %v)",
 					cm.selfID, i, state))
 				cm.peerAvailable[i].Store(true)
+
+				// Trigger reconnect callback if peer was previously unavailable
+				cm.mu.RLock()
+				callback := cm.onPeerReconnect
+				cm.mu.RUnlock()
+				if callback != nil {
+					callback(i)
+				}
 			}
 			cm.mu.Lock()
 			cm.lastContact[i] = time.Now()
@@ -274,6 +287,43 @@ func (cm *ConnectionManager) GetAvailablePeerCount() int {
 		}
 	}
 	return count
+}
+
+func (cm *ConnectionManager) SetPeerReconnectCallback(cb PeerReconnectCallback) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.onPeerReconnect = cb
+}
+
+// CheckPeerAvailabilityNow performs an immediate synchronous health check for a specific peer
+// This is used for critical operations that need fresh availability data
+func (cm *ConnectionManager) CheckPeerAvailabilityNow(peerID int) bool {
+	slog.Info(fmt.Sprintf("Node %d: CheckPeerAvailabilityNow called for peer %d", cm.selfID, peerID))
+
+	if peerID < 0 || peerID >= cm.totalNodes || peerID == cm.selfID {
+		slog.Info(fmt.Sprintf("Node %d: Peer %d invalid or self, returning false", cm.selfID, peerID))
+		return false
+	}
+
+	slog.Info(fmt.Sprintf("Node %d: Acquiring lock to check peer %d connection", cm.selfID, peerID))
+	cm.mu.RLock()
+	conn := cm.conns[peerID]
+	cm.mu.RUnlock()
+	slog.Info(fmt.Sprintf("Node %d: Lock released for peer %d, conn is nil: %v", cm.selfID, peerID, conn == nil))
+
+	if conn == nil {
+		cm.peerAvailable[peerID].Store(false)
+		return false
+	}
+
+	slog.Info(fmt.Sprintf("Node %d: Calling GetState() for peer %d", cm.selfID, peerID))
+	state := conn.GetState()
+	slog.Info(fmt.Sprintf("Node %d: GetState() returned %v for peer %d", cm.selfID, state, peerID))
+
+	isAvailable := (state == connectivity.Ready || state == connectivity.Idle)
+	cm.peerAvailable[peerID].Store(isAvailable)
+	slog.Info(fmt.Sprintf("Node %d: Peer %d availability: %v", cm.selfID, peerID, isAvailable))
+	return isAvailable
 }
 
 func (cm *ConnectionManager) Close() {

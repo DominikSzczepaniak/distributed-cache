@@ -91,9 +91,12 @@ func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Forwar
 func (r *Raft) ForwardGet(ctx context.Context, req *raftpb.GetRequest) (*raftpb.GetResponse, error) {
 	slog.Info(fmt.Sprintf("Received ForwardGet on node %d for key %d", r.id, req.Key))
 
+	slog.Info(fmt.Sprintf("Node %d: About to call getLeaderData()", r.id))
 	isLeader, leaderID := r.getLeaderData()
+	slog.Info(fmt.Sprintf("Node %d: getLeaderData() returned isLeader=%v, leaderID=%d", r.id, isLeader, leaderID))
 
 	if !isLeader {
+		slog.Info(fmt.Sprintf("Node %d: Not leader, will forward or return error", r.id))
 		if leaderID < 0 {
 			return nil, fmt.Errorf("no leader known")
 		}
@@ -115,6 +118,14 @@ func (r *Raft) ForwardGet(ctx context.Context, req *raftpb.GetRequest) (*raftpb.
 		}
 		return peer.ForwardGet(ctx, req)
 	}
+
+	// Leader must verify it can reach quorum before serving read
+	slog.Info(fmt.Sprintf("Node %d: Is leader, about to verify leadership", r.id))
+	if !r.verifyLeadership() {
+		slog.Warn(fmt.Sprintf("Node %d: Leadership verification failed, returning error", r.id))
+		return nil, fmt.Errorf("node %d lost leadership, cannot serve read", r.id)
+	}
+	slog.Info(fmt.Sprintf("Node %d: Leadership verified, serving read", r.id))
 
 	// Leader serves the read
 	value := r.application.GetValue(int(req.Key))
@@ -155,11 +166,11 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 	//slog.Info(fmt.Sprintf("Received LogRequest")) // %+v", in))
 	leaderId, term, prevIndex, prevTerm, commitLength, suffix := convertLogRequestArgs(in)
 
+	// First, handle term updates and get state under lock
 	r.mu.Lock()
 	if r.currentTerm < term {
 		r.currentTerm = term
 		r.votedFor = -1
-
 		r.raftElector.ResetTimer()
 	}
 	if r.currentTerm == term {
@@ -187,26 +198,27 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 			logOk = false
 		}
 	}
-	//logOk := (len(r.log) >= prefixLen) && (prefixLen == 0 || r.log[prefixLen-1].Term == prefixTerm) //old version
 
-	if r.currentTerm == term && logOk {
+	shouldAppend := r.currentTerm == term && logOk
+	currentTerm := r.currentTerm
+	if shouldAppend {
 		r.raftElector.ResetTimer()
-		r.mu.Unlock()
+	}
+	r.mu.Unlock()
 
+	// Now handle the append outside the lock
+	if shouldAppend {
 		r.appendEntries(prevIndex, commitLength, suffix)
-
 		ack := prevIndex + len(suffix)
 		go r.logSaver.SaveValues()
 
 		return &raftpb.LogResponse{
 			NodeId:      int32(r.id),
-			CurrentTerm: int32(r.currentTerm),
+			CurrentTerm: int32(currentTerm),
 			Ack:         int32(ack),
 			Success:     true,
 		}, nil
 	} else {
-		currentTerm := r.currentTerm
-		r.mu.Unlock()
 		r.logSaver.SaveValues()
 		return &raftpb.LogResponse{
 			NodeId:      int32(r.id),
@@ -243,32 +255,29 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 	}
 	lastTerm := r.getLastLogTerm()
 	logOk := (candidateLogTerm > lastTerm) || (candidateLogTerm == lastTerm && candidateLogLength >= len(r.log)+r.snapshotter.lastIndex)
+
+	granted := false
 	if candidateTerm == r.currentTerm && logOk && (r.votedFor == -1 || r.votedFor == candidateId) {
 		r.votedFor = candidateId
 		r.currentRole = Follower
 		r.currentLeaderId = -1
-
 		r.raftElector.ResetTimer()
-		currentTerm := r.currentTerm
-		r.mu.Unlock()
-		go r.logSaver.SaveValues()
-		return &raftpb.VoteResponse{
-			NodeId:      int32(r.id),
-			CurrentTerm: int32(currentTerm),
-			Granted:     true,
-		}, nil
-	} else {
-		currentTerm := r.currentTerm
-		r.mu.Unlock()
-		if toPersist {
-			go r.logSaver.SaveValues()
-		}
-		return &raftpb.VoteResponse{
-			NodeId:      int32(r.id),
-			CurrentTerm: int32(currentTerm),
-			Granted:     false,
-		}, nil
+		granted = true
+		toPersist = true
 	}
+
+	currentTerm := r.currentTerm
+	r.mu.Unlock()
+
+	if toPersist {
+		go r.logSaver.SaveValues()
+	}
+
+	return &raftpb.VoteResponse{
+		NodeId:      int32(r.id),
+		CurrentTerm: int32(currentTerm),
+		Granted:     granted,
+	}, nil
 }
 
 func (r *Raft) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error) {

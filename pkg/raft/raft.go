@@ -86,6 +86,13 @@ func NewRaft(application Application, cfg *Config) *Raft {
 
 	r.connMgr = NewConnectionManager(r.id, r.totalNodes, cfg.raftAddrs, cfg)
 
+	// Register callback for peer reconnections to verify leadership
+	if r.connMgr != nil {
+		r.connMgr.SetPeerReconnectCallback(func(peerID int) {
+			r.handlePeerReconnect(peerID)
+		})
+	}
+
 	go r.serveGRPC(cfg.raftAddrs[r.id])
 
 	return r
@@ -399,6 +406,78 @@ func (r *Raft) IsLeader() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.currentRole == Leader
+}
+
+// verifyLeadership checks if this node can still reach quorum
+// Returns true if leadership is confirmed, false otherwise
+func (r *Raft) verifyLeadership() bool {
+	r.mu.RLock()
+	isLeader := r.currentRole == Leader
+	totalNodes := r.totalNodes
+	nodeID := r.id
+	r.mu.RUnlock()
+
+	if !isLeader {
+		return false
+	}
+
+	slog.Info(fmt.Sprintf("Node %d: Verifying leadership (checking peer availability)", nodeID))
+
+	// Force fresh peer availability check for all peers
+	// This ensures we have up-to-date information for quorum verification
+	availableCount := 0
+	for i := 0; i < totalNodes; i++ {
+		if i == nodeID {
+			continue
+		}
+		isAvail := r.connMgr.CheckPeerAvailabilityNow(i)
+		slog.Info(fmt.Sprintf("Node %d: Peer %d availability check: %v", nodeID, i, isAvail))
+		if isAvail {
+			availableCount++
+		}
+	}
+
+	quorum := (totalNodes / 2) + 1
+
+	slog.Info(fmt.Sprintf("Node %d: Quorum check: %d/%d available (need %d)",
+		nodeID, availableCount+1, totalNodes, quorum))
+
+	// Self + available peers must form quorum
+	if availableCount+1 < quorum {
+		slog.Warn(fmt.Sprintf("Node %d: Cannot reach quorum (%d/%d available), stepping down",
+			nodeID, availableCount+1, quorum))
+		r.stepDownAsLeader()
+		return false
+	}
+
+	slog.Info(fmt.Sprintf("Node %d: Leadership verified, can reach quorum", nodeID))
+	return true
+}
+
+// stepDownAsLeader gracefully demotes this node from leader to follower
+func (r *Raft) stepDownAsLeader() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.currentRole == Leader {
+		slog.Info(fmt.Sprintf("Node %d: Stepping down from leader role", r.id))
+		r.currentRole = Follower
+		r.currentLeaderId = -1
+		r.votedFor = -1
+	}
+}
+
+// handlePeerReconnect is called when a peer reconnects
+// If this node is leader, verify it can still reach quorum
+func (r *Raft) handlePeerReconnect(peerID int) {
+	r.mu.RLock()
+	isLeader := r.currentRole == Leader
+	r.mu.RUnlock()
+
+	if isLeader {
+		slog.Info(fmt.Sprintf("Node %d: Peer %d reconnected, verifying leadership", r.id, peerID))
+		r.verifyLeadership()
+	}
 }
 
 // ClusterStatus represents the current state of the cluster
