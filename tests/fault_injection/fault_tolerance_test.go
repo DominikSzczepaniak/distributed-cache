@@ -1,4 +1,4 @@
-package integration
+package fault_injection
 
 import (
 	"bytes"

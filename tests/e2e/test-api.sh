@@ -3,6 +3,9 @@ set -e
 
 API_URL="${1:-http://localhost:8080}"
 
+./scripts/stop-cluster.sh
+./scripts/start-cluster.sh
+
 echo "🧪 Testing Raft HTTP API at $API_URL"
 echo ""
 
