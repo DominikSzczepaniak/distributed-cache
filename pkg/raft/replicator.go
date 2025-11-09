@@ -70,12 +70,14 @@ func (rep *Replicator) replicate() {
 	}
 
 	rep.parent.mu.RLock()
+	fmt.Printf("[LOCK] Acquired RLock for parent.mu in replicate (check snapshot)\n")
 	nextIndex := rep.parent.sentLengths[rep.followerId]
 	if nextIndex == 0 {
 		nextIndex = rep.parent.snapshotter.lastIndex + len(rep.parent.log) + 1
 	}
 	needsSnapshot := nextIndex <= rep.parent.snapshotter.lastIndex
 	rep.parent.mu.RUnlock()
+	fmt.Printf("[LOCK] Released RLock for parent.mu in replicate (check snapshot)\n")
 
 	if needsSnapshot {
 		rep.parent.sendInstallSnapshotRPC(rep.followerId)
@@ -103,7 +105,11 @@ func (rep *Replicator) replicate() {
 	}
 
 	rep.parent.mu.Lock()
-	defer rep.parent.mu.Unlock()
+	fmt.Printf("[LOCK] Acquired lock for parent.mu in replicate (process response)\n")
+	defer func() {
+		rep.parent.mu.Unlock()
+		fmt.Printf("[LOCK] Released lock for parent.mu in replicate (process response)\n")
+	}()
 
 	if resp.CurrentTerm > int32(rep.parent.currentTerm) {
 		rep.parent.becomeFollower(int(resp.CurrentTerm))
@@ -127,7 +133,11 @@ func (rep *Replicator) replicate() {
 
 func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
+	fmt.Printf("[LOCK] Acquired RLock for Raft.mu in prepareLogRequestArgs\n")
+	defer func() {
+		r.mu.RUnlock()
+		fmt.Printf("[LOCK] Released RLock for Raft.mu in prepareLogRequestArgs\n")
+	}()
 	nextIndex := r.sentLengths[followerId]
 	if nextIndex == 0 {
 		nextIndex = r.snapshotter.lastIndex + len(r.log) + 1

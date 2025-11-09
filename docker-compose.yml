@@ -20,7 +20,7 @@ services:
       RAFT_BACKOFF_MULTIPLIER: "2.0"
       RAFT_MAX_RETRIES: "-1"
       RAFT_CONN_TIMEOUT: "5s"
-      RAFT_HEALTH_CHECK_INTERVAL: "10s"
+      RAFT_HEALTH_CHECK_INTERVAL: "1s"
 
       # HTTP API configuration
       API_ADDR: ":8080"

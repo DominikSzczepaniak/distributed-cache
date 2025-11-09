@@ -67,8 +67,10 @@ func (rds *DataSaver) saveWorker() {
 		case <-rds.saveQueue:
 			err := rds.doSaveValues()
 			rds.errMu.Lock()
+			fmt.Printf("[LOCK] Acquired lock for DataSaver.errMu in saveWorker\n")
 			rds.lastSaveErr = err
 			rds.errMu.Unlock()
+			fmt.Printf("[LOCK] Released lock for DataSaver.errMu in saveWorker\n")
 			rds.pendingSaves.Done()
 		case <-rds.stopCh:
 			return
@@ -89,7 +91,11 @@ func (rds *DataSaver) SaveValues() (bool, error) {
 func (rds *DataSaver) WaitForPendingSaves() error {
 	rds.pendingSaves.Wait()
 	rds.errMu.Lock()
-	defer rds.errMu.Unlock()
+	fmt.Printf("[LOCK] Acquired lock for DataSaver.errMu in WaitForPendingSaves\n")
+	defer func() {
+		rds.errMu.Unlock()
+		fmt.Printf("[LOCK] Released lock for DataSaver.errMu in WaitForPendingSaves\n")
+	}()
 	return rds.lastSaveErr
 }
 
@@ -209,8 +215,13 @@ func (rds *DataSaver) saveValuesManager(
 func (rds *DataSaver) doSaveValues() error {
 
 	rds.mu.Lock()
-	defer rds.mu.Unlock()
+	fmt.Printf("[LOCK] Acquired lock for DataSaver.mu in doSaveValues\n")
+	defer func() {
+		rds.mu.Unlock()
+		fmt.Printf("[LOCK] Released lock for DataSaver.mu in doSaveValues\n")
+	}()
 	rds.parent.mu.RLock()
+	fmt.Printf("[LOCK] Acquired RLock for parent.mu in doSaveValues\n")
 
 	if rds.previousSavedIndex > len(rds.parent.log) {
 		rds.previousSavedIndex = len(rds.parent.log)
@@ -218,6 +229,7 @@ func (rds *DataSaver) doSaveValues() error {
 	idx := rds.previousSavedIndex
 	if idx == len(rds.parent.log) {
 		rds.parent.mu.RUnlock()
+		fmt.Printf("[LOCK] Released RLock for parent.mu in doSaveValues (early exit)\n")
 		return nil
 	}
 
@@ -230,6 +242,7 @@ func (rds *DataSaver) doSaveValues() error {
 	logCopy := make([]LogEntry, len(src))
 	copy(logCopy, src)
 	rds.parent.mu.RUnlock()
+	fmt.Printf("[LOCK] Released RLock for parent.mu in doSaveValues (after copy)\n")
 
 	ok, err := rds.saveValuesManager(
 		currentTerm,
@@ -241,8 +254,10 @@ func (rds *DataSaver) doSaveValues() error {
 		return err
 	}
 	rds.parent.mu.RLock()
+	fmt.Printf("[LOCK] Acquired RLock for parent.mu in doSaveValues (before getting length)\n")
 	lengthNow := len(rds.parent.log)
 	rds.parent.mu.RUnlock()
+	fmt.Printf("[LOCK] Released RLock for parent.mu in doSaveValues (after getting length)\n")
 
 	newIndex := idx + len(logCopy)
 	if newIndex > lengthNow {
@@ -317,7 +332,11 @@ func (rds *DataSaver) loadMetadata(
 
 func (rds *DataSaver) LoadValues() (int, int, int, []LogEntry, error) {
 	rds.parent.mu.Lock()
-	defer rds.parent.mu.Unlock()
+	fmt.Printf("[LOCK] Acquired lock for parent.mu in LoadValues\n")
+	defer func() {
+		rds.parent.mu.Unlock()
+		fmt.Printf("[LOCK] Released lock for parent.mu in LoadValues\n")
+	}()
 
 	logFile, err := rds.openFileForReading(rds.logsFilename)
 	if err != nil {

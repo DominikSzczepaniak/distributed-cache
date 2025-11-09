@@ -50,10 +50,12 @@ func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Forwar
 		}
 		if leaderID == r.id {
 			r.mu.Lock()
+			fmt.Printf("[LOCK] Acquired lock for Raft.mu in Forward\n")
 			if r.currentRole != Leader && r.currentLeaderId == r.id {
 				r.currentLeaderId = -1
 			}
 			r.mu.Unlock()
+			fmt.Printf("[LOCK] Released lock for Raft.mu in Forward\n")
 			return nil, fmt.Errorf("no leader known")
 		}
 		if ctx.Value(forwardHopKey{}) != nil {
@@ -142,6 +144,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 	leaderId, term, prevIndex, prevTerm, commitLength, suffix := convertLogRequestArgs(in)
 
 	r.mu.Lock()
+	fmt.Printf("[LOCK] Acquired lock for Raft.mu in LogRequest\n")
 	if r.currentTerm < term {
 		r.currentTerm = term
 		r.votedFor = -1
@@ -178,6 +181,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 	if r.currentTerm == term && logOk {
 		r.raftElector.ResetTimer()
 		r.mu.Unlock()
+		fmt.Printf("[LOCK] Released lock for Raft.mu in LogRequest (logOk)\n")
 
 		r.appendEntries(prevIndex, commitLength, suffix)
 
@@ -193,6 +197,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 	} else {
 		currentTerm := r.currentTerm
 		r.mu.Unlock()
+		fmt.Printf("[LOCK] Released lock for Raft.mu in LogRequest (else)\n")
 		r.logSaver.SaveValues()
 		return &raftpb.LogResponse{
 			NodeId:      int32(r.id),
@@ -210,6 +215,7 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 	candidateLogTerm := int(in.CandidateLogTerm)
 
 	r.mu.Lock()
+	fmt.Printf("[LOCK] Acquired lock for Raft.mu in VoteRequest\n")
 	slog.Info(fmt.Sprintf("Received VoteRequest from node %d on node %d, node thinks the leader is %d, node consider itself a leader: %t", in.CandidateId, r.id, r.currentLeaderId, r.currentRole == Leader)) // %+v", in))
 	toPersist := false
 	if r.currentLeaderId == int(in.CandidateId) {
@@ -237,6 +243,7 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 		r.raftElector.ResetTimer()
 		currentTerm := r.currentTerm
 		r.mu.Unlock()
+		fmt.Printf("[LOCK] Released lock for Raft.mu in VoteRequest (granted)\n")
 		go r.logSaver.SaveValues()
 		return &raftpb.VoteResponse{
 			NodeId:      int32(r.id),
@@ -246,6 +253,7 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 	} else {
 		currentTerm := r.currentTerm
 		r.mu.Unlock()
+		fmt.Printf("[LOCK] Released lock for Raft.mu in VoteRequest (not granted)\n")
 		if toPersist {
 			go r.logSaver.SaveValues()
 		}
@@ -265,7 +273,11 @@ func (r *Raft) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty
 func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
 	r.raftElector.ResetTimer()
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	fmt.Printf("[LOCK] Acquired lock for Raft.mu in InstallSnapshot\n")
+	defer func() {
+		r.mu.Unlock()
+		fmt.Printf("[LOCK] Released lock for Raft.mu in InstallSnapshot\n")
+	}()
 	slog.Info(fmt.Sprintf("Installing snapshot for node %d, setting installingSnapshot to true", r.id))
 
 	defaultResponse := &raftpb.InstallSnapshotResponse{Term: int32(r.currentTerm)}
