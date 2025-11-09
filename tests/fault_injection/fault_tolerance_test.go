@@ -39,6 +39,10 @@ var nodeAPIAddresses = map[string]string{
 const raftNetwork = "raft-cluster"
 
 func TestMain(m *testing.M) {
+	if testing.Short() {
+		m.Run()
+		return
+	}
 	if err := startCluster(); err != nil {
 		fmt.Printf("Failed to start cluster: %v\n", err)
 		m.Run()
@@ -55,6 +59,9 @@ func TestMain(m *testing.M) {
 }
 
 func TestLeaderFailureAndRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short")
+	}
 	require.NoError(t, waitForClusterReady(t), "Cluster should be ready before test")
 
 	leader, err := findLeader(t)
