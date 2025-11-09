@@ -32,11 +32,7 @@ func NewIdempotencyCache(ttl time.Duration) *IdempotencyCache {
 
 func (c *IdempotencyCache) Get(token string) (*raft.BroadcastResponse, bool) {
 	c.mu.RLock()
-	fmt.Printf("[LOCK] Acquired RLock for IdempotencyCache in Get\n")
-	defer func() {
-		c.mu.RUnlock()
-		fmt.Printf("[LOCK] Released RLock for IdempotencyCache in Get\n")
-	}()
+	defer c.mu.RUnlock()
 
 	entry, exists := c.entries[token]
 	if !exists {
@@ -52,11 +48,7 @@ func (c *IdempotencyCache) Get(token string) (*raft.BroadcastResponse, bool) {
 
 func (c *IdempotencyCache) Set(token string, response raft.BroadcastResponse) {
 	c.mu.Lock()
-	fmt.Printf("[LOCK] Acquired Lock for IdempotencyCache in Set\n")
-	defer func() {
-		c.mu.Unlock()
-		fmt.Printf("[LOCK] Released Lock for IdempotencyCache in Set\n")
-	}()
+	defer c.mu.Unlock()
 
 	c.entries[token] = &IdempotencyCacheEntry{
 		Response:    response,
@@ -70,7 +62,6 @@ func (c *IdempotencyCache) cleanupExpired() {
 
 	for range ticker.C {
 		c.mu.Lock()
-		fmt.Printf("[LOCK] Acquired Lock for IdempotencyCache in cleanupExpired\n")
 		now := time.Now()
 		for token, entry := range c.entries {
 			if now.Sub(entry.CompletedAt) > c.ttl {
@@ -78,6 +69,5 @@ func (c *IdempotencyCache) cleanupExpired() {
 			}
 		}
 		c.mu.Unlock()
-		fmt.Printf("[LOCK] Released Lock for IdempotencyCache in cleanupExpired\n")
 	}
 }

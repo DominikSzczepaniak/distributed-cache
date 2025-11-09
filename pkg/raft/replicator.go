@@ -79,7 +79,6 @@ func (rep *Replicator) replicate() {
 	}
 
 	rep.parent.mu.RLock()
-	fmt.Printf("[LOCK] Acquired RLock for parent.mu in replicate (read state)\n")
 	nextIndex := rep.parent.sentLengths[rep.followerId]
 	if nextIndex == 0 {
 		nextIndex = rep.parent.snapshotter.lastIndex + len(rep.parent.log) + 1
@@ -87,7 +86,6 @@ func (rep *Replicator) replicate() {
 	needsSnapshot := nextIndex <= rep.parent.snapshotter.lastIndex
 	currentRole := rep.parent.currentRole
 	rep.parent.mu.RUnlock()
-	fmt.Printf("[LOCK] Released RLock for parent.mu in replicate (read state)\n")
 
 	if currentRole != Leader {
 		return
@@ -132,14 +130,12 @@ func (rep *Replicator) replicate() {
 		rep.parent.id, rep.followerId, resp.Success, resp.Ack, resp.CurrentTerm))
 
 	rep.parent.mu.Lock()
-	fmt.Printf("[LOCK] Acquired lock for parent.mu in replicate (update state)\n")
 
 	if resp.CurrentTerm > int32(rep.parent.currentTerm) {
 		slog.Info(fmt.Sprintf("Node %d: Follower %d has higher term (%d > %d), stepping down",
 			rep.parent.id, rep.followerId, resp.CurrentTerm, rep.parent.currentTerm))
 		rep.parent.becomeFollowerUnlocked(int(resp.CurrentTerm))
 		rep.parent.mu.Unlock()
-		fmt.Printf("[LOCK] Released lock for parent.mu in replicate (update state - became follower)\n")
 		return
 	}
 
@@ -164,16 +160,11 @@ func (rep *Replicator) replicate() {
 	}
 
 	rep.parent.mu.Unlock()
-	fmt.Printf("[LOCK] Released lock for parent.mu in replicate (update state)\n")
 }
 
 func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 	r.mu.RLock()
-	fmt.Printf("[LOCK] Acquired RLock for Raft.mu in prepareLogRequestArgs\n")
-	defer func() {
-		r.mu.RUnlock()
-		fmt.Printf("[LOCK] Released RLock for Raft.mu in prepareLogRequestArgs\n")
-	}()
+	defer r.mu.RUnlock()
 	nextIndex := r.sentLengths[followerId]
 	if nextIndex == 0 {
 		nextIndex = r.snapshotter.lastIndex + len(r.log) + 1

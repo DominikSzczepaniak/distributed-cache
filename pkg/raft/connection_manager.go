@@ -104,12 +104,10 @@ func (cm *ConnectionManager) connectPeerAsync(peerID int) {
 		}
 
 		cm.mu.Lock()
-		fmt.Printf("[LOCK] Acquired lock for ConnectionManager.mu in connectPeerAsync\n")
 		cm.conns[peerID] = conn
 		cm.peers[peerID] = peer
 		cm.lastContact[peerID] = time.Now()
 		cm.mu.Unlock()
-		fmt.Printf("[LOCK] Released lock for ConnectionManager.mu in connectPeerAsync\n")
 
 		cm.peerAvailable[peerID].Store(true)
 		slog.Info(fmt.Sprintf("Node %d: Successfully connected to peer %d at %s after %d attempts",
@@ -179,10 +177,8 @@ func (cm *ConnectionManager) performHealthCheck() {
 		}
 
 		cm.mu.RLock()
-		fmt.Printf("[LOCK] Acquired RLock for ConnectionManager.mu in performHealthCheck (conn check)\n")
 		conn := cm.conns[i]
 		cm.mu.RUnlock()
-		fmt.Printf("[LOCK] Released RLock for ConnectionManager.mu in performHealthCheck (conn check)\n")
 
 		if conn == nil {
 			if cm.peerAvailable[i].Load() {
@@ -203,10 +199,8 @@ func (cm *ConnectionManager) performHealthCheck() {
 				cm.peerAvailable[i].Store(true)
 			}
 			cm.mu.Lock()
-			fmt.Printf("[LOCK] Acquired lock for ConnectionManager.mu in performHealthCheck (update lastContact)\n")
 			cm.lastContact[i] = time.Now()
 			cm.mu.Unlock()
-			fmt.Printf("[LOCK] Released lock for ConnectionManager.mu in performHealthCheck (update lastContact)\n")
 
 		case connectivity.TransientFailure, connectivity.Shutdown:
 			if cm.peerAvailable[i].Load() {
@@ -227,12 +221,10 @@ func (cm *ConnectionManager) performHealthCheck() {
 
 func (cm *ConnectionManager) reconnectPeer(peerID int) {
 	cm.mu.Lock()
-	fmt.Printf("[LOCK] Acquired lock for ConnectionManager.mu in reconnectPeer\n")
 	oldConn := cm.conns[peerID]
 	cm.conns[peerID] = nil
 	cm.peers[peerID] = nil
 	cm.mu.Unlock()
-	fmt.Printf("[LOCK] Released lock for ConnectionManager.mu in reconnectPeer\n")
 
 	if oldConn != nil {
 		oldConn.Close()
@@ -251,21 +243,13 @@ func (cm *ConnectionManager) GetPeer(peerID int) PeerClient {
 	}
 
 	cm.mu.RLock()
-	fmt.Printf("[LOCK] Acquired RLock for ConnectionManager.mu in GetPeer\n")
-	defer func() {
-		cm.mu.RUnlock()
-		fmt.Printf("[LOCK] Released RLock for ConnectionManager.mu in GetPeer\n")
-	}()
+	defer cm.mu.RUnlock()
 	return cm.peers[peerID]
 }
 
 func (cm *ConnectionManager) GetPeers() []PeerClient {
 	cm.mu.RLock()
-	fmt.Printf("[LOCK] Acquired RLock for ConnectionManager.mu in GetPeers\n")
-	defer func() {
-		cm.mu.RUnlock()
-		fmt.Printf("[LOCK] Released RLock for ConnectionManager.mu in GetPeers\n")
-	}()
+	defer cm.mu.RUnlock()
 
 	result := make([]PeerClient, cm.totalNodes)
 	copy(result, cm.peers)
@@ -298,11 +282,7 @@ func (cm *ConnectionManager) Close() {
 	cm.wg.Wait()
 
 	cm.mu.Lock()
-	fmt.Printf("[LOCK] Acquired lock for ConnectionManager.mu in Close\n")
-	defer func() {
-		cm.mu.Unlock()
-		fmt.Printf("[LOCK] Released lock for ConnectionManager.mu in Close\n")
-	}()
+	defer cm.mu.Unlock()
 
 	for i, conn := range cm.conns {
 		if conn != nil && i != cm.selfID {

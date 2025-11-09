@@ -52,11 +52,7 @@ func (r *Raft) setPeers(peers []PeerClient) {
 
 func (r *Raft) getCurrentRole() Role {
 	r.mu.RLock()
-	fmt.Printf("[LOCK] Acquired RLock for Raft.mu in getCurrentRole\n")
-	defer func() {
-		r.mu.RUnlock()
-		fmt.Printf("[LOCK] Released RLock for Raft.mu in getCurrentRole\n")
-	}()
+	defer r.mu.RUnlock()
 	return r.currentRole
 }
 
@@ -80,11 +76,7 @@ func (r *Raft) becomeFollowerUnlocked(term int) {
 
 func (r *Raft) becomeFollower(term int) {
 	r.mu.Lock()
-	fmt.Printf("[LOCK] Acquired lock for Raft.mu in becomeFollower\n")
-	defer func() {
-		r.mu.Unlock()
-		fmt.Printf("[LOCK] Released lock for Raft.mu in becomeFollower\n")
-	}()
+	defer r.mu.Unlock()
 
 	r.becomeFollowerUnlocked(term)
 }
@@ -130,23 +122,16 @@ func (r *Raft) getLastLogTerm() int {
 }
 
 func (r *Raft) getLeaderData() (bool, int) {
-	fmt.Println("Trying to acquire lock on getLeaderData")
 	r.mu.RLock()
-	fmt.Printf("[LOCK] Acquired RLock for Raft.mu in getLeaderData\n")
 	isLeader := r.currentRole == Leader
 	leaderID := r.currentLeaderId
 	r.mu.RUnlock()
-	fmt.Printf("[LOCK] Released RLock for Raft.mu in getLeaderData\n")
 	return isLeader, leaderID
 }
 
 func (r *Raft) checkQuorumHealth() {
 	r.mu.Lock()
-	fmt.Printf("[LOCK] Acquired lock for Raft.mu in checkQuorumHealth\n")
-	defer func() {
-		r.mu.Unlock()
-		fmt.Printf("[LOCK] Released lock for Raft.mu in checkQuorumHealth\n")
-	}()
+	defer r.mu.Unlock()
 
 	if r.currentRole != Leader {
 		return

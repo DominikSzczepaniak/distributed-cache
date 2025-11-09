@@ -24,11 +24,7 @@ func NewLeaderCache(ttl time.Duration) *LeaderCache {
 
 func (lc *LeaderCache) Get() (int, string, bool) {
 	lc.mu.RLock()
-	fmt.Printf("[LOCK] Acquired RLock for LeaderCache in Get\n")
-	defer func() {
-		lc.mu.RUnlock()
-		fmt.Printf("[LOCK] Released RLock for LeaderCache in Get\n")
-	}()
+	defer lc.mu.RUnlock()
 
 	if time.Since(lc.lastUpdate) > lc.ttl {
 		return -1, "", false // Expired
@@ -39,11 +35,7 @@ func (lc *LeaderCache) Get() (int, string, bool) {
 
 func (lc *LeaderCache) Set(leaderID int, leaderAddr string) {
 	lc.mu.Lock()
-	fmt.Printf("[LOCK] Acquired Lock for LeaderCache in Set\n")
-	defer func() {
-		lc.mu.Unlock()
-		fmt.Printf("[LOCK] Released Lock for LeaderCache in Set\n")
-	}()
+	defer lc.mu.Unlock()
 
 	lc.leaderID = leaderID
 	lc.leaderAddr = leaderAddr
@@ -52,11 +44,7 @@ func (lc *LeaderCache) Set(leaderID int, leaderAddr string) {
 
 func (lc *LeaderCache) Invalidate() {
 	lc.mu.Lock()
-	fmt.Printf("[LOCK] Acquired Lock for LeaderCache in Invalidate\n")
-	defer func() {
-		lc.mu.Unlock()
-		fmt.Printf("[LOCK] Released Lock for LeaderCache in Invalidate\n")
-	}()
+	defer lc.mu.Unlock()
 
 	lc.lastUpdate = time.Time{}
 }

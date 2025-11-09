@@ -2,7 +2,6 @@ package raft
 
 import (
 	"context"
-	"fmt"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"time"
 )
@@ -66,10 +65,8 @@ func (h *Heartbeat) heartbeatLoop() {
 
 		case <-timer.C:
 			h.parent.mu.RLock()
-			fmt.Printf("[LOCK] Acquired RLock for parent.mu in heartbeatLoop\n")
 			isLeader := h.parent.currentRole == Leader
 			h.parent.mu.RUnlock()
-			fmt.Printf("[LOCK] Released RLock for parent.mu in heartbeatLoop\n")
 			if isLeader {
 				h.sendHeartbeat()
 			}

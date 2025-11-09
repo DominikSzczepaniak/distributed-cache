@@ -93,11 +93,7 @@ func NewRaft(application Application, cfg *Config) *Raft {
 
 func (r *Raft) receiveVote(vote VoteResponse) {
 	r.mu.Lock()
-	fmt.Printf("[LOCK] Acquired lock for Raft.mu in receiveVote\n")
-	defer func() {
-		r.mu.Unlock()
-		fmt.Printf("[LOCK] Released lock for Raft.mu in receiveVote\n")
-	}()
+	defer r.mu.Unlock()
 	if r.currentTerm < vote.currentTerm {
 		r.currentTerm = vote.currentTerm
 		r.currentRole = Follower
@@ -147,7 +143,6 @@ func (r *Raft) Broadcast(message Message) {
 		return
 	}
 	r.mu.Lock()
-	fmt.Printf("[LOCK] Acquired lock for Raft.mu in Broadcast\n")
 	r.log = append(r.log, LogEntry{
 		Message: message,
 		Term:    r.currentTerm,
@@ -158,7 +153,6 @@ func (r *Raft) Broadcast(message Message) {
 
 	reps := r.replicators
 	r.mu.Unlock()
-	fmt.Printf("[LOCK] Released lock for Raft.mu in Broadcast\n")
 
 	go r.logSaver.SaveValues() //TODO TEST THIS ON CRASHES - IMPORTANT
 
@@ -205,11 +199,7 @@ func (r *Raft) deliverToApplication(message Message) (success bool, value int) {
 
 func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 	r.mu.Lock()
-	fmt.Printf("[LOCK] Acquired lock for Raft.mu in appendEntries\n")
-	defer func() {
-		r.mu.Unlock()
-		fmt.Printf("[LOCK] Released lock for Raft.mu in appendEntries\n")
-	}()
+	defer r.mu.Unlock()
 
 	slog.Info(fmt.Sprintf("Node %d: appendEntries called (prefixLen=%d leaderCommit=%d suffixLen=%d myLogLen=%d myCommit=%d)",
 		r.id, prefixLen, leaderCommit, len(suffix), len(r.log)+r.snapshotter.lastIndex, r.commitedLength))
@@ -263,11 +253,7 @@ func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 
 func (r *Raft) logResponse(followerId, term, ack int, success bool) {
 	r.mu.Lock()
-	fmt.Printf("[LOCK] Acquired lock for Raft.mu in logResponse\n")
-	defer func() {
-		r.mu.Unlock()
-		fmt.Printf("[LOCK] Released lock for Raft.mu in logResponse\n")
-	}()
+	defer r.mu.Unlock()
 	if r.currentTerm < term {
 		r.currentTerm = term
 		r.currentRole = Follower
@@ -312,19 +298,16 @@ func (r *Raft) commitLogEntries() {
 
 	if len(messagesToApply) > 0 {
 		r.mu.Unlock()
-		fmt.Printf("[LOCK] Released lock for Raft.mu in commitLogEntries (before deliver)\n")
 		for _, msg := range messagesToApply {
 			r.deliverToApplication(msg)
 		}
 		r.mu.Lock()
-		fmt.Printf("[LOCK] Acquired lock for Raft.mu in commitLogEntries (after deliver)\n")
 	}
 }
 func (r *Raft) sendInstallSnapshotRPC(followerId int) {
 	const chunkSize = 128 * 1024
 
 	r.mu.Lock()
-	fmt.Printf("[LOCK] Acquired lock for Raft.mu in sendInstallSnapshotRPC (start)\n")
 	slog.Info(fmt.Sprintf("Follower %d is too far behind. Sending snapshot in blocks.", followerId))
 
 	peer := r.getPeer(followerId)
@@ -334,7 +317,6 @@ func (r *Raft) sendInstallSnapshotRPC(followerId int) {
 	leaderId := r.id
 	snapPath := r.logSaver.snapshotFilename
 	r.mu.Unlock()
-	fmt.Printf("[LOCK] Released lock for Raft.mu in sendInstallSnapshotRPC (start)\n")
 
 	f, err := os.Open(snapPath)
 	if err != nil {
@@ -386,7 +368,6 @@ func (r *Raft) sendInstallSnapshotRPC(followerId int) {
 
 		if int(resp.Term) > r.currentTerm {
 			r.mu.Lock()
-			fmt.Printf("[LOCK] Acquired lock for Raft.mu in sendInstallSnapshotRPC (term update)\n")
 			if int(resp.Term) > r.currentTerm {
 				r.currentTerm = int(resp.Term)
 				r.currentRole = Follower
@@ -394,7 +375,6 @@ func (r *Raft) sendInstallSnapshotRPC(followerId int) {
 				r.raftElector.ResetTimer()
 			}
 			r.mu.Unlock()
-			fmt.Printf("[LOCK] Released lock for Raft.mu in sendInstallSnapshotRPC (term update)\n")
 			return
 		}
 
@@ -406,13 +386,11 @@ func (r *Raft) sendInstallSnapshotRPC(followerId int) {
 	}
 
 	r.mu.Lock()
-	fmt.Printf("[LOCK] Acquired lock for Raft.mu in sendInstallSnapshotRPC (end)\n")
 	r.sentLengths[followerId] = lastIndex + 1
 	r.ackedLengths[followerId] = lastIndex
 	slog.Info(fmt.Sprintf("Successfully installed snapshot on follower %d (%d bytes in blocks). Next index is now %d.",
 		followerId, totalSize, r.sentLengths[followerId]))
 	r.mu.Unlock()
-	fmt.Printf("[LOCK] Released lock for Raft.mu in sendInstallSnapshotRPC (end)\n")
 }
 
 func (r *Raft) GetApplication() Application {
@@ -421,11 +399,7 @@ func (r *Raft) GetApplication() Application {
 
 func (r *Raft) IsLeader() bool {
 	r.mu.RLock()
-	fmt.Printf("[LOCK] Acquired RLock for Raft.mu in IsLeader\n")
-	defer func() {
-		r.mu.RUnlock()
-		fmt.Printf("[LOCK] Released RLock for Raft.mu in IsLeader\n")
-	}()
+	defer r.mu.RUnlock()
 	return r.currentRole == Leader
 }
 
@@ -439,11 +413,7 @@ type ClusterStatus struct {
 
 func (r *Raft) GetStatus() ClusterStatus {
 	r.mu.RLock()
-	fmt.Printf("[LOCK] Acquired RLock for Raft.mu in GetStatus\n")
-	defer func() {
-		r.mu.RUnlock()
-		fmt.Printf("[LOCK] Released RLock for Raft.mu in GetStatus\n")
-	}()
+	defer r.mu.RUnlock()
 
 	return ClusterStatus{
 		NodeID:     r.id,
