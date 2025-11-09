@@ -78,11 +78,13 @@ func (rds *DataSaver) saveWorker() {
 }
 
 func (rds *DataSaver) SaveValues() (bool, error) {
+	rds.pendingSaves.Add(1)
+
 	select {
 	case rds.saveQueue <- saveRequest{}:
-		rds.pendingSaves.Add(1)
 		return true, nil
 	default:
+		rds.pendingSaves.Done()
 		return false, nil
 	}
 }
