@@ -165,7 +165,7 @@ func TestConcurrentOperations(t *testing.T) {
 	}
 }
 
-func TestConcurrentOperationsWithPause(t *testing.T) {
+func TestPausedConcurrentOperations(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short")
 	}
