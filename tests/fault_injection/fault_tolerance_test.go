@@ -3,6 +3,7 @@ package fault_injection
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,6 +40,8 @@ var nodeAPIAddresses = map[string]string{
 const raftNetwork = "raft-cluster"
 
 func TestMain(m *testing.M) {
+	flag.Parse()
+
 	if testing.Short() {
 		m.Run()
 		return
