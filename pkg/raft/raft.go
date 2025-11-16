@@ -392,34 +392,3 @@ func (r *Raft) sendInstallSnapshotRPC(followerId int) {
 		followerId, totalSize, r.sentLengths[followerId]))
 	r.mu.Unlock()
 }
-
-func (r *Raft) GetApplication() Application {
-	return r.application
-}
-
-func (r *Raft) IsLeader() bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.currentRole == Leader
-}
-
-type ClusterStatus struct {
-	NodeID     int
-	Role       string
-	Term       int
-	LeaderID   int
-	TotalNodes int
-}
-
-func (r *Raft) GetStatus() ClusterStatus {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	return ClusterStatus{
-		NodeID:     r.id,
-		Role:       string(r.currentRole),
-		Term:       r.currentTerm,
-		LeaderID:   r.currentLeaderId,
-		TotalNodes: r.totalNodes,
-	}
-}

@@ -228,7 +228,6 @@ func (rds *DataSaver) doSaveValues() error {
 	votedFor := rds.parent.votedFor
 	committedLength := rds.parent.commitedLength
 
-	// Limit batch size to prevent memory exhaustion and long lock holds
 	const maxBatchSize = 10000
 	src := rds.parent.log[idx:]
 	batchSize := len(src)
@@ -261,7 +260,6 @@ func (rds *DataSaver) doSaveValues() error {
 	}
 	rds.previousSavedIndex = newIndex
 
-	// If there's more to save, re-queue another batch
 	if newIndex < lengthNow {
 		select {
 		case rds.saveQueue <- saveRequest{}:

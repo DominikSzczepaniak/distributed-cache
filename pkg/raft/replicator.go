@@ -21,7 +21,7 @@ type Replicator struct {
 	stopCh     chan struct{}
 
 	consecutiveFailures    int
-	maxConsecutiveFailures int // Leader steps down after this many failures
+	maxConsecutiveFailures int
 	lastHeartbeatSuccess   time.Time
 }
 
@@ -32,7 +32,7 @@ func NewReplicator(parent *Raft, followerId int) *Replicator {
 		signalCh:               make(chan struct{}, 1),
 		stopCh:                 make(chan struct{}),
 		consecutiveFailures:    0,
-		maxConsecutiveFailures: 5, // 5 failures = 250ms at 50ms interval
+		maxConsecutiveFailures: 5,
 		lastHeartbeatSuccess:   time.Now(),
 	}
 }
@@ -130,12 +130,12 @@ func (rep *Replicator) replicate() {
 		rep.parent.id, rep.followerId, resp.Success, resp.Ack, resp.CurrentTerm))
 
 	rep.parent.mu.Lock()
+	defer rep.parent.mu.Unlock()
 
 	if resp.CurrentTerm > int32(rep.parent.currentTerm) {
 		slog.Info(fmt.Sprintf("Node %d: Follower %d has higher term (%d > %d), stepping down",
 			rep.parent.id, rep.followerId, resp.CurrentTerm, rep.parent.currentTerm))
 		rep.parent.becomeFollowerUnlocked(int(resp.CurrentTerm))
-		rep.parent.mu.Unlock()
 		return
 	}
 
@@ -158,8 +158,6 @@ func (rep *Replicator) replicate() {
 			}
 		}
 	}
-
-	rep.parent.mu.Unlock()
 }
 
 func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {

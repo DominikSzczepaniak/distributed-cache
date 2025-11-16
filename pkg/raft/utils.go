@@ -171,3 +171,34 @@ func (r *Raft) checkQuorumHealth() {
 			r.id, r.currentTerm, r.currentLeaderId))
 	}
 }
+
+func (r *Raft) GetApplication() Application {
+	return r.application
+}
+
+func (r *Raft) IsLeader() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.currentRole == Leader
+}
+
+type ClusterStatus struct {
+	NodeID     int
+	Role       string
+	Term       int
+	LeaderID   int
+	TotalNodes int
+}
+
+func (r *Raft) GetStatus() ClusterStatus {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return ClusterStatus{
+		NodeID:     r.id,
+		Role:       string(r.currentRole),
+		Term:       r.currentTerm,
+		LeaderID:   r.currentLeaderId,
+		TotalNodes: r.totalNodes,
+	}
+}

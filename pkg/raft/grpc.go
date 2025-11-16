@@ -104,7 +104,7 @@ func (r *Raft) ForwardGet(ctx context.Context, req *raftpb.GetRequest) (*raftpb.
 	return &raftpb.GetResponse{
 		Key:   req.Key,
 		Value: int32(value),
-		Found: true, // TODO: Add existence check to Application interface if needed
+		Found: true, // TODO: Add existence check to Application interface if needed (https://github.com/DominikSzczepaniak/distributed-cache/issues/16)
 	}, nil
 }
 
