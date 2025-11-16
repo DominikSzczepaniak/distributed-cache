@@ -6,6 +6,11 @@ type Message struct {
 	MsgType MessageType
 	Key     int
 	Value   *int
+
+	ResponseChan chan<- BroadcastResponse
+
+	IdempotencyToken string
+	ClientID         string
 }
 
 type MessageType string

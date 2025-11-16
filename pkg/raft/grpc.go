@@ -4,36 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/types/known/emptypb"
-
 	"net"
+	"os"
+	"time"
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
-
-func (r *Raft) initGRPC(cfg *Config) {
-	peers := make([]PeerClient, r.totalNodes)
-	r.conns = make([]*grpc.ClientConn, r.totalNodes)
-
-	for i, addr := range cfg.raftAddrs {
-		conn, err := grpc.NewClient(
-			addr,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
-		if err != nil {
-			panic(fmt.Sprintf("failed to dial %s: %v", addr, err))
-		}
-
-		r.conns[i] = conn
-		peers[i] = NewGRPCPeerClient(conn)
-	}
-	r.setPeers(peers)
-	go r.serveGRPC(cfg.raftAddrs[r.id])
-}
 
 func (r *Raft) serveGRPC(addr string) {
 	lis, err := net.Listen("tcp", addr)
@@ -49,17 +27,19 @@ func (r *Raft) serveGRPC(addr string) {
 
 type forwardHopKey struct{}
 
-func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, error) {
-	slog.Info(fmt.Sprintf("Received Forward on node %d", r.id)) // %+v", msg))
+func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.ForwardResponse, error) {
+	slog.Info(fmt.Sprintf("Received Forward on node %d", r.id))
 	var val *int
 	if msg.Value != nil {
 		tmp := int(msg.Value.Value)
 		val = &tmp
 	}
 	internal := Message{
-		MsgType: MessageType(msg.Type.String()),
-		Key:     int(msg.Key),
-		Value:   val,
+		MsgType:          MessageType(msg.Type.String()),
+		Key:              int(msg.Key),
+		Value:            val,
+		IdempotencyToken: msg.IdempotencyToken,
+		ClientID:         msg.ClientId,
 	}
 
 	isLeader, leaderID := r.getLeaderData()
@@ -80,18 +60,52 @@ func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, 
 			return nil, fmt.Errorf("redirect loop detected at node=%d to leader=%d", r.id, leaderID)
 		}
 		ctx = context.WithValue(ctx, forwardHopKey{}, true)
-		slog.Info(fmt.Sprintf("Node %d forwards Forward call to %d,"+
-			" %d is leader: %t", r.id, leaderID, r.id, isLeader))
+		slog.Info(fmt.Sprintf("Node %d forwards Forward call to %d", r.id, leaderID))
 		peer := r.getPeer(leaderID)
 		if peer == nil {
 			return nil, fmt.Errorf("no peer for node %d", r.id)
 		}
-		slog.Info(fmt.Sprintf("Node %d forwards Forward call to %d", r.id, leaderID))
 		return peer.Forward(ctx, msg)
 	}
 
-	r.Broadcast(internal)
-	return &raftpb.Null{}, nil
+	success, value, err := r.BroadcastSync(internal, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+
+	return &raftpb.ForwardResponse{
+		Success: success,
+		Value:   int32(value),
+	}, nil
+}
+
+func (r *Raft) ForwardGet(ctx context.Context, req *raftpb.GetRequest) (*raftpb.GetResponse, error) {
+	slog.Info(fmt.Sprintf("Received ForwardGet on node %d for key %d", r.id, req.Key))
+
+	isLeader, leaderID := r.getLeaderData()
+
+	if !isLeader {
+		if leaderID < 0 {
+			return nil, fmt.Errorf("no leader known")
+		}
+		if ctx.Value(forwardHopKey{}) != nil {
+			return nil, fmt.Errorf("redirect loop detected at node=%d to leader=%d", r.id, leaderID)
+		}
+		ctx = context.WithValue(ctx, forwardHopKey{}, true)
+		slog.Info(fmt.Sprintf("Node %d forwards ForwardGet to leader %d", r.id, leaderID))
+		peer := r.getPeer(leaderID)
+		if peer == nil {
+			return nil, fmt.Errorf("no peer for leader %d", leaderID)
+		}
+		return peer.ForwardGet(ctx, req)
+	}
+
+	value := r.application.GetValue(int(req.Key))
+	return &raftpb.GetResponse{
+		Key:   req.Key,
+		Value: int32(value),
+		Found: true, // TODO: Add existence check to Application interface if needed (https://github.com/DominikSzczepaniak/distributed-cache/issues/16)
+	}, nil
 }
 
 func convertLogRequestArgs(args *raftpb.LogRequestArgs) (int, int, int, int, int, []LogEntry) {
@@ -121,19 +135,35 @@ func convertLogRequestArgs(args *raftpb.LogRequestArgs) (int, int, int, int, int
 }
 
 func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) {
-	//slog.Info(fmt.Sprintf("Received LogRequest")) // %+v", in))
 	leaderId, term, prevIndex, prevTerm, commitLength, suffix := convertLogRequestArgs(in)
 
 	r.mu.Lock()
+
+	oldRole := r.currentRole
+	oldLeader := r.currentLeaderId
+
+	slog.Info(fmt.Sprintf("Node %d received LogRequest from leader=%d term=%d (myTerm=%d myRole=%s myLeader=%d) suffix=%d entries",
+		r.id, leaderId, term, r.currentTerm, r.currentRole, r.currentLeaderId, len(suffix)))
+
 	if r.currentTerm < term {
+		slog.Info(fmt.Sprintf("Node %d: Updating term from %d to %d (LogRequest from leader %d)",
+			r.id, r.currentTerm, term, leaderId))
 		r.currentTerm = term
 		r.votedFor = -1
-
 		r.raftElector.ResetTimer()
 	}
+
 	if r.currentTerm == term {
+		if oldRole != Follower {
+			slog.Info(fmt.Sprintf("Node %d: Stepping down from %s to Follower (term=%d leader=%d)",
+				r.id, oldRole, term, leaderId))
+		}
 		r.currentRole = Follower
 		if r.id != leaderId {
+			if oldLeader != leaderId {
+				slog.Info(fmt.Sprintf("Node %d: Updating leader from %d to %d",
+					r.id, oldLeader, leaderId))
+			}
 			r.currentLeaderId = leaderId
 		} else {
 			r.currentLeaderId = -1
@@ -159,6 +189,8 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 	//logOk := (len(r.log) >= prefixLen) && (prefixLen == 0 || r.log[prefixLen-1].Term == prefixTerm) //old version
 
 	if r.currentTerm == term && logOk {
+		slog.Info(fmt.Sprintf("Node %d: LogRequest SUCCESS - appending %d entries (prevIndex=%d commitLen=%d)",
+			r.id, len(suffix), prevIndex, commitLength))
 		r.raftElector.ResetTimer()
 		r.mu.Unlock()
 
@@ -167,6 +199,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		ack := prevIndex + len(suffix)
 		go r.logSaver.SaveValues()
 
+		slog.Info(fmt.Sprintf("Node %d: LogRequest completed, ack=%d", r.id, ack))
 		return &raftpb.LogResponse{
 			NodeId:      int32(r.id),
 			CurrentTerm: int32(r.currentTerm),
@@ -175,6 +208,8 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		}, nil
 	} else {
 		currentTerm := r.currentTerm
+		slog.Warn(fmt.Sprintf("Node %d: LogRequest REJECTED - term=%d logOk=%t (prevIndex=%d absLastIndex=%d prevTerm=%d)",
+			r.id, currentTerm, logOk, prevIndex, absLastIndex, prevTerm))
 		r.mu.Unlock()
 		r.logSaver.SaveValues()
 		return &raftpb.LogResponse{

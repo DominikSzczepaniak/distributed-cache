@@ -19,14 +19,21 @@ type Replicator struct {
 	followerId int
 	signalCh   chan struct{}
 	stopCh     chan struct{}
+
+	consecutiveFailures    int
+	maxConsecutiveFailures int
+	lastHeartbeatSuccess   time.Time
 }
 
 func NewReplicator(parent *Raft, followerId int) *Replicator {
 	return &Replicator{
-		parent:     parent,
-		followerId: followerId,
-		signalCh:   make(chan struct{}, 1),
-		stopCh:     make(chan struct{}),
+		parent:                 parent,
+		followerId:             followerId,
+		signalCh:               make(chan struct{}, 1),
+		stopCh:                 make(chan struct{}),
+		consecutiveFailures:    0,
+		maxConsecutiveFailures: 5,
+		lastHeartbeatSuccess:   time.Now(),
 	}
 }
 
@@ -63,16 +70,38 @@ func (rep *Replicator) signal() {
 }
 
 func (rep *Replicator) replicate() {
+	if !rep.parent.isPeerAvailable(rep.followerId) {
+		slog.Debug(fmt.Sprintf("Node %d: Skipping replication to unavailable peer %d",
+			rep.parent.id, rep.followerId))
+		rep.consecutiveFailures++
+		rep.parent.checkQuorumHealth()
+		return
+	}
+
 	rep.parent.mu.RLock()
 	nextIndex := rep.parent.sentLengths[rep.followerId]
 	if nextIndex == 0 {
 		nextIndex = rep.parent.snapshotter.lastIndex + len(rep.parent.log) + 1
 	}
 	needsSnapshot := nextIndex <= rep.parent.snapshotter.lastIndex
+	currentRole := rep.parent.currentRole
 	rep.parent.mu.RUnlock()
+
+	if currentRole != Leader {
+		return
+	}
 
 	if needsSnapshot {
 		rep.parent.sendInstallSnapshotRPC(rep.followerId)
+		return
+	}
+
+	peer := rep.parent.getPeer(rep.followerId)
+	if peer == nil {
+		slog.Debug(fmt.Sprintf("Node %d: No peer client for follower %d",
+			rep.parent.id, rep.followerId))
+		rep.consecutiveFailures++
+		rep.parent.checkQuorumHealth()
 		return
 	}
 
@@ -81,31 +110,50 @@ func (rep *Replicator) replicate() {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	peer := rep.parent.getPeer(rep.followerId)
+	slog.Debug(fmt.Sprintf("Node %d: Sending LogRequest to follower %d (nextIndex=%d, suffix=%d entries)",
+		rep.parent.id, rep.followerId, nextIndex, len(args.Suffix)))
+
 	resp, err := peer.LogRequest(ctx, args)
 
 	if err != nil {
-		slog.Error("LogRequest RPC failed", "followerId", rep.followerId, "error", err)
+		slog.Warn(fmt.Sprintf("Node %d: LogRequest to follower %d failed (attempt %d): %v",
+			rep.parent.id, rep.followerId, rep.consecutiveFailures+1, err))
+		rep.consecutiveFailures++
+		rep.parent.checkQuorumHealth()
 		return
 	}
+
+	rep.consecutiveFailures = 0
+	rep.lastHeartbeatSuccess = time.Now()
+
+	slog.Info(fmt.Sprintf("Node %d: LogRequest to follower %d succeeded (success=%t, ack=%d, term=%d)",
+		rep.parent.id, rep.followerId, resp.Success, resp.Ack, resp.CurrentTerm))
 
 	rep.parent.mu.Lock()
 	defer rep.parent.mu.Unlock()
 
 	if resp.CurrentTerm > int32(rep.parent.currentTerm) {
-		rep.parent.becomeFollower(int(resp.CurrentTerm))
+		slog.Info(fmt.Sprintf("Node %d: Follower %d has higher term (%d > %d), stepping down",
+			rep.parent.id, rep.followerId, resp.CurrentTerm, rep.parent.currentTerm))
+		rep.parent.becomeFollowerUnlocked(int(resp.CurrentTerm))
 		return
 	}
 
 	if rep.parent.currentRole == Leader && int(resp.CurrentTerm) == rep.parent.currentTerm {
 		if resp.Success {
 			match := int(resp.Ack)
+			slog.Debug(fmt.Sprintf("Node %d: Updated follower %d: sentLength=%d -> %d, ackedLength=%d -> %d",
+				rep.parent.id, rep.followerId,
+				rep.parent.sentLengths[rep.followerId], match+1,
+				rep.parent.ackedLengths[rep.followerId], match))
 			rep.parent.sentLengths[rep.followerId] = match + 1
 			rep.parent.ackedLengths[rep.followerId] = match
 			rep.parent.commitLogEntries()
 		} else {
 			floor := rep.parent.snapshotter.lastIndex + 1
 			if rep.parent.sentLengths[rep.followerId] > floor {
+				slog.Debug(fmt.Sprintf("Node %d: LogRequest rejected by follower %d, decrementing sentLength from %d to %d",
+					rep.parent.id, rep.followerId, rep.parent.sentLengths[rep.followerId], rep.parent.sentLengths[rep.followerId]-1))
 				rep.parent.sentLengths[rep.followerId]--
 			}
 		}

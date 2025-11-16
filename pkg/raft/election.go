@@ -86,7 +86,7 @@ func (r *Raft) startElection() {
 	r.mu.Lock()
 
 	r.raftElector.ResetTimer()
-	fmt.Printf("Election started for node %d\n", r.id)
+	slog.Debug(fmt.Sprintf("Election started for node %d", r.id))
 	r.currentRole = Candidate
 	r.currentTerm++
 	r.votedFor = r.id
@@ -105,13 +105,23 @@ func (r *Raft) startElection() {
 		if i == r.id {
 			continue
 		}
-		fmt.Printf("Sending vote request to node %d from %d\n", i, r.id)
+		slog.Debug(fmt.Sprintf("Sending vote request to node %d from %d", i, r.id))
 		go r.sendVoteRequest(voteData, i)
 	}
 }
 
 func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
+	if !r.isPeerAvailable(nodeId) {
+		slog.Debug(fmt.Sprintf("Node %d: Skipping vote request to unavailable peer %d", r.id, nodeId))
+		return
+	}
+
 	peer := r.getPeer(nodeId)
+	if peer == nil {
+		slog.Debug(fmt.Sprintf("Node %d: No peer client for node %d", r.id, nodeId))
+		return
+	}
+
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
@@ -123,6 +133,7 @@ func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
 			CandidateLogTerm:   int32(data.candidateLogTerm),
 		})
 		if err != nil {
+			slog.Warn(fmt.Sprintf("Node %d: VoteRequest to peer %d failed: %v", r.id, nodeId, err))
 			return
 		}
 

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -16,6 +17,14 @@ import (
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
+
+func init() {
+	// Disable verbose logging in tests unless explicitly requested
+	// This prevents 250M+ log lines from being generated during TestConcurrentOperations
+	if os.Getenv("RAFT_TEST_VERBOSE") == "" {
+		slog.SetLogLoggerLevel(slog.LevelError)
+	}
+}
 
 const (
 	SNAPSHOT_THRESHOLD = 50000
@@ -125,10 +134,16 @@ func intPtr(i int) *int { return &i }
 
 type mockPeerClient struct{ mock.Mock }
 
-func (m *mockPeerClient) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Null, error) {
+func (m *mockPeerClient) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.ForwardResponse, error) {
 	args := m.Called(ctx, msg)
-	return args.Get(0).(*raftpb.Null), args.Error(1)
+	return args.Get(0).(*raftpb.ForwardResponse), args.Error(1)
 }
+
+func (m *mockPeerClient) ForwardGet(ctx context.Context, req *raftpb.GetRequest) (*raftpb.GetResponse, error) {
+	args := m.Called(ctx, req)
+	return args.Get(0).(*raftpb.GetResponse), args.Error(1)
+}
+
 func (m *mockPeerClient) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*raftpb.VoteResponse, error) {
 	args := m.Called(ctx, in)
 	return args.Get(0).(*raftpb.VoteResponse), args.Error(1)
@@ -222,9 +237,14 @@ func createClusterMocks(t *testing.T, size int) ([]*Raft, []*mockPeerClient) {
 
 type inMemPeer struct{ r *Raft }
 
-func (p *inMemPeer) Forward(ctx context.Context, m *raftpb.Message) (*raftpb.Null, error) {
+func (p *inMemPeer) Forward(ctx context.Context, m *raftpb.Message) (*raftpb.ForwardResponse, error) {
 	return p.r.Forward(ctx, m)
 }
+
+func (p *inMemPeer) ForwardGet(ctx context.Context, req *raftpb.GetRequest) (*raftpb.GetResponse, error) {
+	return p.r.ForwardGet(ctx, req)
+}
+
 func (p *inMemPeer) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*raftpb.VoteResponse, error) {
 	return p.r.VoteRequest(ctx, in)
 }

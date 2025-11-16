@@ -3,18 +3,16 @@ package raft
 import (
 	"context"
 	"fmt"
-	"google.golang.org/protobuf/types/known/wrapperspb"
 	"io"
 	"log/slog"
 	"math"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
-	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 type Raft struct {
@@ -37,8 +35,8 @@ type Raft struct {
 
 	application Application
 
-	peers atomic.Value
-	conns []*grpc.ClientConn
+	connMgr   *ConnectionManager
+	testPeers []PeerClient
 
 	raftElector *Elector
 	logSaver    *DataSaver
@@ -71,7 +69,7 @@ func NewRaft(application Application, cfg *Config) *Raft {
 
 	term, votedFor, commited, savedLog, err := r.logSaver.LoadValues()
 	if err == nil {
-		fmt.Printf("Loaded values from file: %d %d %d, log length: %d\n", term, votedFor, commited, len(savedLog))
+		slog.Info(fmt.Sprintf("Loaded values from file: term=%d votedFor=%d committed=%d logLength=%d", term, votedFor, commited, len(savedLog)))
 		r.currentTerm = term
 		r.votedFor = votedFor
 		r.commitedLength = commited
@@ -85,9 +83,11 @@ func NewRaft(application Application, cfg *Config) *Raft {
 
 	r.heartbeat = newHeartbeat(r)
 	r.raftElector = NewRaftElector(r)
-	//r.logReplicator = NewRaftLogReplicator(r)
 
-	r.initGRPC(cfg)
+	r.connMgr = NewConnectionManager(r.id, r.totalNodes, cfg.raftAddrs, cfg)
+
+	go r.serveGRPC(cfg.raftAddrs[r.id])
+
 	return r
 }
 
@@ -166,13 +166,43 @@ func (r *Raft) Broadcast(message Message) {
 	}
 }
 
+func (r *Raft) BroadcastSync(message Message, timeout time.Duration) (bool, int, error) {
+	responseChan := make(chan BroadcastResponse, 1)
+	message.ResponseChan = responseChan
+
+	r.Broadcast(message)
+
+	select {
+	case resp := <-responseChan:
+		return resp.Success, resp.Value, resp.Error
+	case <-time.After(timeout):
+		return false, 0, fmt.Errorf("timeout waiting for response after %v", timeout)
+	}
+}
+
 func (r *Raft) deliverToApplication(message Message) (success bool, value int) {
-	return r.application.AppendMessage(message)
+	success, value = r.application.AppendMessage(message)
+
+	if message.ResponseChan != nil {
+		select {
+		case message.ResponseChan <- BroadcastResponse{
+			Success: success,
+			Value:   value,
+			Error:   nil,
+		}:
+		default:
+		}
+	}
+
+	return success, value
 }
 
 func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	slog.Info(fmt.Sprintf("Node %d: appendEntries called (prefixLen=%d leaderCommit=%d suffixLen=%d myLogLen=%d myCommit=%d)",
+		r.id, prefixLen, leaderCommit, len(suffix), len(r.log)+r.snapshotter.lastIndex, r.commitedLength))
 
 	absoluteLogLength := len(r.log) + r.snapshotter.lastIndex
 	if len(suffix) > 0 && absoluteLogLength > prefixLen {
@@ -202,11 +232,18 @@ func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 			leaderCommit = maxCommit
 		}
 
+		slog.Info(fmt.Sprintf("Node %d: Committing entries from %d to %d (leaderCommit=%d)",
+			r.id, r.commitedLength, leaderCommit, leaderCommit))
+
 		for i := r.commitedLength; i < leaderCommit; i++ {
 			relativeIndex := i - r.snapshotter.lastIndex
-			r.deliverToApplication(r.log[relativeIndex].Message)
+			msg := r.log[relativeIndex].Message
+			slog.Info(fmt.Sprintf("Node %d: Delivering entry %d to application (key=%d value=%v type=%s)",
+				r.id, i, msg.Key, msg.Value, msg.MsgType))
+			r.deliverToApplication(msg)
 		}
 		r.commitedLength = leaderCommit
+		slog.Info(fmt.Sprintf("Node %d: Commit complete, commitedLength now %d", r.id, r.commitedLength))
 	}
 	err := r.decideRunSnapshot()
 	if err != nil {

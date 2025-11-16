@@ -64,9 +64,9 @@ func (h *Heartbeat) heartbeatLoop() {
 			timer.Reset(h.timeout)
 
 		case <-timer.C:
-			//h.parent.mu.RLock()
+			h.parent.mu.RLock()
 			isLeader := h.parent.currentRole == Leader
-			//h.parent.mu.RUnlock()
+			h.parent.mu.RUnlock()
 			if isLeader {
 				h.sendHeartbeat()
 			}
