@@ -14,6 +14,7 @@ import (
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft"
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
+	"github.com/dominikszczepaniak/distributed-cache/pkg/sharding"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -24,15 +25,17 @@ type Server struct {
 	retrier          *Retrier
 	idempotencyCache *IdempotencyCache
 	leaderCache      *LeaderCache
+	shardManager     *sharding.ShardManager
 }
 
-func NewServer(r *raft.Raft, listenAddr string) *Server {
+func NewServer(r *raft.Raft, listenAddr string, shardManager *sharding.ShardManager) *Server {
 	return &Server{
 		raft:             r,
 		listenAddr:       listenAddr,
 		retrier:          NewRetrier(DefaultRetryConfigs["PUT"]),
 		idempotencyCache: NewIdempotencyCache(5 * time.Minute),
 		leaderCache:      NewLeaderCache(1 * time.Second),
+		shardManager:     shardManager,
 	}
 }
 
@@ -96,6 +99,30 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
+	}
+
+	// SHARD VALIDATION: Check if this node should handle the key
+	if s.shardManager != nil {
+		keyStr := fmt.Sprintf("%d", req.Key)
+		if err := s.shardManager.ValidateKey(keyStr); err != nil {
+			if wrongNodeErr, ok := err.(*sharding.WrongNodeError); ok {
+				// Return redirect response
+				w.Header().Set("Location", wrongNodeErr.RedirectLocation())
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(wrongNodeErr.HTTPStatusCode())
+				json.NewEncoder(w).Encode(RedirectResponse{
+					Error:       "MOVED",
+					Message:     wrongNodeErr.Error(),
+					NodeID:      fmt.Sprintf("%d", wrongNodeErr.CorrectNode),
+					Address:     wrongNodeErr.CorrectAddr,
+					PartitionID: uint16(wrongNodeErr.PartitionID),
+				})
+				return
+			}
+			// Other validation errors
+			http.Error(w, fmt.Sprintf("Shard validation error: %v", err), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	idempotencyToken := r.Header.Get("Idempotency-Key")
@@ -172,6 +199,30 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, key int) {
+	// SHARD VALIDATION: Check if this node should handle the key
+	if s.shardManager != nil {
+		keyStr := fmt.Sprintf("%d", key)
+		if err := s.shardManager.ValidateKey(keyStr); err != nil {
+			if wrongNodeErr, ok := err.(*sharding.WrongNodeError); ok {
+				// Return redirect response
+				w.Header().Set("Location", wrongNodeErr.RedirectLocation())
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(wrongNodeErr.HTTPStatusCode())
+				json.NewEncoder(w).Encode(RedirectResponse{
+					Error:       "MOVED",
+					Message:     wrongNodeErr.Error(),
+					NodeID:      fmt.Sprintf("%d", wrongNodeErr.CorrectNode),
+					Address:     wrongNodeErr.CorrectAddr,
+					PartitionID: uint16(wrongNodeErr.PartitionID),
+				})
+				return
+			}
+			// Other validation errors
+			http.Error(w, fmt.Sprintf("Shard validation error: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
 	stale := r.URL.Query().Get("stale") == "true"
 
 	var value int
@@ -212,6 +263,30 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, key int) {
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key int) {
+	// SHARD VALIDATION: Check if this node should handle the key
+	if s.shardManager != nil {
+		keyStr := fmt.Sprintf("%d", key)
+		if err := s.shardManager.ValidateKey(keyStr); err != nil {
+			if wrongNodeErr, ok := err.(*sharding.WrongNodeError); ok {
+				// Return redirect response
+				w.Header().Set("Location", wrongNodeErr.RedirectLocation())
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(wrongNodeErr.HTTPStatusCode())
+				json.NewEncoder(w).Encode(RedirectResponse{
+					Error:       "MOVED",
+					Message:     wrongNodeErr.Error(),
+					NodeID:      fmt.Sprintf("%d", wrongNodeErr.CorrectNode),
+					Address:     wrongNodeErr.CorrectAddr,
+					PartitionID: uint16(wrongNodeErr.PartitionID),
+				})
+				return
+			}
+			// Other validation errors
+			http.Error(w, fmt.Sprintf("Shard validation error: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
 	idempotencyToken := r.Header.Get("Idempotency-Key")
 	if idempotencyToken == "" {
 		h := sha256.New()

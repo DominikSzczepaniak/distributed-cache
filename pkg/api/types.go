@@ -41,3 +41,11 @@ type LeaderResponse struct {
 type HealthResponse struct {
 	Status string `json:"status"`
 }
+
+type RedirectResponse struct {
+	Error       string `json:"error"`
+	Message     string `json:"message"`
+	NodeID      string `json:"node_id"`
+	Address     string `json:"address"`
+	PartitionID uint16 `json:"partition_id"`
+}

@@ -130,3 +130,17 @@ func LoadConfig() *Config {
 
 	return cfg
 }
+
+// Getter methods for Config fields
+
+func (c *Config) GetRaftID() int {
+	return c.raftId
+}
+
+func (c *Config) GetRaftAddrs() []string {
+	return c.raftAddrs
+}
+
+func (c *Config) GetTotalNodes() int {
+	return c.totalNodes
+}

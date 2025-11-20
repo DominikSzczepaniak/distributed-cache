@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -160,6 +162,26 @@ func (s *SimpleKVStore) GetValue(key int) int {
 	return s.data[key]
 }
 
+// convertRaftAddrToHTTP converts a Raft gRPC address to an HTTP API address
+// Example: "localhost:9000" → "http://localhost:10000"
+// Assumes HTTP port = gRPC port + 1000
+func convertRaftAddrToHTTP(raftAddr string) string {
+	parts := strings.Split(raftAddr, ":")
+	if len(parts) != 2 {
+		return fmt.Sprintf("http://%s", raftAddr)
+	}
+
+	host := parts[0]
+	port, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return fmt.Sprintf("http://%s", raftAddr)
+	}
+
+	// Convert gRPC port to HTTP port (add 1000)
+	httpPort := port + 1000
+	return fmt.Sprintf("http://%s:%d", host, httpPort)
+}
+
 func main() {
 	opts := &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -179,12 +201,29 @@ func main() {
 
 	slog.Info("Raft node started successfully")
 
+	// Initialize ShardManager for data plane routing
+	partitioner := sharding.NewPartitioner()
+	nodeID := sharding.NodeID(cfg.GetRaftID())
+	shardManager := sharding.NewShardManager(nodeID, app.partitionTable, partitioner)
+
+	// Register peer addresses (convert gRPC addresses to HTTP addresses)
+	// RAFT_ADDRS format: "localhost:9000,localhost:9001,localhost:9002"
+	// HTTP addresses will be derived by adding 1000 to port (9000 → 10000)
+	raftAddrs := cfg.GetRaftAddrs()
+	for i, raftAddr := range raftAddrs {
+		peerNodeID := sharding.NodeID(i)
+		// Convert gRPC address to HTTP address
+		// Example: "localhost:9000" → "http://localhost:10000"
+		httpAddr := convertRaftAddrToHTTP(raftAddr)
+		shardManager.UpdatePeerAddress(peerNodeID, httpAddr)
+	}
+
 	apiAddr := os.Getenv("API_ADDR")
 	if apiAddr == "" {
 		apiAddr = ":8080"
 	}
 
-	apiServer := api.NewServer(r, apiAddr)
+	apiServer := api.NewServer(r, apiAddr, shardManager)
 	go func() {
 		if err := apiServer.Start(); err != nil && err != http.ErrServerClosed {
 			slog.Error(fmt.Sprintf("API server error: %v", err))
