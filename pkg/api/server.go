@@ -49,6 +49,9 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/leader", s.handleLeader)
 
+	// Register admin endpoints
+	s.RegisterAdminRoutes(mux)
+
 	s.httpServer = &http.Server{
 		Addr:    s.listenAddr,
 		Handler: mux,
