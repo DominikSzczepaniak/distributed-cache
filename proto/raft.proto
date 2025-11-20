@@ -7,12 +7,15 @@ import "google/protobuf/empty.proto";
 option go_package = "pkg/raft/raftpb";
 
 message Message{
-    enum Type { GET = 0; PUT=1; DELETE = 2;}
+    enum Type { GET = 0; PUT=1; DELETE = 2; UPDATE_PARTITION_TABLE = 3;}
     Type type = 1;
     int32 key = 2;
     google.protobuf.Int32Value value = 3;
     string idempotency_token = 4;
     string client_id = 5;
+
+    // Partition table update payload (only used when type = UPDATE_PARTITION_TABLE)
+    PartitionTableUpdate partition_update = 6;
 }
 
 message Null {}
@@ -79,6 +82,19 @@ message InstallSnapshotRequest{
 
 message InstallSnapshotResponse{
     int32 term = 1;
+}
+
+// Partition table update message
+message PartitionTableUpdate {
+    // Map of partition_id -> node_id
+    // Uses repeated for protobuf compatibility
+    repeated PartitionAssignment assignments = 1;
+    uint64 version = 2;
+}
+
+message PartitionAssignment {
+    uint32 partition_id = 1;
+    int32 node_id = 2;
 }
 
 
