@@ -14,3 +14,11 @@ type PartitionID uint16
 
 // NodeID represents a Raft node identifier
 type NodeID int
+
+// PartitionEntry represents a partition with its primary and backup nodes
+type PartitionEntry struct {
+	PartitionID  PartitionID
+	PrimaryNode  NodeID
+	BackupNode   NodeID // -1 if no backup assigned
+	Version      uint64 // Per-entry version for tracking
+}

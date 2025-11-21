@@ -114,3 +114,19 @@ func (sm *ShardManager) OnPartitionTableUpdate() {
 	slog.Info(fmt.Sprintf("ShardManager: Partition table updated to version %d (%d assignments)",
 		version, assignmentCount))
 }
+
+// GetPartitionID returns the partition ID for a given key
+func (sm *ShardManager) GetPartitionID(key string) PartitionID {
+	return sm.partitioner.HashKey(key)
+}
+
+// GetReplicas returns the primary and backup nodes for a partition
+// Returns (primary, backup, ok) where ok is false if partition is unassigned
+func (sm *ShardManager) GetReplicas(partitionID PartitionID) (primary NodeID, backup NodeID, ok bool) {
+	return sm.partitionTable.GetReplicas(partitionID)
+}
+
+// GetNodeID returns this node's ID
+func (sm *ShardManager) GetNodeID() NodeID {
+	return sm.nodeID
+}

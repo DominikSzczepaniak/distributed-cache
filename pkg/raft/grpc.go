@@ -341,3 +341,65 @@ func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRe
 	go r.logSaver.SaveValues()
 	return defaultResponse, nil
 }
+
+// Replicate handles synchronous replication requests from primary to backup
+// This is called by the primary node to replicate writes to the backup
+func (r *Raft) Replicate(ctx context.Context, req *raftpb.ReplicateRequest) (*raftpb.ReplicateResponse, error) {
+	key := int(req.Key)
+
+	slog.Info(fmt.Sprintf("Node %d: Received REPLICATE %s for key=%d", r.id, req.Operation, key))
+
+	// TODO: Add security validation - verify this node is the designated backup
+	// for this partition (requires ShardManager integration in Stage 3)
+	// For now, we trust the primary node is sending to the correct backup
+
+	// Get application as the concrete type to access data directly
+	// Replication writes bypass Raft consensus - we trust the primary
+	switch req.Operation {
+	case "PUT":
+		value := int(req.Value)
+
+		// Create a message to write directly to application
+		msg := Message{
+			MsgType: "PUT",
+			Key:     key,
+			Value:   &value,
+		}
+
+		success, _ := r.application.AppendMessage(msg)
+		if !success {
+			return &raftpb.ReplicateResponse{
+				Success: false,
+				Error:   "failed to write to local storage",
+			}, nil
+		}
+
+		slog.Info(fmt.Sprintf("Node %d: REPLICATE PUT key=%d value=%d SUCCESS", r.id, key, value))
+		return &raftpb.ReplicateResponse{Success: true}, nil
+
+	case "DELETE":
+		// Create a message to delete from application
+		msg := Message{
+			MsgType: "DELETE",
+			Key:     key,
+		}
+
+		success, _ := r.application.AppendMessage(msg)
+		if !success {
+			return &raftpb.ReplicateResponse{
+				Success: false,
+				Error:   "failed to delete from local storage",
+			}, nil
+		}
+
+		slog.Info(fmt.Sprintf("Node %d: REPLICATE DELETE key=%d SUCCESS", r.id, key))
+		return &raftpb.ReplicateResponse{Success: true}, nil
+
+	default:
+		slog.Warn(fmt.Sprintf("Node %d: REPLICATE unknown operation: %s", r.id, req.Operation))
+		return &raftpb.ReplicateResponse{
+			Success: false,
+			Error:   "unknown operation: " + req.Operation,
+		}, nil
+	}
+}

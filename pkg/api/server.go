@@ -14,28 +14,31 @@ import (
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft"
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
+	"github.com/dominikszczepaniak/distributed-cache/pkg/replication"
 	"github.com/dominikszczepaniak/distributed-cache/pkg/sharding"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 type Server struct {
-	raft             *raft.Raft
-	listenAddr       string
-	httpServer       *http.Server
-	retrier          *Retrier
-	idempotencyCache *IdempotencyCache
-	leaderCache      *LeaderCache
-	shardManager     *sharding.ShardManager
+	raft              *raft.Raft
+	listenAddr        string
+	httpServer        *http.Server
+	retrier           *Retrier
+	idempotencyCache  *IdempotencyCache
+	leaderCache       *LeaderCache
+	shardManager      *sharding.ShardManager
+	replicationClient *replication.Client
 }
 
-func NewServer(r *raft.Raft, listenAddr string, shardManager *sharding.ShardManager) *Server {
+func NewServer(r *raft.Raft, listenAddr string, shardManager *sharding.ShardManager, replClient *replication.Client) *Server {
 	return &Server{
-		raft:             r,
-		listenAddr:       listenAddr,
-		retrier:          NewRetrier(DefaultRetryConfigs["PUT"]),
-		idempotencyCache: NewIdempotencyCache(5 * time.Minute),
-		leaderCache:      NewLeaderCache(1 * time.Second),
-		shardManager:     shardManager,
+		raft:              r,
+		listenAddr:        listenAddr,
+		retrier:           NewRetrier(DefaultRetryConfigs["PUT"]),
+		idempotencyCache:  NewIdempotencyCache(5 * time.Minute),
+		leaderCache:       NewLeaderCache(1 * time.Second),
+		shardManager:      shardManager,
+		replicationClient: replClient,
 	}
 }
 
@@ -125,6 +128,26 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 			// Other validation errors
 			http.Error(w, fmt.Sprintf("Shard validation error: %v", err), http.StatusInternalServerError)
 			return
+		}
+
+		// SYNCHRONOUS REPLICATION TO BACKUP (PRIMARY-BACKUP PATTERN)
+		// After validating this is the primary, replicate to backup before Raft commit
+		partitionID := s.shardManager.GetPartitionID(keyStr)
+		_, backupNode, ok := s.shardManager.GetReplicas(partitionID)
+
+		if ok && backupNode >= 0 && s.replicationClient != nil {
+			replicationCtx, replicationCancel := context.WithTimeout(r.Context(), 1*time.Second)
+			defer replicationCancel()
+
+			err := s.replicationClient.Replicate(replicationCtx, backupNode, req.Key, req.Value)
+			if err != nil {
+				slog.Error(fmt.Sprintf("Replication to backup %d failed for key %d: %v", backupNode, req.Key, err))
+				// FAIL THE WRITE - Strong consistency guarantee
+				http.Error(w, fmt.Sprintf("Replication failed: %v", err), http.StatusServiceUnavailable)
+				return
+			}
+
+			slog.Info(fmt.Sprintf("Successfully replicated PUT key=%d to backup node %d", req.Key, backupNode))
 		}
 	}
 
@@ -287,6 +310,26 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key int) {
 			// Other validation errors
 			http.Error(w, fmt.Sprintf("Shard validation error: %v", err), http.StatusInternalServerError)
 			return
+		}
+
+		// SYNCHRONOUS REPLICATION TO BACKUP (PRIMARY-BACKUP PATTERN)
+		// After validating this is the primary, replicate to backup before Raft commit
+		partitionID := s.shardManager.GetPartitionID(keyStr)
+		_, backupNode, ok := s.shardManager.GetReplicas(partitionID)
+
+		if ok && backupNode >= 0 && s.replicationClient != nil {
+			replicationCtx, replicationCancel := context.WithTimeout(r.Context(), 1*time.Second)
+			defer replicationCancel()
+
+			err := s.replicationClient.DeleteReplicate(replicationCtx, backupNode, key)
+			if err != nil {
+				slog.Error(fmt.Sprintf("Replication to backup %d failed for DELETE key %d: %v", backupNode, key, err))
+				// FAIL THE DELETE - Strong consistency guarantee
+				http.Error(w, fmt.Sprintf("Replication failed: %v", err), http.StatusServiceUnavailable)
+				return
+			}
+
+			slog.Info(fmt.Sprintf("Successfully replicated DELETE key=%d to backup node %d", key, backupNode))
 		}
 	}
 

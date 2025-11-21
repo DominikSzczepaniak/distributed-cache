@@ -26,6 +26,7 @@ const (
 	Raft_LogRequest_FullMethodName      = "/raftpb.Raft/LogRequest"
 	Raft_Heartbeat_FullMethodName       = "/raftpb.Raft/Heartbeat"
 	Raft_InstallSnapshot_FullMethodName = "/raftpb.Raft/InstallSnapshot"
+	Raft_Replicate_FullMethodName       = "/raftpb.Raft/Replicate"
 )
 
 // RaftClient is the client API for Raft service.
@@ -38,6 +39,7 @@ type RaftClient interface {
 	LogRequest(ctx context.Context, in *LogRequestArgs, opts ...grpc.CallOption) (*LogResponse, error)
 	Heartbeat(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	InstallSnapshot(ctx context.Context, in *InstallSnapshotRequest, opts ...grpc.CallOption) (*InstallSnapshotResponse, error)
+	Replicate(ctx context.Context, in *ReplicateRequest, opts ...grpc.CallOption) (*ReplicateResponse, error)
 }
 
 type raftClient struct {
@@ -108,6 +110,16 @@ func (c *raftClient) InstallSnapshot(ctx context.Context, in *InstallSnapshotReq
 	return out, nil
 }
 
+func (c *raftClient) Replicate(ctx context.Context, in *ReplicateRequest, opts ...grpc.CallOption) (*ReplicateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReplicateResponse)
+	err := c.cc.Invoke(ctx, Raft_Replicate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RaftServer is the server API for Raft service.
 // All implementations must embed UnimplementedRaftServer
 // for forward compatibility.
@@ -118,6 +130,7 @@ type RaftServer interface {
 	LogRequest(context.Context, *LogRequestArgs) (*LogResponse, error)
 	Heartbeat(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	InstallSnapshot(context.Context, *InstallSnapshotRequest) (*InstallSnapshotResponse, error)
+	Replicate(context.Context, *ReplicateRequest) (*ReplicateResponse, error)
 	mustEmbedUnimplementedRaftServer()
 }
 
@@ -145,6 +158,9 @@ func (UnimplementedRaftServer) Heartbeat(context.Context, *emptypb.Empty) (*empt
 }
 func (UnimplementedRaftServer) InstallSnapshot(context.Context, *InstallSnapshotRequest) (*InstallSnapshotResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method InstallSnapshot not implemented")
+}
+func (UnimplementedRaftServer) Replicate(context.Context, *ReplicateRequest) (*ReplicateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Replicate not implemented")
 }
 func (UnimplementedRaftServer) mustEmbedUnimplementedRaftServer() {}
 func (UnimplementedRaftServer) testEmbeddedByValue()              {}
@@ -275,6 +291,24 @@ func _Raft_InstallSnapshot_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Raft_Replicate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReplicateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RaftServer).Replicate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Raft_Replicate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RaftServer).Replicate(ctx, req.(*ReplicateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Raft_ServiceDesc is the grpc.ServiceDesc for Raft service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -305,6 +339,10 @@ var Raft_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "InstallSnapshot",
 			Handler:    _Raft_InstallSnapshot_Handler,
+		},
+		{
+			MethodName: "Replicate",
+			Handler:    _Raft_Replicate_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

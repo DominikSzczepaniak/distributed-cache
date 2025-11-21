@@ -12,9 +12,11 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/api"
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft"
+	"github.com/dominikszczepaniak/distributed-cache/pkg/replication"
 	"github.com/dominikszczepaniak/distributed-cache/pkg/sharding"
 )
 
@@ -218,12 +220,32 @@ func main() {
 		shardManager.UpdatePeerAddress(peerNodeID, httpAddr)
 	}
 
+	// Initialize ReplicationClient for primary-backup replication
+	replicationClient := replication.NewClient(nodeID, 1*time.Second)
+
+	// Register peer RaftClients with the replication client
+	// Wait a bit for connections to establish
+	time.Sleep(2 * time.Second)
+	connMgr := r.GetConnectionManager()
+	if connMgr != nil {
+		peers := connMgr.GetPeers()
+		for i, peer := range peers {
+			if peer != nil && i != int(nodeID) {
+				// Type assert to access the underlying RaftClient
+				if grpcPeer, ok := peer.(*raft.GRPCPeerClient); ok {
+					raftClient := grpcPeer.GetRaftClient()
+					replicationClient.RegisterPeer(sharding.NodeID(i), raftClient)
+				}
+			}
+		}
+	}
+
 	apiAddr := os.Getenv("API_ADDR")
 	if apiAddr == "" {
 		apiAddr = ":8080"
 	}
 
-	apiServer := api.NewServer(r, apiAddr, shardManager)
+	apiServer := api.NewServer(r, apiAddr, shardManager, replicationClient)
 	go func() {
 		if err := apiServer.Start(); err != nil && err != http.ErrServerClosed {
 			slog.Error(fmt.Sprintf("API server error: %v", err))

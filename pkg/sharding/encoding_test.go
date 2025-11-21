@@ -325,13 +325,13 @@ func TestSerializationSize(t *testing.T) {
 			name:            "small (100 partitions)",
 			partitions:      100,
 			nodes:           []NodeID{0, 1, 2},
-			maxExpectedSize: 1000, // 8 + 4 + 100*(2+4) = 612 bytes
+			maxExpectedSize: 1020, // 8 + 4 + 100*(2+4+4) = 1012 bytes (with backup nodes)
 		},
 		{
 			name:            "full (16384 partitions)",
 			partitions:      16384,
 			nodes:           []NodeID{0, 1, 2},
-			maxExpectedSize: 100000, // 8 + 4 + 16384*(2+4) = ~98KB
+			maxExpectedSize: 165000, // 8 + 4 + 16384*(2+4+4) = ~164KB (with backup nodes)
 		},
 	}
 

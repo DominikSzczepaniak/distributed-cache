@@ -18,7 +18,8 @@ const (
 //   - NumAssignments (4 bytes, uint32)
 //   - For each assignment:
 //     - PartitionID (2 bytes, uint16)
-//     - NodeID (4 bytes, int32)
+//     - PrimaryNode (4 bytes, int32)
+//     - BackupNode (4 bytes, int32)
 //
 // This format is designed for efficient storage and fast deserialization
 func (pt *PartitionTable) Serialize() ([]byte, error) {
@@ -40,12 +41,15 @@ func (pt *PartitionTable) Serialize() ([]byte, error) {
 	}
 
 	// Write each assignment
-	for partitionID, nodeID := range pt.assignments {
+	for partitionID, entry := range pt.assignments {
 		if err := binary.Write(&buf, byteOrder, uint16(partitionID)); err != nil {
 			return nil, fmt.Errorf("failed to write partition ID %d: %w", partitionID, err)
 		}
-		if err := binary.Write(&buf, byteOrder, int32(nodeID)); err != nil {
-			return nil, fmt.Errorf("failed to write node ID %d: %w", nodeID, err)
+		if err := binary.Write(&buf, byteOrder, int32(entry.PrimaryNode)); err != nil {
+			return nil, fmt.Errorf("failed to write primary node ID %d: %w", entry.PrimaryNode, err)
+		}
+		if err := binary.Write(&buf, byteOrder, int32(entry.BackupNode)); err != nil {
+			return nil, fmt.Errorf("failed to write backup node ID %d: %w", entry.BackupNode, err)
 		}
 	}
 
@@ -58,7 +62,7 @@ func (pt *PartitionTable) Deserialize(data []byte) error {
 	if len(data) == 0 {
 		// Empty data means empty partition table
 		pt.mu.Lock()
-		pt.assignments = make(map[PartitionID]NodeID)
+		pt.assignments = make(map[PartitionID]*PartitionEntry)
 		pt.version = 0
 		pt.mu.Unlock()
 		return nil
@@ -80,19 +84,29 @@ func (pt *PartitionTable) Deserialize(data []byte) error {
 	}
 
 	// Read each assignment
-	assignments := make(map[PartitionID]NodeID, numAssignments)
+	assignments := make(map[PartitionID]*PartitionEntry, numAssignments)
 	for i := uint32(0); i < numAssignments; i++ {
 		var partitionID uint16
 		if err := binary.Read(reader, byteOrder, &partitionID); err != nil {
 			return fmt.Errorf("failed to read partition ID at index %d: %w", i, err)
 		}
 
-		var nodeID int32
-		if err := binary.Read(reader, byteOrder, &nodeID); err != nil {
-			return fmt.Errorf("failed to read node ID at index %d: %w", i, err)
+		var primaryNode int32
+		if err := binary.Read(reader, byteOrder, &primaryNode); err != nil {
+			return fmt.Errorf("failed to read primary node ID at index %d: %w", i, err)
 		}
 
-		assignments[PartitionID(partitionID)] = NodeID(nodeID)
+		var backupNode int32
+		if err := binary.Read(reader, byteOrder, &backupNode); err != nil {
+			return fmt.Errorf("failed to read backup node ID at index %d: %w", i, err)
+		}
+
+		assignments[PartitionID(partitionID)] = &PartitionEntry{
+			PartitionID:  PartitionID(partitionID),
+			PrimaryNode:  NodeID(primaryNode),
+			BackupNode:   NodeID(backupNode),
+			Version:      version,
+		}
 	}
 
 	// Atomically update the partition table

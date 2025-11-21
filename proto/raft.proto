@@ -97,6 +97,19 @@ message PartitionAssignment {
     int32 node_id = 2;
 }
 
+// Replication messages (primary → backup synchronous replication)
+message ReplicateRequest {
+    int32 key = 1;
+    int32 value = 2;           // Only for PUT operations
+    string operation = 3;      // "PUT" or "DELETE"
+    uint64 version = 4;        // For future ordering/deduplication
+}
+
+message ReplicateResponse {
+    bool success = 1;
+    string error = 2;          // Error message if success = false
+}
+
 
 service Raft{
     rpc Forward (Message) returns (ForwardResponse);
@@ -105,6 +118,7 @@ service Raft{
     rpc LogRequest(LogRequestArgs) returns (LogResponse);
     rpc Heartbeat (google.protobuf.Empty) returns (google.protobuf.Empty);
     rpc InstallSnapshot(InstallSnapshotRequest) returns (InstallSnapshotResponse);
+    rpc Replicate(ReplicateRequest) returns (ReplicateResponse);  // Primary-backup replication
 }
 
 

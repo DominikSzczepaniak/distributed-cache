@@ -927,6 +927,127 @@ func (x *PartitionAssignment) GetNodeId() int32 {
 	return 0
 }
 
+// Replication messages (primary → backup synchronous replication)
+type ReplicateRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           int32                  `protobuf:"varint,1,opt,name=key,proto3" json:"key,omitempty"`
+	Value         int32                  `protobuf:"varint,2,opt,name=value,proto3" json:"value,omitempty"`        // Only for PUT operations
+	Operation     string                 `protobuf:"bytes,3,opt,name=operation,proto3" json:"operation,omitempty"` // "PUT" or "DELETE"
+	Version       uint64                 `protobuf:"varint,4,opt,name=version,proto3" json:"version,omitempty"`    // For future ordering/deduplication
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReplicateRequest) Reset() {
+	*x = ReplicateRequest{}
+	mi := &file_proto_raft_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReplicateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReplicateRequest) ProtoMessage() {}
+
+func (x *ReplicateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_raft_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReplicateRequest.ProtoReflect.Descriptor instead.
+func (*ReplicateRequest) Descriptor() ([]byte, []int) {
+	return file_proto_raft_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ReplicateRequest) GetKey() int32 {
+	if x != nil {
+		return x.Key
+	}
+	return 0
+}
+
+func (x *ReplicateRequest) GetValue() int32 {
+	if x != nil {
+		return x.Value
+	}
+	return 0
+}
+
+func (x *ReplicateRequest) GetOperation() string {
+	if x != nil {
+		return x.Operation
+	}
+	return ""
+}
+
+func (x *ReplicateRequest) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+type ReplicateResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"` // Error message if success = false
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReplicateResponse) Reset() {
+	*x = ReplicateResponse{}
+	mi := &file_proto_raft_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReplicateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReplicateResponse) ProtoMessage() {}
+
+func (x *ReplicateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_raft_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReplicateResponse.ProtoReflect.Descriptor instead.
+func (*ReplicateResponse) Descriptor() ([]byte, []int) {
+	return file_proto_raft_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ReplicateResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ReplicateResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_proto_raft_proto protoreflect.FileDescriptor
 
 const file_proto_raft_proto_rawDesc = "" +
@@ -999,7 +1120,15 @@ const file_proto_raft_proto_rawDesc = "" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\"Q\n" +
 	"\x13PartitionAssignment\x12!\n" +
 	"\fpartition_id\x18\x01 \x01(\rR\vpartitionId\x12\x17\n" +
-	"\anode_id\x18\x02 \x01(\x05R\x06nodeId2\xfc\x02\n" +
+	"\anode_id\x18\x02 \x01(\x05R\x06nodeId\"r\n" +
+	"\x10ReplicateRequest\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\x05R\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x05R\x05value\x12\x1c\n" +
+	"\toperation\x18\x03 \x01(\tR\toperation\x12\x18\n" +
+	"\aversion\x18\x04 \x01(\x04R\aversion\"C\n" +
+	"\x11ReplicateResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error2\xbe\x03\n" +
 	"\x04Raft\x123\n" +
 	"\aForward\x12\x0f.raftpb.Message\x1a\x17.raftpb.ForwardResponse\x125\n" +
 	"\n" +
@@ -1008,7 +1137,8 @@ const file_proto_raft_proto_rawDesc = "" +
 	"\n" +
 	"LogRequest\x12\x16.raftpb.LogRequestArgs\x1a\x13.raftpb.LogResponse\x12;\n" +
 	"\tHeartbeat\x12\x16.google.protobuf.Empty\x1a\x16.google.protobuf.Empty\x12R\n" +
-	"\x0fInstallSnapshot\x12\x1e.raftpb.InstallSnapshotRequest\x1a\x1f.raftpb.InstallSnapshotResponseB\x11Z\x0fpkg/raft/raftpbb\x06proto3"
+	"\x0fInstallSnapshot\x12\x1e.raftpb.InstallSnapshotRequest\x1a\x1f.raftpb.InstallSnapshotResponse\x12@\n" +
+	"\tReplicate\x12\x18.raftpb.ReplicateRequest\x1a\x19.raftpb.ReplicateResponseB\x11Z\x0fpkg/raft/raftpbb\x06proto3"
 
 var (
 	file_proto_raft_proto_rawDescOnce sync.Once
@@ -1023,7 +1153,7 @@ func file_proto_raft_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_raft_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_raft_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_proto_raft_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_proto_raft_proto_goTypes = []any{
 	(Message_Type)(0),               // 0: raftpb.Message.Type
 	(*Message)(nil),                 // 1: raftpb.Message
@@ -1040,12 +1170,14 @@ var file_proto_raft_proto_goTypes = []any{
 	(*InstallSnapshotResponse)(nil), // 12: raftpb.InstallSnapshotResponse
 	(*PartitionTableUpdate)(nil),    // 13: raftpb.PartitionTableUpdate
 	(*PartitionAssignment)(nil),     // 14: raftpb.PartitionAssignment
-	(*wrapperspb.Int32Value)(nil),   // 15: google.protobuf.Int32Value
-	(*emptypb.Empty)(nil),           // 16: google.protobuf.Empty
+	(*ReplicateRequest)(nil),        // 15: raftpb.ReplicateRequest
+	(*ReplicateResponse)(nil),       // 16: raftpb.ReplicateResponse
+	(*wrapperspb.Int32Value)(nil),   // 17: google.protobuf.Int32Value
+	(*emptypb.Empty)(nil),           // 18: google.protobuf.Empty
 }
 var file_proto_raft_proto_depIdxs = []int32{
 	0,  // 0: raftpb.Message.type:type_name -> raftpb.Message.Type
-	15, // 1: raftpb.Message.value:type_name -> google.protobuf.Int32Value
+	17, // 1: raftpb.Message.value:type_name -> google.protobuf.Int32Value
 	13, // 2: raftpb.Message.partition_update:type_name -> raftpb.PartitionTableUpdate
 	1,  // 3: raftpb.LogEntry.message:type_name -> raftpb.Message
 	6,  // 4: raftpb.LogRequestArgs.suffix:type_name -> raftpb.LogEntry
@@ -1054,16 +1186,18 @@ var file_proto_raft_proto_depIdxs = []int32{
 	3,  // 7: raftpb.Raft.ForwardGet:input_type -> raftpb.GetRequest
 	7,  // 8: raftpb.Raft.VoteRequest:input_type -> raftpb.VoteRequestArgs
 	9,  // 9: raftpb.Raft.LogRequest:input_type -> raftpb.LogRequestArgs
-	16, // 10: raftpb.Raft.Heartbeat:input_type -> google.protobuf.Empty
+	18, // 10: raftpb.Raft.Heartbeat:input_type -> google.protobuf.Empty
 	11, // 11: raftpb.Raft.InstallSnapshot:input_type -> raftpb.InstallSnapshotRequest
-	5,  // 12: raftpb.Raft.Forward:output_type -> raftpb.ForwardResponse
-	4,  // 13: raftpb.Raft.ForwardGet:output_type -> raftpb.GetResponse
-	8,  // 14: raftpb.Raft.VoteRequest:output_type -> raftpb.VoteResponse
-	10, // 15: raftpb.Raft.LogRequest:output_type -> raftpb.LogResponse
-	16, // 16: raftpb.Raft.Heartbeat:output_type -> google.protobuf.Empty
-	12, // 17: raftpb.Raft.InstallSnapshot:output_type -> raftpb.InstallSnapshotResponse
-	12, // [12:18] is the sub-list for method output_type
-	6,  // [6:12] is the sub-list for method input_type
+	15, // 12: raftpb.Raft.Replicate:input_type -> raftpb.ReplicateRequest
+	5,  // 13: raftpb.Raft.Forward:output_type -> raftpb.ForwardResponse
+	4,  // 14: raftpb.Raft.ForwardGet:output_type -> raftpb.GetResponse
+	8,  // 15: raftpb.Raft.VoteRequest:output_type -> raftpb.VoteResponse
+	10, // 16: raftpb.Raft.LogRequest:output_type -> raftpb.LogResponse
+	18, // 17: raftpb.Raft.Heartbeat:output_type -> google.protobuf.Empty
+	12, // 18: raftpb.Raft.InstallSnapshot:output_type -> raftpb.InstallSnapshotResponse
+	16, // 19: raftpb.Raft.Replicate:output_type -> raftpb.ReplicateResponse
+	13, // [13:20] is the sub-list for method output_type
+	6,  // [6:13] is the sub-list for method input_type
 	6,  // [6:6] is the sub-list for extension type_name
 	6,  // [6:6] is the sub-list for extension extendee
 	0,  // [0:6] is the sub-list for field type_name
@@ -1080,7 +1214,7 @@ func file_proto_raft_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_raft_proto_rawDesc), len(file_proto_raft_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   14,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

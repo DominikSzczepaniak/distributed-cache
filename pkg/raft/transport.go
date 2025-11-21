@@ -45,3 +45,8 @@ func (g *GRPCPeerClient) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emp
 func (g *GRPCPeerClient) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
 	return g.cli.InstallSnapshot(ctx, in)
 }
+
+// GetRaftClient returns the underlying gRPC RaftClient for replication
+func (g *GRPCPeerClient) GetRaftClient() raftpb.RaftClient {
+	return g.cli
+}

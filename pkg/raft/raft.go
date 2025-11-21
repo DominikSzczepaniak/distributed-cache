@@ -392,3 +392,8 @@ func (r *Raft) sendInstallSnapshotRPC(followerId int) {
 		followerId, totalSize, r.sentLengths[followerId]))
 	r.mu.Unlock()
 }
+
+// GetConnectionManager returns the connection manager for accessing peer clients
+func (r *Raft) GetConnectionManager() *ConnectionManager {
+	return r.connMgr
+}
