@@ -184,6 +184,65 @@ func convertRaftAddrToHTTP(raftAddr string) string {
 	return fmt.Sprintf("http://%s:%d", host, httpPort)
 }
 
+func autoInitializePartitions(r *raft.Raft, app *SimpleKVStore, cfg *raft.Config) {
+	// Check if partition table is already initialized
+	if app.partitionTable.GetAssignmentCount() > 0 {
+		slog.Info("Partition table already initialized, skipping auto-initialization",
+			"assignments", app.partitionTable.GetAssignmentCount())
+		return
+	}
+
+	slog.Info("Partition table is empty, waiting for leader election...")
+
+	// Wait for leader election with timeout
+	maxWait := 10 * time.Second
+	start := time.Now()
+	checkInterval := 100 * time.Millisecond
+
+	for time.Since(start) < maxWait {
+		if r.IsLeader() {
+			slog.Info("This node is the leader, initializing partition table")
+			break
+		}
+		time.Sleep(checkInterval)
+	}
+
+	// If not leader after timeout, wait for replication from leader
+	if !r.IsLeader() {
+		slog.Info("Not the leader, waiting for partition table from leader")
+		return
+	}
+
+	// This node is the leader - initialize partition table
+	totalNodes := cfg.GetTotalNodes()
+	nodeIDs := make([]sharding.NodeID, totalNodes)
+	for i := 0; i < totalNodes; i++ {
+		nodeIDs[i] = sharding.NodeID(i)
+	}
+
+	// Create even distribution across all nodes
+	pt := sharding.InitializeEvenDistribution(sharding.TOTAL_PARTITIONS, nodeIDs)
+
+	slog.Info("Initialized partition table",
+		"total_partitions", sharding.TOTAL_PARTITIONS,
+		"nodes", totalNodes,
+		"version", pt.GetVersion())
+
+	// Replicate partition table via Raft consensus
+	msg := raft.Message{
+		MsgType: "UPDATE_PARTITION_TABLE",
+		PartitionTableUpdate: &raft.PartitionTableUpdate{
+			Assignments: pt.GetAssignments(),
+			Version:     pt.GetVersion(),
+		},
+	}
+
+	// Use Broadcast to replicate to all nodes
+	r.Broadcast(msg)
+
+	slog.Info("Partition table update proposed to Raft cluster")
+}
+
 func main() {
 	opts := &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -202,6 +261,9 @@ func main() {
 	r := raft.NewRaft(app, cfg)
 
 	slog.Info("Raft node started successfully")
+
+	// Auto-initialize partition table after Raft startup
+	go autoInitializePartitions(r, app, cfg)
 
 	// Initialize ShardManager for data plane routing
 	partitioner := sharding.NewPartitioner()
