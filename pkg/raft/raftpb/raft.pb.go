@@ -1048,6 +1048,390 @@ func (x *ReplicateResponse) GetError() string {
 	return ""
 }
 
+// Worker registration messages (Stage 2)
+type RegisterWorkerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	WorkerId      int32                  `protobuf:"varint,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	GrpcAddr      string                 `protobuf:"bytes,2,opt,name=grpc_addr,json=grpcAddr,proto3" json:"grpc_addr,omitempty"` // Worker's gRPC address for replication
+	HttpAddr      string                 `protobuf:"bytes,3,opt,name=http_addr,json=httpAddr,proto3" json:"http_addr,omitempty"` // Worker's HTTP API address
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RegisterWorkerRequest) Reset() {
+	*x = RegisterWorkerRequest{}
+	mi := &file_proto_raft_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegisterWorkerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegisterWorkerRequest) ProtoMessage() {}
+
+func (x *RegisterWorkerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_raft_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegisterWorkerRequest.ProtoReflect.Descriptor instead.
+func (*RegisterWorkerRequest) Descriptor() ([]byte, []int) {
+	return file_proto_raft_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *RegisterWorkerRequest) GetWorkerId() int32 {
+	if x != nil {
+		return x.WorkerId
+	}
+	return 0
+}
+
+func (x *RegisterWorkerRequest) GetGrpcAddr() string {
+	if x != nil {
+		return x.GrpcAddr
+	}
+	return ""
+}
+
+func (x *RegisterWorkerRequest) GetHttpAddr() string {
+	if x != nil {
+		return x.HttpAddr
+	}
+	return ""
+}
+
+type RegisterWorkerResponse struct {
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	Success               bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error                 string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	PartitionTable        *PartitionTable        `protobuf:"bytes,3,opt,name=partition_table,json=partitionTable,proto3" json:"partition_table,omitempty"` // Current partition table
+	PartitionTableVersion uint64                 `protobuf:"varint,4,opt,name=partition_table_version,json=partitionTableVersion,proto3" json:"partition_table_version,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *RegisterWorkerResponse) Reset() {
+	*x = RegisterWorkerResponse{}
+	mi := &file_proto_raft_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegisterWorkerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegisterWorkerResponse) ProtoMessage() {}
+
+func (x *RegisterWorkerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_raft_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegisterWorkerResponse.ProtoReflect.Descriptor instead.
+func (*RegisterWorkerResponse) Descriptor() ([]byte, []int) {
+	return file_proto_raft_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *RegisterWorkerResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *RegisterWorkerResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *RegisterWorkerResponse) GetPartitionTable() *PartitionTable {
+	if x != nil {
+		return x.PartitionTable
+	}
+	return nil
+}
+
+func (x *RegisterWorkerResponse) GetPartitionTableVersion() uint64 {
+	if x != nil {
+		return x.PartitionTableVersion
+	}
+	return 0
+}
+
+// Worker heartbeat messages
+type WorkerHeartbeatRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	WorkerId      int32                  `protobuf:"varint,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	Timestamp     int64                  `protobuf:"varint,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkerHeartbeatRequest) Reset() {
+	*x = WorkerHeartbeatRequest{}
+	mi := &file_proto_raft_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkerHeartbeatRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkerHeartbeatRequest) ProtoMessage() {}
+
+func (x *WorkerHeartbeatRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_raft_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkerHeartbeatRequest.ProtoReflect.Descriptor instead.
+func (*WorkerHeartbeatRequest) Descriptor() ([]byte, []int) {
+	return file_proto_raft_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *WorkerHeartbeatRequest) GetWorkerId() int32 {
+	if x != nil {
+		return x.WorkerId
+	}
+	return 0
+}
+
+func (x *WorkerHeartbeatRequest) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+type WorkerHeartbeatResponse struct {
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	Success               bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	PartitionTableVersion uint64                 `protobuf:"varint,2,opt,name=partition_table_version,json=partitionTableVersion,proto3" json:"partition_table_version,omitempty"` // Current partition table version
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *WorkerHeartbeatResponse) Reset() {
+	*x = WorkerHeartbeatResponse{}
+	mi := &file_proto_raft_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkerHeartbeatResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkerHeartbeatResponse) ProtoMessage() {}
+
+func (x *WorkerHeartbeatResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_raft_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkerHeartbeatResponse.ProtoReflect.Descriptor instead.
+func (*WorkerHeartbeatResponse) Descriptor() ([]byte, []int) {
+	return file_proto_raft_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *WorkerHeartbeatResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *WorkerHeartbeatResponse) GetPartitionTableVersion() uint64 {
+	if x != nil {
+		return x.PartitionTableVersion
+	}
+	return 0
+}
+
+// Partition table update (Raft → Worker)
+type UpdatePartitionTableRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	PartitionTable *PartitionTable        `protobuf:"bytes,1,opt,name=partition_table,json=partitionTable,proto3" json:"partition_table,omitempty"`
+	Version        uint64                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *UpdatePartitionTableRequest) Reset() {
+	*x = UpdatePartitionTableRequest{}
+	mi := &file_proto_raft_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdatePartitionTableRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdatePartitionTableRequest) ProtoMessage() {}
+
+func (x *UpdatePartitionTableRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_raft_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdatePartitionTableRequest.ProtoReflect.Descriptor instead.
+func (*UpdatePartitionTableRequest) Descriptor() ([]byte, []int) {
+	return file_proto_raft_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *UpdatePartitionTableRequest) GetPartitionTable() *PartitionTable {
+	if x != nil {
+		return x.PartitionTable
+	}
+	return nil
+}
+
+func (x *UpdatePartitionTableRequest) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+type UpdatePartitionTableResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdatePartitionTableResponse) Reset() {
+	*x = UpdatePartitionTableResponse{}
+	mi := &file_proto_raft_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdatePartitionTableResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdatePartitionTableResponse) ProtoMessage() {}
+
+func (x *UpdatePartitionTableResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_raft_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdatePartitionTableResponse.ProtoReflect.Descriptor instead.
+func (*UpdatePartitionTableResponse) Descriptor() ([]byte, []int) {
+	return file_proto_raft_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *UpdatePartitionTableResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+// Complete partition table structure
+type PartitionTable struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Assignments   []*PartitionAssignment `protobuf:"bytes,1,rep,name=assignments,proto3" json:"assignments,omitempty"`
+	Version       uint64                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PartitionTable) Reset() {
+	*x = PartitionTable{}
+	mi := &file_proto_raft_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PartitionTable) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PartitionTable) ProtoMessage() {}
+
+func (x *PartitionTable) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_raft_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PartitionTable.ProtoReflect.Descriptor instead.
+func (*PartitionTable) Descriptor() ([]byte, []int) {
+	return file_proto_raft_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *PartitionTable) GetAssignments() []*PartitionAssignment {
+	if x != nil {
+		return x.Assignments
+	}
+	return nil
+}
+
+func (x *PartitionTable) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
 var File_proto_raft_proto protoreflect.FileDescriptor
 
 const file_proto_raft_proto_rawDesc = "" +
@@ -1128,7 +1512,30 @@ const file_proto_raft_proto_rawDesc = "" +
 	"\aversion\x18\x04 \x01(\x04R\aversion\"C\n" +
 	"\x11ReplicateResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error2\xbe\x03\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"n\n" +
+	"\x15RegisterWorkerRequest\x12\x1b\n" +
+	"\tworker_id\x18\x01 \x01(\x05R\bworkerId\x12\x1b\n" +
+	"\tgrpc_addr\x18\x02 \x01(\tR\bgrpcAddr\x12\x1b\n" +
+	"\thttp_addr\x18\x03 \x01(\tR\bhttpAddr\"\xc1\x01\n" +
+	"\x16RegisterWorkerResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x12?\n" +
+	"\x0fpartition_table\x18\x03 \x01(\v2\x16.raftpb.PartitionTableR\x0epartitionTable\x126\n" +
+	"\x17partition_table_version\x18\x04 \x01(\x04R\x15partitionTableVersion\"S\n" +
+	"\x16WorkerHeartbeatRequest\x12\x1b\n" +
+	"\tworker_id\x18\x01 \x01(\x05R\bworkerId\x12\x1c\n" +
+	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\"k\n" +
+	"\x17WorkerHeartbeatResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x126\n" +
+	"\x17partition_table_version\x18\x02 \x01(\x04R\x15partitionTableVersion\"x\n" +
+	"\x1bUpdatePartitionTableRequest\x12?\n" +
+	"\x0fpartition_table\x18\x01 \x01(\v2\x16.raftpb.PartitionTableR\x0epartitionTable\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\x04R\aversion\"8\n" +
+	"\x1cUpdatePartitionTableResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\"i\n" +
+	"\x0ePartitionTable\x12=\n" +
+	"\vassignments\x18\x01 \x03(\v2\x1b.raftpb.PartitionAssignmentR\vassignments\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\x04R\aversion2\xc6\x05\n" +
 	"\x04Raft\x123\n" +
 	"\aForward\x12\x0f.raftpb.Message\x1a\x17.raftpb.ForwardResponse\x125\n" +
 	"\n" +
@@ -1138,7 +1545,10 @@ const file_proto_raft_proto_rawDesc = "" +
 	"LogRequest\x12\x16.raftpb.LogRequestArgs\x1a\x13.raftpb.LogResponse\x12;\n" +
 	"\tHeartbeat\x12\x16.google.protobuf.Empty\x1a\x16.google.protobuf.Empty\x12R\n" +
 	"\x0fInstallSnapshot\x12\x1e.raftpb.InstallSnapshotRequest\x1a\x1f.raftpb.InstallSnapshotResponse\x12@\n" +
-	"\tReplicate\x12\x18.raftpb.ReplicateRequest\x1a\x19.raftpb.ReplicateResponseB\x11Z\x0fpkg/raft/raftpbb\x06proto3"
+	"\tReplicate\x12\x18.raftpb.ReplicateRequest\x1a\x19.raftpb.ReplicateResponse\x12O\n" +
+	"\x0eRegisterWorker\x12\x1d.raftpb.RegisterWorkerRequest\x1a\x1e.raftpb.RegisterWorkerResponse\x12R\n" +
+	"\x0fWorkerHeartbeat\x12\x1e.raftpb.WorkerHeartbeatRequest\x1a\x1f.raftpb.WorkerHeartbeatResponse\x12a\n" +
+	"\x14UpdatePartitionTable\x12#.raftpb.UpdatePartitionTableRequest\x1a$.raftpb.UpdatePartitionTableResponseB\x11Z\x0fpkg/raft/raftpbb\x06proto3"
 
 var (
 	file_proto_raft_proto_rawDescOnce sync.Once
@@ -1153,54 +1563,70 @@ func file_proto_raft_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_raft_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_raft_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_proto_raft_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_proto_raft_proto_goTypes = []any{
-	(Message_Type)(0),               // 0: raftpb.Message.Type
-	(*Message)(nil),                 // 1: raftpb.Message
-	(*Null)(nil),                    // 2: raftpb.Null
-	(*GetRequest)(nil),              // 3: raftpb.GetRequest
-	(*GetResponse)(nil),             // 4: raftpb.GetResponse
-	(*ForwardResponse)(nil),         // 5: raftpb.ForwardResponse
-	(*LogEntry)(nil),                // 6: raftpb.LogEntry
-	(*VoteRequestArgs)(nil),         // 7: raftpb.VoteRequestArgs
-	(*VoteResponse)(nil),            // 8: raftpb.VoteResponse
-	(*LogRequestArgs)(nil),          // 9: raftpb.LogRequestArgs
-	(*LogResponse)(nil),             // 10: raftpb.LogResponse
-	(*InstallSnapshotRequest)(nil),  // 11: raftpb.InstallSnapshotRequest
-	(*InstallSnapshotResponse)(nil), // 12: raftpb.InstallSnapshotResponse
-	(*PartitionTableUpdate)(nil),    // 13: raftpb.PartitionTableUpdate
-	(*PartitionAssignment)(nil),     // 14: raftpb.PartitionAssignment
-	(*ReplicateRequest)(nil),        // 15: raftpb.ReplicateRequest
-	(*ReplicateResponse)(nil),       // 16: raftpb.ReplicateResponse
-	(*wrapperspb.Int32Value)(nil),   // 17: google.protobuf.Int32Value
-	(*emptypb.Empty)(nil),           // 18: google.protobuf.Empty
+	(Message_Type)(0),                    // 0: raftpb.Message.Type
+	(*Message)(nil),                      // 1: raftpb.Message
+	(*Null)(nil),                         // 2: raftpb.Null
+	(*GetRequest)(nil),                   // 3: raftpb.GetRequest
+	(*GetResponse)(nil),                  // 4: raftpb.GetResponse
+	(*ForwardResponse)(nil),              // 5: raftpb.ForwardResponse
+	(*LogEntry)(nil),                     // 6: raftpb.LogEntry
+	(*VoteRequestArgs)(nil),              // 7: raftpb.VoteRequestArgs
+	(*VoteResponse)(nil),                 // 8: raftpb.VoteResponse
+	(*LogRequestArgs)(nil),               // 9: raftpb.LogRequestArgs
+	(*LogResponse)(nil),                  // 10: raftpb.LogResponse
+	(*InstallSnapshotRequest)(nil),       // 11: raftpb.InstallSnapshotRequest
+	(*InstallSnapshotResponse)(nil),      // 12: raftpb.InstallSnapshotResponse
+	(*PartitionTableUpdate)(nil),         // 13: raftpb.PartitionTableUpdate
+	(*PartitionAssignment)(nil),          // 14: raftpb.PartitionAssignment
+	(*ReplicateRequest)(nil),             // 15: raftpb.ReplicateRequest
+	(*ReplicateResponse)(nil),            // 16: raftpb.ReplicateResponse
+	(*RegisterWorkerRequest)(nil),        // 17: raftpb.RegisterWorkerRequest
+	(*RegisterWorkerResponse)(nil),       // 18: raftpb.RegisterWorkerResponse
+	(*WorkerHeartbeatRequest)(nil),       // 19: raftpb.WorkerHeartbeatRequest
+	(*WorkerHeartbeatResponse)(nil),      // 20: raftpb.WorkerHeartbeatResponse
+	(*UpdatePartitionTableRequest)(nil),  // 21: raftpb.UpdatePartitionTableRequest
+	(*UpdatePartitionTableResponse)(nil), // 22: raftpb.UpdatePartitionTableResponse
+	(*PartitionTable)(nil),               // 23: raftpb.PartitionTable
+	(*wrapperspb.Int32Value)(nil),        // 24: google.protobuf.Int32Value
+	(*emptypb.Empty)(nil),                // 25: google.protobuf.Empty
 }
 var file_proto_raft_proto_depIdxs = []int32{
 	0,  // 0: raftpb.Message.type:type_name -> raftpb.Message.Type
-	17, // 1: raftpb.Message.value:type_name -> google.protobuf.Int32Value
+	24, // 1: raftpb.Message.value:type_name -> google.protobuf.Int32Value
 	13, // 2: raftpb.Message.partition_update:type_name -> raftpb.PartitionTableUpdate
 	1,  // 3: raftpb.LogEntry.message:type_name -> raftpb.Message
 	6,  // 4: raftpb.LogRequestArgs.suffix:type_name -> raftpb.LogEntry
 	14, // 5: raftpb.PartitionTableUpdate.assignments:type_name -> raftpb.PartitionAssignment
-	1,  // 6: raftpb.Raft.Forward:input_type -> raftpb.Message
-	3,  // 7: raftpb.Raft.ForwardGet:input_type -> raftpb.GetRequest
-	7,  // 8: raftpb.Raft.VoteRequest:input_type -> raftpb.VoteRequestArgs
-	9,  // 9: raftpb.Raft.LogRequest:input_type -> raftpb.LogRequestArgs
-	18, // 10: raftpb.Raft.Heartbeat:input_type -> google.protobuf.Empty
-	11, // 11: raftpb.Raft.InstallSnapshot:input_type -> raftpb.InstallSnapshotRequest
-	15, // 12: raftpb.Raft.Replicate:input_type -> raftpb.ReplicateRequest
-	5,  // 13: raftpb.Raft.Forward:output_type -> raftpb.ForwardResponse
-	4,  // 14: raftpb.Raft.ForwardGet:output_type -> raftpb.GetResponse
-	8,  // 15: raftpb.Raft.VoteRequest:output_type -> raftpb.VoteResponse
-	10, // 16: raftpb.Raft.LogRequest:output_type -> raftpb.LogResponse
-	18, // 17: raftpb.Raft.Heartbeat:output_type -> google.protobuf.Empty
-	12, // 18: raftpb.Raft.InstallSnapshot:output_type -> raftpb.InstallSnapshotResponse
-	16, // 19: raftpb.Raft.Replicate:output_type -> raftpb.ReplicateResponse
-	13, // [13:20] is the sub-list for method output_type
-	6,  // [6:13] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	23, // 6: raftpb.RegisterWorkerResponse.partition_table:type_name -> raftpb.PartitionTable
+	23, // 7: raftpb.UpdatePartitionTableRequest.partition_table:type_name -> raftpb.PartitionTable
+	14, // 8: raftpb.PartitionTable.assignments:type_name -> raftpb.PartitionAssignment
+	1,  // 9: raftpb.Raft.Forward:input_type -> raftpb.Message
+	3,  // 10: raftpb.Raft.ForwardGet:input_type -> raftpb.GetRequest
+	7,  // 11: raftpb.Raft.VoteRequest:input_type -> raftpb.VoteRequestArgs
+	9,  // 12: raftpb.Raft.LogRequest:input_type -> raftpb.LogRequestArgs
+	25, // 13: raftpb.Raft.Heartbeat:input_type -> google.protobuf.Empty
+	11, // 14: raftpb.Raft.InstallSnapshot:input_type -> raftpb.InstallSnapshotRequest
+	15, // 15: raftpb.Raft.Replicate:input_type -> raftpb.ReplicateRequest
+	17, // 16: raftpb.Raft.RegisterWorker:input_type -> raftpb.RegisterWorkerRequest
+	19, // 17: raftpb.Raft.WorkerHeartbeat:input_type -> raftpb.WorkerHeartbeatRequest
+	21, // 18: raftpb.Raft.UpdatePartitionTable:input_type -> raftpb.UpdatePartitionTableRequest
+	5,  // 19: raftpb.Raft.Forward:output_type -> raftpb.ForwardResponse
+	4,  // 20: raftpb.Raft.ForwardGet:output_type -> raftpb.GetResponse
+	8,  // 21: raftpb.Raft.VoteRequest:output_type -> raftpb.VoteResponse
+	10, // 22: raftpb.Raft.LogRequest:output_type -> raftpb.LogResponse
+	25, // 23: raftpb.Raft.Heartbeat:output_type -> google.protobuf.Empty
+	12, // 24: raftpb.Raft.InstallSnapshot:output_type -> raftpb.InstallSnapshotResponse
+	16, // 25: raftpb.Raft.Replicate:output_type -> raftpb.ReplicateResponse
+	18, // 26: raftpb.Raft.RegisterWorker:output_type -> raftpb.RegisterWorkerResponse
+	20, // 27: raftpb.Raft.WorkerHeartbeat:output_type -> raftpb.WorkerHeartbeatResponse
+	22, // 28: raftpb.Raft.UpdatePartitionTable:output_type -> raftpb.UpdatePartitionTableResponse
+	19, // [19:29] is the sub-list for method output_type
+	9,  // [9:19] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_proto_raft_proto_init() }
@@ -1214,7 +1640,7 @@ func file_proto_raft_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_raft_proto_rawDesc), len(file_proto_raft_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   16,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

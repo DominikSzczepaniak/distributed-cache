@@ -110,6 +110,47 @@ message ReplicateResponse {
     string error = 2;          // Error message if success = false
 }
 
+// Worker registration messages (Stage 2)
+message RegisterWorkerRequest {
+    int32 worker_id = 1;
+    string grpc_addr = 2;      // Worker's gRPC address for replication
+    string http_addr = 3;      // Worker's HTTP API address
+}
+
+message RegisterWorkerResponse {
+    bool success = 1;
+    string error = 2;
+    PartitionTable partition_table = 3;  // Current partition table
+    uint64 partition_table_version = 4;
+}
+
+// Worker heartbeat messages
+message WorkerHeartbeatRequest {
+    int32 worker_id = 1;
+    int64 timestamp = 2;
+}
+
+message WorkerHeartbeatResponse {
+    bool success = 1;
+    uint64 partition_table_version = 2;  // Current partition table version
+}
+
+// Partition table update (Raft → Worker)
+message UpdatePartitionTableRequest {
+    PartitionTable partition_table = 1;
+    uint64 version = 2;
+}
+
+message UpdatePartitionTableResponse {
+    bool success = 1;
+}
+
+// Complete partition table structure
+message PartitionTable {
+    repeated PartitionAssignment assignments = 1;
+    uint64 version = 2;
+}
+
 
 service Raft{
     rpc Forward (Message) returns (ForwardResponse);
@@ -119,6 +160,11 @@ service Raft{
     rpc Heartbeat (google.protobuf.Empty) returns (google.protobuf.Empty);
     rpc InstallSnapshot(InstallSnapshotRequest) returns (InstallSnapshotResponse);
     rpc Replicate(ReplicateRequest) returns (ReplicateResponse);  // Primary-backup replication
+
+    // Worker registration and heartbeat (Stage 2)
+    rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+    rpc WorkerHeartbeat(WorkerHeartbeatRequest) returns (WorkerHeartbeatResponse);
+    rpc UpdatePartitionTable(UpdatePartitionTableRequest) returns (UpdatePartitionTableResponse);
 }
 
 

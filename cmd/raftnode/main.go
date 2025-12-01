@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"log/slog"
@@ -164,6 +165,14 @@ func (s *SimpleKVStore) GetValue(key int) int {
 	return s.data[key]
 }
 
+// GetPartitionTable returns the partition table and its version
+// This is called by RegisterWorker RPC handler
+func (s *SimpleKVStore) GetPartitionTable() (*sharding.PartitionTable, uint64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.partitionTable, s.partitionTable.GetVersion()
+}
+
 // convertRaftAddrToHTTP converts a Raft gRPC address to an HTTP API address
 // Example: "localhost:9000" → "http://localhost:10000"
 // Assumes HTTP port = gRPC port + 1000
@@ -261,6 +270,18 @@ func main() {
 	r := raft.NewRaft(app, cfg)
 
 	slog.Info("Raft node started successfully")
+
+	// Initialize worker registry (Stage 2)
+	workerRegistry := raft.NewWorkerRegistry(app.partitionTable)
+	r.SetWorkerRegistry(workerRegistry)
+
+	// Start worker health monitoring in background
+	go func() {
+		ctx := context.Background()
+		workerRegistry.MonitorWorkers(ctx)
+	}()
+
+	slog.Info("Worker registry initialized and health monitoring started")
 
 	// Auto-initialize partition table after Raft startup
 	go autoInitializePartitions(r, app, cfg)

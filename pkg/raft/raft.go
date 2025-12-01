@@ -44,6 +44,9 @@ type Raft struct {
 	replicators []*Replicator
 	snapshotter *Snapshot
 
+	// Worker registry (Stage 2)
+	workerRegistry *WorkerRegistry
+
 	raftpb.UnimplementedRaftServer
 }
 
@@ -396,4 +399,14 @@ func (r *Raft) sendInstallSnapshotRPC(followerId int) {
 // GetConnectionManager returns the connection manager for accessing peer clients
 func (r *Raft) GetConnectionManager() *ConnectionManager {
 	return r.connMgr
+}
+
+// SetWorkerRegistry sets the worker registry (Stage 2)
+func (r *Raft) SetWorkerRegistry(wr *WorkerRegistry) {
+	r.workerRegistry = wr
+}
+
+// GetWorkerRegistry returns the worker registry (Stage 2)
+func (r *Raft) GetWorkerRegistry() *WorkerRegistry {
+	return r.workerRegistry
 }

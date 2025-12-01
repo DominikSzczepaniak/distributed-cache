@@ -51,7 +51,7 @@ func (a *testApp) AppendMessage(msg Message) (bool, int) {
 		return true, 0
 	case get:
 		return true, a.data[msg.Key]
-	case delete:
+	case deleteMsg:
 		rv := reflect.ValueOf(a.data)
 		rv.SetMapIndex(reflect.ValueOf(msg.Key), reflect.Value{})
 		return true, 0
@@ -161,6 +161,11 @@ func (m *mockPeerClient) InstallSnapshot(ctx context.Context, in *raftpb.Install
 	return args.Get(0).(*raftpb.InstallSnapshotResponse), args.Error(1)
 }
 
+func (m *mockPeerClient) RegisterWorker(ctx context.Context, in *raftpb.RegisterWorkerRequest) (*raftpb.RegisterWorkerResponse, error) {
+	args := m.Called(ctx, in)
+	return args.Get(0).(*raftpb.RegisterWorkerResponse), args.Error(1)
+}
+
 func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
 	t.Helper()
 	app := newTestApp()
@@ -256,6 +261,10 @@ func (p *inMemPeer) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.
 }
 func (p *inMemPeer) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
 	return p.r.InstallSnapshot(ctx, in)
+}
+
+func (p *inMemPeer) RegisterWorker(ctx context.Context, in *raftpb.RegisterWorkerRequest) (*raftpb.RegisterWorkerResponse, error) {
+	return p.r.RegisterWorker(ctx, in)
 }
 
 func createCluster(t testing.TB, n int) []*Raft {

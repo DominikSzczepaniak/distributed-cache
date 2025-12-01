@@ -24,7 +24,7 @@ type MessageType string
 const (
 	get                  MessageType = "GET"
 	put                  MessageType = "PUT"
-	delete               MessageType = "DELETE"
+	deleteMsg            MessageType = "DELETE"
 	updatePartitionTable MessageType = "UPDATE_PARTITION_TABLE"
 )
 
@@ -40,7 +40,7 @@ func toProtoMsgType(m MessageType) raftpb.Message_Type {
 		return raftpb.Message_GET
 	case put:
 		return raftpb.Message_PUT
-	case delete:
+	case deleteMsg:
 		return raftpb.Message_DELETE
 	case updatePartitionTable:
 		return raftpb.Message_UPDATE_PARTITION_TABLE

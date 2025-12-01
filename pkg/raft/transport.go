@@ -15,6 +15,7 @@ type PeerClient interface {
 	VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*raftpb.VoteResponse, error)
 	Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error)
 	InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error)
+	RegisterWorker(ctx context.Context, in *raftpb.RegisterWorkerRequest) (*raftpb.RegisterWorkerResponse, error)
 }
 
 type GRPCPeerClient struct {
@@ -44,6 +45,10 @@ func (g *GRPCPeerClient) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emp
 }
 func (g *GRPCPeerClient) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
 	return g.cli.InstallSnapshot(ctx, in)
+}
+
+func (g *GRPCPeerClient) RegisterWorker(ctx context.Context, in *raftpb.RegisterWorkerRequest) (*raftpb.RegisterWorkerResponse, error) {
+	return g.cli.RegisterWorker(ctx, in)
 }
 
 // GetRaftClient returns the underlying gRPC RaftClient for replication

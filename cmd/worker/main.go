@@ -90,20 +90,43 @@ func main() {
 		}
 	}()
 
-	// TODO Stage 2: Register with Raft cluster
-	// regClient := worker.NewRegistrationClient(nodeID, cfg.HTTPAddr, cfg.RaftAddrs, partitionTable)
-	// ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	// defer cancel()
-	// if err := regClient.Register(ctx); err != nil {
-	//     slog.Error("Failed to register with Raft", "error", err)
-	//     os.Exit(1)
-	// }
-	// go regClient.StartHeartbeat(5 * time.Second)
+	// Stage 2: Register with Raft cluster
+	var regClient *worker.RegistrationClient
+	if len(cfg.RaftAddrs) > 0 {
+		slog.Info("Registering with Raft cluster", "raft_addrs", cfg.RaftAddrs)
+
+		regClient = worker.NewRegistrationClient(
+			cfg.WorkerID,
+			cfg.GRPCAddr,
+			cfg.HTTPAddr,
+			cfg.RaftAddrs,
+			partitionTable,
+		)
+
+		regCtx, regCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer regCancel()
+
+		if err := regClient.RegisterWithRaft(regCtx); err != nil {
+			slog.Error("Failed to register with Raft cluster", "error", err)
+			slog.Info("Continuing in standalone mode...")
+		} else {
+			// Start heartbeat goroutine
+			heartbeatCtx, _ := context.WithCancel(context.Background())
+			go regClient.StartHeartbeat(heartbeatCtx)
+
+			slog.Info("Worker registered and heartbeat started",
+				"worker_id", cfg.WorkerID,
+				"partition_table_version", regClient.GetPartitionTableVersion())
+		}
+	} else {
+		slog.Info("No Raft addresses configured, running in standalone mode")
+	}
 
 	slog.Info("Worker node ready",
 		"worker_id", cfg.WorkerID,
 		"http_addr", cfg.HTTPAddr,
-		"grpc_addr", cfg.GRPCAddr)
+		"grpc_addr", cfg.GRPCAddr,
+		"registered_with_raft", regClient != nil && regClient.IsRegistered())
 
 	// Wait for shutdown signal
 	sigCh := make(chan os.Signal, 1)
@@ -116,10 +139,19 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	// Stop registration client and heartbeat
+	if regClient != nil {
+		if err := regClient.Close(); err != nil {
+			slog.Error("Error closing registration client", "error", err)
+		}
+	}
+
+	// Stop API server
 	if err := apiServer.Stop(ctx); err != nil {
 		slog.Error("Error stopping API server", "error", err)
 	}
 
+	// Stop gRPC server
 	grpcServer.GracefulStop()
 
 	slog.Info("Worker node stopped")

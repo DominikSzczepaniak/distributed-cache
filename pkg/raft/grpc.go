@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
+	"github.com/dominikszczepaniak/distributed-cache/pkg/sharding"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -401,5 +402,175 @@ func (r *Raft) Replicate(ctx context.Context, req *raftpb.ReplicateRequest) (*ra
 			Success: false,
 			Error:   "unknown operation: " + req.Operation,
 		}, nil
+	}
+}
+
+// RegisterWorker handles worker registration requests (Stage 2)
+// Workers register with Raft cluster on startup to receive partition assignments
+func (r *Raft) RegisterWorker(ctx context.Context, req *raftpb.RegisterWorkerRequest) (*raftpb.RegisterWorkerResponse, error) {
+	workerID := int(req.WorkerId)
+	grpcAddr := req.GrpcAddr
+	httpAddr := req.HttpAddr
+
+	slog.Info(fmt.Sprintf("Node %d: Received RegisterWorker request from worker %d (grpc=%s, http=%s)",
+		r.id, workerID, grpcAddr, httpAddr))
+
+	// Only leader handles worker registration
+	// Followers redirect to leader
+	isLeader, leaderID := r.getLeaderData()
+	if !isLeader {
+		if leaderID < 0 {
+			slog.Warn(fmt.Sprintf("Node %d: Cannot register worker %d - no leader known", r.id, workerID))
+			return &raftpb.RegisterWorkerResponse{
+				Success: false,
+				Error:   "no leader known",
+			}, nil
+		}
+
+		slog.Info(fmt.Sprintf("Node %d: Forwarding worker registration to leader %d", r.id, leaderID))
+
+		// Forward to leader
+		peer := r.getPeer(leaderID)
+		if peer == nil {
+			return &raftpb.RegisterWorkerResponse{
+				Success: false,
+				Error:   fmt.Sprintf("cannot connect to leader %d", leaderID),
+			}, nil
+		}
+
+		return peer.RegisterWorker(ctx, req)
+	}
+
+	// Leader handles registration
+	if r.workerRegistry == nil {
+		slog.Error(fmt.Sprintf("Node %d: Worker registry not initialized", r.id))
+		return &raftpb.RegisterWorkerResponse{
+			Success: false,
+			Error:   "worker registry not initialized",
+		}, nil
+	}
+
+	// Register worker in registry
+	err := r.workerRegistry.RegisterWorker(sharding.NodeID(workerID), grpcAddr, httpAddr)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Node %d: Failed to register worker %d: %v", r.id, workerID, err))
+		return &raftpb.RegisterWorkerResponse{
+			Success: false,
+			Error:   err.Error(),
+		}, nil
+	}
+
+	// Get current partition table from application
+	// Assuming the application has a GetPartitionTable method
+	// If not, we'll need to access it differently
+	var partitionTable *raftpb.PartitionTable
+	var version uint64
+
+	// Try to get partition table from application
+	if app, ok := r.application.(interface{ GetPartitionTable() (*sharding.PartitionTable, uint64) }); ok {
+		pt, ver := app.GetPartitionTable()
+		partitionTable = convertPartitionTable(pt)
+		version = ver
+	} else {
+		// Fallback: empty partition table for now
+		// TODO: Implement proper partition table access in Stage 3
+		partitionTable = &raftpb.PartitionTable{
+			Assignments: []*raftpb.PartitionAssignment{},
+			Version:     0,
+		}
+		version = 0
+	}
+
+	slog.Info(fmt.Sprintf("Node %d: Worker %d registered successfully (partition_table_version=%d)",
+		r.id, workerID, version))
+
+	return &raftpb.RegisterWorkerResponse{
+		Success:                true,
+		PartitionTable:         partitionTable,
+		PartitionTableVersion:  version,
+	}, nil
+}
+
+// WorkerHeartbeat handles heartbeat requests from workers
+// Updates the last-seen timestamp for the worker
+func (r *Raft) WorkerHeartbeat(ctx context.Context, req *raftpb.WorkerHeartbeatRequest) (*raftpb.WorkerHeartbeatResponse, error) {
+	workerID := int(req.WorkerId)
+
+	// Only leader handles heartbeats
+	// Followers can accept but won't update registry (stateless)
+	isLeader, _ := r.getLeaderData()
+	if !isLeader {
+		// Non-leader: accept but don't process
+		return &raftpb.WorkerHeartbeatResponse{
+			Success:                false,
+			PartitionTableVersion:  0,
+		}, nil
+	}
+
+	if r.workerRegistry == nil {
+		return &raftpb.WorkerHeartbeatResponse{
+			Success:                false,
+			PartitionTableVersion:  0,
+		}, nil
+	}
+
+	// Record heartbeat
+	err := r.workerRegistry.RecordHeartbeat(sharding.NodeID(workerID))
+	if err != nil {
+		slog.Warn(fmt.Sprintf("Node %d: Heartbeat from unregistered worker %d", r.id, workerID))
+		return &raftpb.WorkerHeartbeatResponse{
+			Success:                false,
+			PartitionTableVersion:  0,
+		}, nil
+	}
+
+	// Get current partition table version
+	var version uint64
+	if app, ok := r.application.(interface{ GetPartitionTable() (*sharding.PartitionTable, uint64) }); ok {
+		_, version = app.GetPartitionTable()
+	}
+
+	return &raftpb.WorkerHeartbeatResponse{
+		Success:                true,
+		PartitionTableVersion:  version,
+	}, nil
+}
+
+// UpdatePartitionTable is called by leader to push partition table updates to workers
+// This is a worker-side RPC (workers implement this, not Raft nodes)
+// Included here for completeness but not used by Raft nodes
+func (r *Raft) UpdatePartitionTable(ctx context.Context, req *raftpb.UpdatePartitionTableRequest) (*raftpb.UpdatePartitionTableResponse, error) {
+	slog.Warn(fmt.Sprintf("Node %d: UpdatePartitionTable called on Raft node (should be called on workers)", r.id))
+	return &raftpb.UpdatePartitionTableResponse{
+		Success: false,
+	}, fmt.Errorf("UpdatePartitionTable should be called on workers, not Raft nodes")
+}
+
+// convertPartitionTable converts internal partition table to protobuf format
+func convertPartitionTable(pt *sharding.PartitionTable) *raftpb.PartitionTable {
+	if pt == nil {
+		return &raftpb.PartitionTable{
+			Assignments: []*raftpb.PartitionAssignment{},
+			Version:     0,
+		}
+	}
+
+	// Get all partition assignments
+	assignments := make([]*raftpb.PartitionAssignment, 0)
+
+	// Iterate through all partitions
+	for i := 0; i < sharding.TOTAL_PARTITIONS; i++ {
+		primary, _, ok := pt.GetReplicas(sharding.PartitionID(i))
+		if ok {
+			assignments = append(assignments, &raftpb.PartitionAssignment{
+				PartitionId: uint32(i),
+				NodeId:      int32(primary),
+			})
+		}
+	}
+
+	return &raftpb.PartitionTable{
+		Assignments: assignments,
+		Version:     pt.GetVersion(),
 	}
 }
