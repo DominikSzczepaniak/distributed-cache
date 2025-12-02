@@ -47,8 +47,8 @@ func NewWorkerRegistry(partitionTable *sharding.PartitionTable) *WorkerRegistry 
 }
 
 // RegisterWorker registers a new worker or updates an existing worker
-// Returns error if worker is already registered with different addresses
-func (wr *WorkerRegistry) RegisterWorker(id sharding.NodeID, grpcAddr, httpAddr string) error {
+// Returns the initialized partition table (if initialization happened) and error
+func (wr *WorkerRegistry) RegisterWorker(id sharding.NodeID, grpcAddr, httpAddr string) (*sharding.PartitionTable, error) {
 	wr.mu.Lock()
 	defer wr.mu.Unlock()
 
@@ -67,7 +67,7 @@ func (wr *WorkerRegistry) RegisterWorker(id sharding.NodeID, grpcAddr, httpAddr 
 		existing.HTTPAddr = httpAddr
 		existing.Status = WorkerStatusActive
 		existing.LastHeartbeat = now
-		return nil
+		return nil, nil
 	}
 
 	// New worker registration
@@ -86,7 +86,45 @@ func (wr *WorkerRegistry) RegisterWorker(id sharding.NodeID, grpcAddr, httpAddr 
 		"http_addr", httpAddr,
 		"total_workers", len(wr.workers))
 
-	return nil
+	// Initialize partition table with worker IDs if needed
+	pt := wr.maybeInitializePartitionTable()
+
+	return pt, nil
+}
+
+// RegisterWorkerLocalOnly registers a worker locally without triggering partition table initialization
+// This is used by followers to store worker information when forwarding registrations to the leader
+func (wr *WorkerRegistry) RegisterWorkerLocalOnly(id sharding.NodeID, grpcAddr, httpAddr string) {
+	wr.mu.Lock()
+	defer wr.mu.Unlock()
+
+	now := time.Now()
+
+	// Check if worker already registered
+	if existing, exists := wr.workers[id]; exists {
+		// Update existing worker info
+		existing.GRPCAddr = grpcAddr
+		existing.HTTPAddr = httpAddr
+		existing.Status = WorkerStatusActive
+		existing.LastHeartbeat = now
+		return
+	}
+
+	// New worker registration (local only, no partition table initialization)
+	wr.workers[id] = &WorkerInfo{
+		WorkerID:      id,
+		GRPCAddr:      grpcAddr,
+		HTTPAddr:      httpAddr,
+		Status:        WorkerStatusActive,
+		LastHeartbeat: now,
+		RegisteredAt:  now,
+	}
+
+	slog.Info("Worker registered locally",
+		"worker_id", id,
+		"grpc_addr", grpcAddr,
+		"http_addr", httpAddr,
+		"total_workers", len(wr.workers))
 }
 
 // RecordHeartbeat updates the last heartbeat timestamp for a worker
@@ -279,4 +317,43 @@ func (wr *WorkerRegistry) GetWorkerHTTPAddr(id sharding.NodeID) (string, error) 
 	}
 
 	return worker.HTTPAddr, nil
+}
+
+// maybeInitializePartitionTable initializes the partition table with registered worker IDs
+// Only initializes once, when partition table is empty and we have workers registered
+// Must be called with lock held
+// Returns the new partition table if initialized, nil otherwise
+func (wr *WorkerRegistry) maybeInitializePartitionTable() *sharding.PartitionTable {
+	// Check if partition table already initialized
+	if wr.partitionTable.GetAssignmentCount() > 0 {
+		return nil
+	}
+
+	// Need at least one worker to initialize
+	if len(wr.workers) == 0 {
+		return nil
+	}
+
+	// Collect active worker IDs
+	workerIDs := make([]sharding.NodeID, 0, len(wr.workers))
+	for id, worker := range wr.workers {
+		if worker.Status == WorkerStatusActive {
+			workerIDs = append(workerIDs, id)
+		}
+	}
+
+	if len(workerIDs) == 0 {
+		return nil
+	}
+
+	// Initialize partition table with worker IDs
+	pt := sharding.InitializeEvenDistribution(sharding.TOTAL_PARTITIONS, workerIDs)
+
+	slog.Info("Partition table initialized with worker IDs",
+		"total_partitions", sharding.TOTAL_PARTITIONS,
+		"workers", len(workerIDs),
+		"worker_ids", workerIDs,
+		"version", pt.GetVersion())
+
+	return pt
 }

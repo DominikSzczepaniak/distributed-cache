@@ -209,12 +209,30 @@ func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 		if e.Message.Value != nil {
 			val = wrapperspb.Int32(int32(*e.Message.Value))
 		}
+
+		// Convert PartitionTableUpdate to protobuf if present
+		var pbPartitionUpdate *raftpb.PartitionTableUpdate
+		if e.Message.PartitionTableUpdate != nil {
+			assignments := make([]*raftpb.PartitionAssignment, 0, len(e.Message.PartitionTableUpdate.Assignments))
+			for partitionID, nodeID := range e.Message.PartitionTableUpdate.Assignments {
+				assignments = append(assignments, &raftpb.PartitionAssignment{
+					PartitionId: uint32(partitionID),
+					NodeId:      int32(nodeID),
+				})
+			}
+			pbPartitionUpdate = &raftpb.PartitionTableUpdate{
+				Assignments: assignments,
+				Version:     e.Message.PartitionTableUpdate.Version,
+			}
+		}
+
 		pbSuffix[i] = &raftpb.LogEntry{
 			Term: int32(e.Term),
 			Message: &raftpb.Message{
-				Type:  toProtoMsgType(e.Message.MsgType),
-				Key:   int32(e.Message.Key),
-				Value: val,
+				Type:           toProtoMsgType(e.Message.MsgType),
+				Key:            int32(e.Message.Key),
+				Value:          val,
+				PartitionUpdate: pbPartitionUpdate,
 			},
 		}
 	}

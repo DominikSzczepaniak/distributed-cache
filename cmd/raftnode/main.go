@@ -283,8 +283,9 @@ func main() {
 
 	slog.Info("Worker registry initialized and health monitoring started")
 
-	// Auto-initialize partition table after Raft startup
-	go autoInitializePartitions(r, app, cfg)
+	// Stage 3: Partition table is now initialized by WorkerRegistry when workers register
+	// Don't initialize with Raft node IDs anymore
+	// go autoInitializePartitions(r, app, cfg)
 
 	// Initialize ShardManager for data plane routing
 	partitioner := sharding.NewPartitioner()

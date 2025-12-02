@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -95,10 +96,19 @@ func main() {
 	if len(cfg.RaftAddrs) > 0 {
 		slog.Info("Registering with Raft cluster", "raft_addrs", cfg.RaftAddrs)
 
+		// Convert HTTP address to full URL for registration
+		// If it's just a port like ":7000", prepend "http://localhost"
+		httpURL := cfg.HTTPAddr
+		if strings.HasPrefix(httpURL, ":") {
+			httpURL = "http://localhost" + httpURL
+		} else if !strings.HasPrefix(httpURL, "http://") && !strings.HasPrefix(httpURL, "https://") {
+			httpURL = "http://" + httpURL
+		}
+
 		regClient = worker.NewRegistrationClient(
 			cfg.WorkerID,
 			cfg.GRPCAddr,
-			cfg.HTTPAddr,
+			httpURL,
 			cfg.RaftAddrs,
 			partitionTable,
 		)

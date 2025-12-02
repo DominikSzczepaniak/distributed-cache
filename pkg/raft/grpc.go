@@ -122,12 +122,27 @@ func convertLogRequestArgs(args *raftpb.LogRequestArgs) (int, int, int, int, int
 			tmp := int(e.Message.Value.Value)
 			val = &tmp
 		}
+
+		// Convert protobuf PartitionTableUpdate back to internal type
+		var partitionUpdate *PartitionTableUpdate
+		if e.Message.PartitionUpdate != nil {
+			assignments := make(map[sharding.PartitionID]sharding.NodeID, len(e.Message.PartitionUpdate.Assignments))
+			for _, assignment := range e.Message.PartitionUpdate.Assignments {
+				assignments[sharding.PartitionID(assignment.PartitionId)] = sharding.NodeID(assignment.NodeId)
+			}
+			partitionUpdate = &PartitionTableUpdate{
+				Assignments: assignments,
+				Version:     e.Message.PartitionUpdate.Version,
+			}
+		}
+
 		suffix[i] = LogEntry{
 			Term: int(e.Term),
 			Message: Message{
-				MsgType: MessageType(e.Message.Type.String()),
-				Key:     int(e.Message.Key),
-				Value:   val,
+				MsgType:              MessageType(e.Message.Type.String()),
+				Key:                  int(e.Message.Key),
+				Value:                val,
+				PartitionTableUpdate: partitionUpdate,
 			},
 		}
 	}
@@ -415,10 +430,17 @@ func (r *Raft) RegisterWorker(ctx context.Context, req *raftpb.RegisterWorkerReq
 	slog.Info(fmt.Sprintf("Node %d: Received RegisterWorker request from worker %d (grpc=%s, http=%s)",
 		r.id, workerID, grpcAddr, httpAddr))
 
-	// Only leader handles worker registration
-	// Followers redirect to leader
+	// Check if this node is the leader
 	isLeader, leaderID := r.getLeaderData()
+
+	// Followers: Store worker info locally and forward to leader
 	if !isLeader {
+		// Store worker info locally on follower for HTTP redirect lookups
+		if r.workerRegistry != nil {
+			r.workerRegistry.RegisterWorkerLocalOnly(sharding.NodeID(workerID), grpcAddr, httpAddr)
+			slog.Info(fmt.Sprintf("Node %d: Stored worker %d locally (grpc=%s, http=%s)",
+				r.id, workerID, grpcAddr, httpAddr))
+		}
 		if leaderID < 0 {
 			slog.Warn(fmt.Sprintf("Node %d: Cannot register worker %d - no leader known", r.id, workerID))
 			return &raftpb.RegisterWorkerResponse{
@@ -451,13 +473,32 @@ func (r *Raft) RegisterWorker(ctx context.Context, req *raftpb.RegisterWorkerReq
 	}
 
 	// Register worker in registry
-	err := r.workerRegistry.RegisterWorker(sharding.NodeID(workerID), grpcAddr, httpAddr)
+	newPartitionTable, err := r.workerRegistry.RegisterWorker(sharding.NodeID(workerID), grpcAddr, httpAddr)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Node %d: Failed to register worker %d: %v", r.id, workerID, err))
 		return &raftpb.RegisterWorkerResponse{
 			Success: false,
 			Error:   err.Error(),
 		}, nil
+	}
+
+	// If partition table was just initialized, replicate it via Raft
+	if newPartitionTable != nil {
+		slog.Info(fmt.Sprintf("Node %d: Partition table initialized, replicating via Raft", r.id),
+			"version", newPartitionTable.GetVersion(),
+			"assignments", newPartitionTable.GetAssignmentCount())
+
+		msg := Message{
+			MsgType: "UPDATE_PARTITION_TABLE",
+			PartitionTableUpdate: &PartitionTableUpdate{
+				Assignments: newPartitionTable.GetAssignments(),
+				Version:     newPartitionTable.GetVersion(),
+			},
+		}
+
+		// Broadcast to all Raft nodes
+		r.Broadcast(msg)
+		slog.Info(fmt.Sprintf("Node %d: Partition table update broadcasted", r.id))
 	}
 
 	// Get current partition table from application
