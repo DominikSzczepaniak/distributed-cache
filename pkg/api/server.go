@@ -28,9 +28,10 @@ type Server struct {
 	leaderCache       *LeaderCache
 	shardManager      *sharding.ShardManager
 	replicationClient *replication.Client
+	workerRegistry    *raft.WorkerRegistry
 }
 
-func NewServer(r *raft.Raft, listenAddr string, shardManager *sharding.ShardManager, replClient *replication.Client) *Server {
+func NewServer(r *raft.Raft, listenAddr string, shardManager *sharding.ShardManager, replClient *replication.Client, workerRegistry *raft.WorkerRegistry) *Server {
 	return &Server{
 		raft:              r,
 		listenAddr:        listenAddr,
@@ -39,6 +40,7 @@ func NewServer(r *raft.Raft, listenAddr string, shardManager *sharding.ShardMana
 		leaderCache:       NewLeaderCache(1 * time.Second),
 		shardManager:      shardManager,
 		replicationClient: replClient,
+		workerRegistry:    workerRegistry,
 	}
 }
 
@@ -107,7 +109,55 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SHARD VALIDATION: Check if this node should handle the key
+	// STAGE 3: ROUTE TO WORKER INSTEAD OF HANDLING LOCALLY
+	// Determine which worker should handle this key
+	if s.workerRegistry != nil && s.shardManager != nil {
+		keyStr := fmt.Sprintf("%d", req.Key)
+		partitionID := s.shardManager.GetPartitionID(keyStr)
+
+		// Get primary worker for this partition
+		primaryWorker, _, ok := s.shardManager.GetReplicas(partitionID)
+		if !ok {
+			http.Error(w, "Partition not assigned to any worker", http.StatusServiceUnavailable)
+			return
+		}
+
+		// Look up worker HTTP address from registry
+		workerAddr, err := s.workerRegistry.GetWorkerHTTPAddr(primaryWorker)
+		if err != nil {
+			slog.Error("Failed to get worker address",
+				"worker_id", primaryWorker,
+				"partition_id", partitionID,
+				"key", req.Key,
+				"error", err)
+			http.Error(w, fmt.Sprintf("Worker unavailable: %v", err), http.StatusServiceUnavailable)
+			return
+		}
+
+		// Return HTTP 307 Temporary Redirect to worker
+		redirectURL := fmt.Sprintf("%s/kv", workerAddr)
+		w.Header().Set("Location", redirectURL)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message":      "Request should be sent to worker node",
+			"worker_id":    int(primaryWorker),
+			"worker_address": workerAddr,
+			"partition_id": int(partitionID),
+			"redirect_url": redirectURL,
+		})
+
+		slog.Info("Redirecting PUT request to worker",
+			"key", req.Key,
+			"partition_id", partitionID,
+			"worker_id", primaryWorker,
+			"worker_addr", workerAddr)
+		return
+	}
+
+	// FALLBACK: If no worker registry (backward compatibility), handle via Raft
+	// This path will be deprecated in Stage 4
 	if s.shardManager != nil {
 		keyStr := fmt.Sprintf("%d", req.Key)
 		if err := s.shardManager.ValidateKey(keyStr); err != nil {
@@ -225,7 +275,55 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, key int) {
-	// SHARD VALIDATION: Check if this node should handle the key
+	// STAGE 3: ROUTE TO WORKER INSTEAD OF HANDLING LOCALLY
+	// Determine which worker should handle this key
+	if s.workerRegistry != nil && s.shardManager != nil {
+		keyStr := fmt.Sprintf("%d", key)
+		partitionID := s.shardManager.GetPartitionID(keyStr)
+
+		// Get primary worker for this partition
+		primaryWorker, _, ok := s.shardManager.GetReplicas(partitionID)
+		if !ok {
+			http.Error(w, "Partition not assigned to any worker", http.StatusServiceUnavailable)
+			return
+		}
+
+		// Look up worker HTTP address from registry
+		workerAddr, err := s.workerRegistry.GetWorkerHTTPAddr(primaryWorker)
+		if err != nil {
+			slog.Error("Failed to get worker address",
+				"worker_id", primaryWorker,
+				"partition_id", partitionID,
+				"key", key,
+				"error", err)
+			http.Error(w, fmt.Sprintf("Worker unavailable: %v", err), http.StatusServiceUnavailable)
+			return
+		}
+
+		// Return HTTP 307 Temporary Redirect to worker
+		redirectURL := fmt.Sprintf("%s/kv/%d", workerAddr, key)
+		w.Header().Set("Location", redirectURL)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message":        "Request should be sent to worker node",
+			"worker_id":      int(primaryWorker),
+			"worker_address": workerAddr,
+			"partition_id":   int(partitionID),
+			"redirect_url":   redirectURL,
+		})
+
+		slog.Info("Redirecting GET request to worker",
+			"key", key,
+			"partition_id", partitionID,
+			"worker_id", primaryWorker,
+			"worker_addr", workerAddr)
+		return
+	}
+
+	// FALLBACK: If no worker registry (backward compatibility), handle via Raft
+	// This path will be deprecated in Stage 4
 	if s.shardManager != nil {
 		keyStr := fmt.Sprintf("%d", key)
 		if err := s.shardManager.ValidateKey(keyStr); err != nil {
@@ -289,7 +387,55 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, key int) {
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key int) {
-	// SHARD VALIDATION: Check if this node should handle the key
+	// STAGE 3: ROUTE TO WORKER INSTEAD OF HANDLING LOCALLY
+	// Determine which worker should handle this key
+	if s.workerRegistry != nil && s.shardManager != nil {
+		keyStr := fmt.Sprintf("%d", key)
+		partitionID := s.shardManager.GetPartitionID(keyStr)
+
+		// Get primary worker for this partition
+		primaryWorker, _, ok := s.shardManager.GetReplicas(partitionID)
+		if !ok {
+			http.Error(w, "Partition not assigned to any worker", http.StatusServiceUnavailable)
+			return
+		}
+
+		// Look up worker HTTP address from registry
+		workerAddr, err := s.workerRegistry.GetWorkerHTTPAddr(primaryWorker)
+		if err != nil {
+			slog.Error("Failed to get worker address",
+				"worker_id", primaryWorker,
+				"partition_id", partitionID,
+				"key", key,
+				"error", err)
+			http.Error(w, fmt.Sprintf("Worker unavailable: %v", err), http.StatusServiceUnavailable)
+			return
+		}
+
+		// Return HTTP 307 Temporary Redirect to worker
+		redirectURL := fmt.Sprintf("%s/kv/%d", workerAddr, key)
+		w.Header().Set("Location", redirectURL)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message":        "Request should be sent to worker node",
+			"worker_id":      int(primaryWorker),
+			"worker_address": workerAddr,
+			"partition_id":   int(partitionID),
+			"redirect_url":   redirectURL,
+		})
+
+		slog.Info("Redirecting DELETE request to worker",
+			"key", key,
+			"partition_id", partitionID,
+			"worker_id", primaryWorker,
+			"worker_addr", workerAddr)
+		return
+	}
+
+	// FALLBACK: If no worker registry (backward compatibility), handle via Raft
+	// This path will be deprecated in Stage 4
 	if s.shardManager != nil {
 		keyStr := fmt.Sprintf("%d", key)
 		if err := s.shardManager.ValidateKey(keyStr); err != nil {

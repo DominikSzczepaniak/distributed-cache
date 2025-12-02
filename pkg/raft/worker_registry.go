@@ -265,3 +265,18 @@ func (wr *WorkerRegistry) GetActiveWorkerCount() int {
 	}
 	return count
 }
+
+// GetWorkerHTTPAddr returns the HTTP address for a worker by ID
+// Returns error if worker not found or inactive
+func (wr *WorkerRegistry) GetWorkerHTTPAddr(id sharding.NodeID) (string, error) {
+	worker, exists := wr.GetWorker(id)
+	if !exists {
+		return "", fmt.Errorf("worker %d not found in registry", id)
+	}
+
+	if worker.Status != WorkerStatusActive {
+		return "", fmt.Errorf("worker %d is inactive (status: %v)", id, worker.Status)
+	}
+
+	return worker.HTTPAddr, nil
+}

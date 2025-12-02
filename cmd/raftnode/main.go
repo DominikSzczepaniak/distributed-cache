@@ -328,7 +328,8 @@ func main() {
 		apiAddr = ":8080"
 	}
 
-	apiServer := api.NewServer(r, apiAddr, shardManager, replicationClient)
+	// Pass workerRegistry to API server for Stage 3 routing
+	apiServer := api.NewServer(r, apiAddr, shardManager, replicationClient, workerRegistry)
 	go func() {
 		if err := apiServer.Start(); err != nil && err != http.ErrServerClosed {
 			slog.Error(fmt.Sprintf("API server error: %v", err))
