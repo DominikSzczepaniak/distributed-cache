@@ -19,11 +19,11 @@ func TestLogReplication(t *testing.T) {
 	}{
 		{
 			"success",
-			[]LogEntry{{Term: 1, Message: Message{MsgType: put, Key: 1, Value: intPtr(42)}}},
+			[]LogEntry{{Term: 1, Message: Message{MsgType: PutMsg, Key: 1, Value: intPtr(42)}}},
 		},
 		{
 			"failure",
-			[]LogEntry{{Term: 1, Message: Message{MsgType: put, Key: 2, Value: intPtr(24)}}},
+			[]LogEntry{{Term: 1, Message: Message{MsgType: PutMsg, Key: 2, Value: intPtr(24)}}},
 		},
 	}
 	for _, tt := range cases {
@@ -87,9 +87,9 @@ func TestLogRequest(t *testing.T) {
 		wantSuccess bool
 		wantAck     int32
 	}{
-		{"accept", 1, nil, 1, 0, 0, []LogEntry{{Term: 1, Message: Message{MsgType: put, Key: 1, Value: intPtr(42)}}}, 0, true, 1},
+		{"accept", 1, nil, 1, 0, 0, []LogEntry{{Term: 1, Message: Message{MsgType: PutMsg, Key: 1, Value: intPtr(42)}}}, 0, true, 1},
 		{"stale_term", 2, nil, 1, 0, 0, nil, 0, false, 0},
-		{"inconsistency", 1, []LogEntry{{Term: 1, Message: Message{MsgType: put, Key: 1, Value: intPtr(1)}}}, 1, 1, 2, []LogEntry{{Term: 1, Message: Message{MsgType: put, Key: 2, Value: intPtr(2)}}}, 1, false, 0},
+		{"inconsistency", 1, []LogEntry{{Term: 1, Message: Message{MsgType: PutMsg, Key: 1, Value: intPtr(1)}}}, 1, 1, 2, []LogEntry{{Term: 1, Message: Message{MsgType: PutMsg, Key: 2, Value: intPtr(2)}}}, 1, false, 0},
 	}
 	for _, tt := range cases {
 		tt := tt
@@ -129,7 +129,7 @@ func TestLogRequest(t *testing.T) {
 func TestLogCommitment(t *testing.T) {
 	t.Parallel()
 	leader := createTestRaft(t, 0, 3)
-	msg := Message{MsgType: put, Key: 1, Value: intPtr(42)}
+	msg := Message{MsgType: PutMsg, Key: 1, Value: intPtr(42)}
 
 	leader.mu.Lock()
 	leader.currentRole = Leader

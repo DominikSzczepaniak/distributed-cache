@@ -212,9 +212,12 @@ func (r *Raft) prepareLogRequestArgs(followerId int) *raftpb.LogRequestArgs {
 		pbSuffix[i] = &raftpb.LogEntry{
 			Term: int32(e.Term),
 			Message: &raftpb.Message{
-				Type:  toProtoMsgType(e.Message.MsgType),
-				Key:   int32(e.Message.Key),
-				Value: val,
+				Type:             toProtoMsgType(e.Message.MsgType),
+				Key:              int32(e.Message.Key),
+				Value:            val,
+				CommandPayload:   e.Message.Data,
+				IdempotencyToken: e.Message.IdempotencyToken,
+				ClientId:         e.Message.ClientID,
 			},
 		}
 	}

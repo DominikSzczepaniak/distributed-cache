@@ -117,8 +117,11 @@ func (r *Raft) forwardToLeader(message Message, leader PeerClient) {
 	ctx = context.WithValue(ctx, forwardHopKey{}, true)
 
 	msg := &raftpb.Message{
-		Type: toProtoMsgType(message.MsgType),
-		Key:  int32(message.Key),
+		Type:             toProtoMsgType(message.MsgType),
+		Key:              int32(message.Key),
+		IdempotencyToken: message.IdempotencyToken,
+		ClientId:         message.ClientID,
+		CommandPayload:   message.Data,
 	}
 	if message.Value != nil {
 		msg.Value = wrapperspb.Int32(int32(*message.Value))

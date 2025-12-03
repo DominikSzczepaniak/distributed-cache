@@ -100,7 +100,7 @@ func TestVoteRequest(t *testing.T) {
 			n.votedFor = tt.args.nodeVoted
 			if tt.args.logLen > 0 {
 				n.log = append(n.log, LogEntry{Term: tt.args.logTerm,
-					Message: Message{MsgType: put, Key: 1, Value: intPtr(1)}})
+					Message: Message{MsgType: PutMsg, Key: 1, Value: intPtr(1)}})
 			}
 			req := &raftpb.VoteRequestArgs{
 				CandidateId:        0,

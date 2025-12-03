@@ -40,6 +40,7 @@ func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Forwar
 		Value:            val,
 		IdempotencyToken: msg.IdempotencyToken,
 		ClientID:         msg.ClientId,
+		Data:             msg.CommandPayload,
 	}
 
 	isLeader, leaderID := r.getLeaderData()
@@ -124,9 +125,12 @@ func convertLogRequestArgs(args *raftpb.LogRequestArgs) (int, int, int, int, int
 		suffix[i] = LogEntry{
 			Term: int(e.Term),
 			Message: Message{
-				MsgType: MessageType(e.Message.Type.String()),
-				Key:     int(e.Message.Key),
-				Value:   val,
+				MsgType:          MessageType(e.Message.Type.String()),
+				Key:              int(e.Message.Key),
+				Value:            val,
+				IdempotencyToken: e.Message.IdempotencyToken,
+				ClientID:         e.Message.ClientId,
+				Data:             e.Message.CommandPayload,
 			},
 		}
 	}

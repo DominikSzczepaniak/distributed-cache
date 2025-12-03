@@ -35,7 +35,7 @@ func TestFullRaftIntegration(t *testing.T) {
 		}
 		require.NotNil(t, leader)
 		val := 100
-		leader.Broadcast(Message{MsgType: put, Key: 9, Value: &val})
+		leader.Broadcast(Message{MsgType: PutMsg, Key: 9, Value: &val})
 		time.Sleep(1 * time.Second)
 		for i, n := range nodes {
 			n.mu.RLock()
@@ -62,7 +62,7 @@ func TestFullRaftIntegration(t *testing.T) {
 		require.NotNil(t, leader)
 		require.NotNil(t, follower)
 		val := 55
-		follower.Broadcast(Message{MsgType: put, Key: 5, Value: &val})
+		follower.Broadcast(Message{MsgType: PutMsg, Key: 5, Value: &val})
 		time.Sleep(1 * time.Second)
 		for i, n := range nodes {
 			data := n.application.(*testApp).getData()
@@ -79,8 +79,8 @@ func TestRaftRecovery(t *testing.T) {
 	fn := filepath.Join(tmp, "r.data")
 	app1 := newTestApp()
 	initLogs := []LogEntry{
-		{Term: 1, Message: Message{MsgType: put, Key: 1, Value: intPtr(42)}},
-		{Term: 1, Message: Message{MsgType: put, Key: 2, Value: intPtr(24)}},
+		{Term: 1, Message: Message{MsgType: PutMsg, Key: 1, Value: intPtr(42)}},
+		{Term: 1, Message: Message{MsgType: PutMsg, Key: 2, Value: intPtr(24)}},
 	}
 	node1 := &Raft{id: 0, totalNodes: 3, currentTerm: 2, votedFor: 1,
 		log: initLogs, commitedLength: 2, application: app1}
@@ -142,7 +142,7 @@ func TestConcurrentOperations(t *testing.T) {
 			for key := range jobs {
 				v := key * 2
 				leader.Broadcast(Message{
-					MsgType: put,
+					MsgType: PutMsg,
 					Key:     key,
 					Value:   &v,
 				})
@@ -214,7 +214,7 @@ func TestPausedConcurrentOperations(t *testing.T) {
 				for key := range jobs {
 					v := key * 2
 					leader.Broadcast(Message{
-						MsgType: put,
+						MsgType: PutMsg,
 						Key:     key,
 						Value:   &v,
 					})
