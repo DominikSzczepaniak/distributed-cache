@@ -31,18 +31,18 @@ func (s *SimpleKVStore) AppendMessage(msg raft.Message) (bool, int) {
 	defer s.mu.Unlock()
 
 	switch msg.MsgType {
-	case "PUT":
+	case raft.PutMsg:
 		if msg.Value == nil {
 			return false, 0
 		}
 		s.data[msg.Key] = *msg.Value
 		slog.Info(fmt.Sprintf("PUT key=%d value=%d", msg.Key, *msg.Value))
 		return true, 0
-	case "GET":
+	case raft.GetMsg:
 		val := s.data[msg.Key]
 		slog.Info(fmt.Sprintf("GET key=%d value=%d", msg.Key, val))
 		return true, val
-	case "DELETE":
+	case raft.DeleteMsg:
 		delete(s.data, msg.Key)
 		slog.Info(fmt.Sprintf("DELETE key=%d", msg.Key))
 		return true, 0
