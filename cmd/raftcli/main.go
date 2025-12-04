@@ -2,58 +2,54 @@ package main
 
 import (
 	"bufio"
-	"bytes"
-	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
-	"strconv"
 	"strings"
-	"time"
 
-	"github.com/dominikszczepaniak/distributed-cache/pkg/api"
-	"github.com/google/uuid"
+	"github.com/dominikszczepaniak/distributed-cache/pkg/client"
 )
 
 type CLI struct {
-	client  *http.Client
-	baseURL string
-	retrier *api.Retrier
+	client *client.SmartClient
 }
 
-func NewCLI(baseURL string) *CLI {
-	return &CLI{
-		client: &http.Client{
-			Timeout: 10 * time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
-		baseURL: baseURL,
-		retrier: api.NewRetrier(api.DefaultRetryConfigs["PUT"]),
+func NewCLI(controllers []string) (*CLI, error) {
+	sc, err := client.NewSmartClient(controllers)
+	if err != nil {
+		return nil, err
 	}
+	return &CLI{
+		client: sc,
+	}, nil
 }
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: raftcli <node-address>")
-		fmt.Println("Example: raftcli localhost:8080")
+		fmt.Println("Usage: raftcli <controller-addresses>")
+		fmt.Println("Example: raftcli localhost:8080,localhost:8081")
 		os.Exit(1)
 	}
 
-	baseURL := os.Args[1]
-	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
-		baseURL = "http://" + baseURL
+	// Parse comma-separated controller addresses
+	controllerAddrs := strings.Split(os.Args[1], ",")
+	for i, addr := range controllerAddrs {
+		addr = strings.TrimSpace(addr)
+		if !strings.HasPrefix(addr, "http://") && !strings.HasPrefix(addr, "https://") {
+			addr = "http://" + addr
+		}
+		controllerAddrs[i] = addr
 	}
 
-	cli := NewCLI(baseURL)
+	cli, err := NewCLI(controllerAddrs)
+	if err != nil {
+		fmt.Printf("Failed to initialize client: %v\n", err)
+		os.Exit(1)
+	}
 
 	fmt.Println("==========================================")
-	fmt.Println("  Raft Distributed Cache - Interactive CLI")
+	fmt.Println("  Raft Distributed Cache - Smart CLI")
 	fmt.Println("==========================================")
-	fmt.Printf("Connected to: %s\n", baseURL)
+	fmt.Printf("Connected to controllers: %v\n", controllerAddrs)
 	fmt.Println("Type 'help' for available commands")
 	fmt.Println()
 
@@ -95,14 +91,6 @@ func (c *CLI) executeCommand(line string) error {
 		return c.cmdPut(args)
 	case "get":
 		return c.cmdGet(args)
-	case "delete", "del":
-		return c.cmdDelete(args)
-	case "status":
-		return c.cmdStatus(args)
-	case "leader":
-		return c.cmdLeader(args)
-	case "health":
-		return c.cmdHealth(args)
 	case "help":
 		c.cmdHelp()
 		return nil
@@ -112,7 +100,6 @@ func (c *CLI) executeCommand(line string) error {
 	default:
 		return fmt.Errorf("unknown command: %s (type 'help' for available commands)", cmd)
 	}
-
 	return nil
 }
 
@@ -121,216 +108,31 @@ func (c *CLI) cmdPut(args []string) error {
 		return fmt.Errorf("usage: put <key> <value>")
 	}
 
-	key, err := strconv.Atoi(args[0])
+	key := args[0]
+	value := args[1]
+
+	err := c.client.Put(key, value)
 	if err != nil {
-		return fmt.Errorf("invalid key: %v", err)
+		return fmt.Errorf("PUT failed: %v", err)
 	}
 
-	value, err := strconv.Atoi(args[1])
-	if err != nil {
-		return fmt.Errorf("invalid value: %v", err)
-	}
-
-	idempotencyToken := uuid.New().String()
-
-	retryFunc := func(ctx context.Context) error {
-		req := map[string]int{"key": key, "value": value}
-		body, _ := json.Marshal(req)
-
-		httpReq, _ := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/kv", bytes.NewBuffer(body))
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Idempotency-Key", idempotencyToken)
-
-		resp, err := c.client.Do(httpReq)
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode == http.StatusTemporaryRedirect {
-			location := resp.Header.Get("Location")
-			if location != "" {
-				lastSlash := strings.LastIndex(location, "/")
-				if lastSlash > 0 {
-					c.baseURL = location[:lastSlash]
-				}
-				return fmt.Errorf("redirecting to leader")
-			}
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("server error (status %d): %s", resp.StatusCode, string(bodyBytes))
-		}
-
-		cacheStatus := resp.Header.Get("X-Cache")
-		if cacheStatus == "HIT" {
-			fmt.Printf("  (idempotent retry detected - returned cached result)\n")
-		}
-
-		return nil
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	err = c.retrier.ExecuteWithRetry(ctx, retryFunc)
-	if err != nil {
-		return fmt.Errorf("PUT failed after retries: %v", err)
-	}
-
-	fmt.Printf("✓ PUT successful: key=%d, value=%d\n", key, value)
+	fmt.Printf("✓ PUT successful: key=%s, value=%s\n", key, value)
 	return nil
 }
 
 func (c *CLI) cmdGet(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: get <key> [--stale]")
+		return fmt.Errorf("usage: get <key>")
 	}
 
-	key, err := strconv.Atoi(args[0])
+	key := args[0]
+
+	val, err := c.client.Get(key)
 	if err != nil {
-		return fmt.Errorf("invalid key: %v", err)
+		return fmt.Errorf("GET failed: %v", err)
 	}
 
-	stale := false
-	if len(args) > 1 && args[1] == "--stale" {
-		stale = true
-	}
-
-	url := fmt.Sprintf("%s/kv/%d", c.baseURL, key)
-	if stale {
-		url += "?stale=true"
-	}
-
-	resp, err := c.client.Get(url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("server error (status %d): %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
-
-	if found, ok := result["found"].(bool); ok && found {
-		fmt.Printf("✓ GET successful: key=%d, value=%v", key, result["value"])
-		if stale {
-			fmt.Printf(" (stale read)")
-		}
-		fmt.Println()
-	} else {
-		fmt.Printf("✗ Key not found: %d\n", key)
-	}
-
-	return nil
-}
-
-func (c *CLI) cmdDelete(args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("usage: delete <key>")
-	}
-
-	key, err := strconv.Atoi(args[0])
-	if err != nil {
-		return fmt.Errorf("invalid key: %v", err)
-	}
-
-	idempotencyToken := uuid.New().String()
-
-	retryFunc := func(ctx context.Context) error {
-		httpReq, _ := http.NewRequestWithContext(ctx, http.MethodDelete, fmt.Sprintf("%s/kv/%d", c.baseURL, key), nil)
-		httpReq.Header.Set("Idempotency-Key", idempotencyToken)
-
-		resp, err := c.client.Do(httpReq)
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("server error (status %d): %s", resp.StatusCode, string(bodyBytes))
-		}
-
-		cacheStatus := resp.Header.Get("X-Cache")
-		if cacheStatus == "HIT" {
-			fmt.Printf("  (idempotent retry detected - returned cached result)\n")
-		}
-
-		return nil
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	err = c.retrier.ExecuteWithRetry(ctx, retryFunc)
-	if err != nil {
-		return fmt.Errorf("DELETE failed after retries: %v", err)
-	}
-
-	fmt.Printf("✓ DELETE successful: key=%d\n", key)
-	return nil
-}
-
-func (c *CLI) cmdStatus(args []string) error {
-	resp, err := c.client.Get(c.baseURL + "/status")
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	var status map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&status)
-
-	fmt.Println("Cluster Status:")
-	fmt.Println("----------------------------------------")
-	fmt.Printf("  Node ID:     %v\n", status["node_id"])
-	fmt.Printf("  Role:        %v\n", status["role"])
-	fmt.Printf("  Term:        %v\n", status["term"])
-	fmt.Printf("  Leader ID:   %v\n", status["leader_id"])
-	fmt.Printf("  Total Nodes: %v\n", status["total_nodes"])
-	fmt.Println("----------------------------------------")
-
-	return nil
-}
-
-func (c *CLI) cmdLeader(args []string) error {
-	resp, err := c.client.Get(c.baseURL + "/leader")
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
-
-	if isLeader, ok := result["is_leader"].(bool); ok && isLeader {
-		fmt.Println("✓ This node is the leader")
-	} else {
-		fmt.Printf("Leader: Node %v\n", result["leader_id"])
-	}
-
-	return nil
-}
-
-func (c *CLI) cmdHealth(args []string) error {
-	resp, err := c.client.Get(c.baseURL + "/health")
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK {
-		fmt.Println("✓ Node is healthy")
-	} else {
-		fmt.Println("✗ Node is unhealthy")
-	}
-
+	fmt.Printf("✓ GET successful: key=%s, value=%s\n", key, val)
 	return nil
 }
 
@@ -338,19 +140,8 @@ func (c *CLI) cmdHelp() {
 	fmt.Println("Available Commands:")
 	fmt.Println("----------------------------------------")
 	fmt.Println("  put <key> <value>  - Store a key-value pair")
-	fmt.Println("  get <key> [--stale] - Retrieve value for key")
-	fmt.Println("                        --stale: Allow stale reads (faster)")
-	fmt.Println("  delete <key>       - Delete a key")
-	fmt.Println("  status             - Show cluster status")
-	fmt.Println("  leader             - Show current leader")
-	fmt.Println("  health             - Check node health")
+	fmt.Println("  get <key>          - Retrieve value for key")
 	fmt.Println("  help               - Show this help message")
 	fmt.Println("  exit               - Exit the CLI")
-	fmt.Println("----------------------------------------")
-	fmt.Println("Examples:")
-	fmt.Println("  > put 1 100")
-	fmt.Println("  > get 1")
-	fmt.Println("  > get 1 --stale")
-	fmt.Println("  > delete 1")
 	fmt.Println("----------------------------------------")
 }
