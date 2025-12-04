@@ -10,18 +10,18 @@ func NewSyncMapCache() *SyncMapCache {
 	return &SyncMapCache{}
 }
 
-func (smc *SyncMapCache) Get(key int) int {
-	val, _ := smc.data.Load(key)
-	if v, ok := val.(int); ok {
-		return v
+func (c *SyncMapCache) Get(key string) string {
+	val, ok := c.data.Load(key)
+	if !ok {
+		return ""
 	}
-	return 0
+	return val.(string)
 }
 
-func (smc *SyncMapCache) Delete(key int) {
-	smc.data.Delete(key)
+func (c *SyncMapCache) Delete(key string) {
+	c.data.Delete(key)
 }
 
-func (smc *SyncMapCache) Put(key, value int) {
-	smc.data.Store(key, value)
+func (c *SyncMapCache) Put(key, value string) {
+	c.data.Store(key, value)
 }

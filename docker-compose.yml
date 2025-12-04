@@ -1,16 +1,16 @@
 version: '3.8'
 
 services:
-  raft-node-0:
+  controller-0:
     build:
       context: .
       dockerfile: deploy/Dockerfile
-    container_name: raft-node-0
+    container_name: controller-0
     environment:
       # Raft configuration
       RAFT_ID: "0"
       TOTAL_NODES: "3"
-      RAFT_ADDRS: "raft-node-0:9000,raft-node-1:9000,raft-node-2:9000"
+      RAFT_ADDRS: "controller-0:9000,controller-1:9000,controller-2:9000"
       FILENAME: "/data/node0"
       SNAPSHOT_THRESHOLD: "100"
 
@@ -39,16 +39,16 @@ services:
       - "8080:8080"
     restart: unless-stopped
 
-  raft-node-1:
+  controller-1:
     build:
       context: .
       dockerfile: deploy/Dockerfile
-    container_name: raft-node-1
+    container_name: controller-1
     environment:
       # Raft configuration
       RAFT_ID: "1"
       TOTAL_NODES: "3"
-      RAFT_ADDRS: "raft-node-0:9000,raft-node-1:9000,raft-node-2:9000"
+      RAFT_ADDRS: "controller-0:9000,controller-1:9000,controller-2:9000"
       FILENAME: "/data/node1"
       SNAPSHOT_THRESHOLD: "100"
 
@@ -77,16 +77,16 @@ services:
       - "8081:8080"
     restart: unless-stopped
 
-  raft-node-2:
+  controller-2:
     build:
       context: .
       dockerfile: deploy/Dockerfile
-    container_name: raft-node-2
+    container_name: controller-2
     environment:
       # Raft configuration
       RAFT_ID: "2"
       TOTAL_NODES: "3"
-      RAFT_ADDRS: "raft-node-0:9000,raft-node-1:9000,raft-node-2:9000"
+      RAFT_ADDRS: "controller-0:9000,controller-1:9000,controller-2:9000"
       FILENAME: "/data/node2"
       SNAPSHOT_THRESHOLD: "100"
 
@@ -113,6 +113,23 @@ services:
     ports:
       - "9002:9000"
       - "8082:8080"
+    restart: unless-stopped
+
+  datanode-1:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.datanode
+    container_name: datanode-1
+    environment:
+      - CONTROLLER_URL=http://controller-0:8080
+      - NODE_ID=datanode-1:9000
+      - LEASE_DURATION=5s
+    depends_on:
+      - controller-0
+    networks:
+      - raft-network
+    ports:
+      - "9010:9000"
     restart: unless-stopped
 
 networks:
