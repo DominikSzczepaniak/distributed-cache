@@ -128,14 +128,36 @@ services:
       - controller-0
     networks:
       - raft-network
+      - client-network
     ports:
       - "9010:9000"
+    restart: unless-stopped
+
+  datanode-2:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.datanode
+    container_name: datanode-2
+    environment:
+      - CONTROLLER_URL=http://controller-0:8080
+      - NODE_ID=datanode-2:9000
+      - LEASE_DURATION=5s
+    depends_on:
+      - controller-0
+    networks:
+      - raft-network
+      - client-network
+    ports:
+      - "9011:9000"
     restart: unless-stopped
 
 networks:
   raft-network:
     driver: bridge
     name: raft-cluster
+  client-network:
+    driver: bridge
+    name: client-access
 
 volumes:
   node0-data:

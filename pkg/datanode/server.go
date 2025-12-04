@@ -2,6 +2,7 @@ package datanode
 
 import (
 	"encoding/json"
+	"hash/fnv"
 	"net/http"
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/cache"
@@ -17,13 +18,15 @@ type Server struct {
 	cache    *cache.ConcurrentMapCache
 	lease    *LeaseManager
 	stateMgr *StateManager
+	nodeID   string
 }
 
-func NewServer(c *cache.ConcurrentMapCache, l *LeaseManager, s *StateManager) *Server {
+func NewServer(c *cache.ConcurrentMapCache, l *LeaseManager, s *StateManager, nodeID string) *Server {
 	return &Server{
 		cache:    c,
 		lease:    l,
 		stateMgr: s,
+		nodeID:   nodeID,
 	}
 }
 
@@ -47,7 +50,23 @@ func (s *Server) HandlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. OWNERSHIP CHECK (Skipped for now as per instructions)
+	// 3. OWNERSHIP CHECK
+	config := s.stateMgr.Get()
+	if config.TotalShards > 0 {
+		h := fnv.New32a()
+		h.Write([]byte(req.Key))
+		shardID := int(h.Sum32()) % config.TotalShards
+		// Handle negative result from modulo if int is signed (though Sum32 is uint32, casting to int might be safe for small TotalShards, but let's be safe)
+		if shardID < 0 {
+			shardID = -shardID
+		}
+
+		shard, exists := config.Shards[shardID]
+		if !exists || shard.PrimaryID != s.nodeID {
+			http.Error(w, "Not Primary for Shard", http.StatusBadRequest) // 400
+			return
+		}
+	}
 
 	// 4. WRITE
 	s.cache.Put(req.Key, req.Value)

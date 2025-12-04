@@ -41,7 +41,7 @@ func main() {
 
 	// 5. Initialize Cache and Server
 	c := cache.NewConcurrentMapCache()
-	srv := datanode.NewServer(c, leaseMgr, stateMgr)
+	srv := datanode.NewServer(c, leaseMgr, stateMgr, config.NodeID)
 
 	// 6. Start HTTP Server
 	// We assume NodeID contains the port (e.g., "10.0.1.5:9000") or we just listen on the port part.
