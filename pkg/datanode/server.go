@@ -159,3 +159,48 @@ func (s *Server) HandleReplicate(w http.ResponseWriter, r *http.Request) {
 	s.cache.Put(req.Key, req.Value)
 	w.WriteHeader(http.StatusOK)
 }
+
+// HandleExport streams all keys belonging to a specific shard
+func (s *Server) HandleExport(w http.ResponseWriter, r *http.Request) {
+	// TODO: Add authorization check (e.g., token from Controller)
+
+	shardIDStr := r.URL.Query().Get("shard")
+	if shardIDStr == "" {
+		http.Error(w, "Missing shard parameter", http.StatusBadRequest)
+		return
+	}
+
+	var shardID int
+	if _, err := fmt.Sscanf(shardIDStr, "%d", &shardID); err != nil {
+		http.Error(w, "Invalid shard parameter", http.StatusBadRequest)
+		return
+	}
+
+	config := s.stateMgr.Get()
+	if config.TotalShards == 0 {
+		http.Error(w, "Cluster not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	data := s.cache.ExportShard(shardID, config.TotalShards)
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		slog.Error("Failed to encode export data", "err", err)
+		return
+	}
+}
+
+// HandleImport accepts a stream of keys and inserts them into the cache
+func (s *Server) HandleImport(w http.ResponseWriter, r *http.Request) {
+	// TODO: Add authorization check
+
+	var data map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	s.cache.Import(data)
+	w.WriteHeader(http.StatusOK)
+}
