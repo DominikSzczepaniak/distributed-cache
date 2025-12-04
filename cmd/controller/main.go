@@ -13,9 +13,9 @@ func main() {
 	slog.SetDefault(logger)
 
 	slog.Info("Starting Controller Service...")
-	
+
 	// TODO: Initialize Raft for Control Plane
 	// TODO: Initialize Cluster Metadata State Machine
-	
+
 	select {} // Block forever for now
 }

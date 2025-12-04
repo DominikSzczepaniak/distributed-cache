@@ -16,6 +16,6 @@ func main() {
 
 	// TODO: Initialize Sharded Cache
 	// TODO: Initialize gRPC Data Plane
-	
+
 	select {} // Block forever for now
 }
