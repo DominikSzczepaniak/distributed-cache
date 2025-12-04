@@ -12,10 +12,19 @@ const (
 	StatusJoining NodeStatus = "JOINING"
 )
 
+type ShardStatus string
+
+const (
+	ShardStatusActive    ShardStatus = "ACTIVE"
+	ShardStatusMigrating ShardStatus = "MIGRATING"
+	ShardStatusLocked    ShardStatus = "LOCKED"
+)
+
 type ShardMetadata struct {
-	ID         int      `json:"id"`
-	PrimaryID  string   `json:"primary_id"`
-	ReplicaIDs []string `json:"replica_ids"`
+	ID         int         `json:"id"`
+	PrimaryID  string      `json:"primary_id"`
+	ReplicaIDs []string    `json:"replica_ids"`
+	Status     ShardStatus `json:"status"`
 }
 
 type NodeMetadata struct {
@@ -45,6 +54,7 @@ func NewClusterConfig(numShards int) *ClusterConfig {
 			ID:         i,
 			PrimaryID:  "",
 			ReplicaIDs: []string{},
+			Status:     ShardStatusActive,
 		}
 	}
 	return config

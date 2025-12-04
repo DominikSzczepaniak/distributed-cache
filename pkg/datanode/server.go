@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/cache"
+	"github.com/dominikszczepaniak/distributed-cache/pkg/metadata"
 )
 
 type WriteRequest struct {
@@ -92,6 +93,11 @@ func (s *Server) HandlePut(w http.ResponseWriter, r *http.Request) {
 		shard, exists := config.Shards[shardID]
 		if !exists || shard.PrimaryID != s.nodeID {
 			http.Error(w, "Not Primary for Shard", http.StatusBadRequest) // 400
+			return
+		}
+
+		if shard.Status == metadata.ShardStatusLocked || shard.Status == metadata.ShardStatusMigrating {
+			http.Error(w, "Shard is Locked/Migrating", http.StatusLocked) // 423
 			return
 		}
 	}
@@ -202,5 +208,43 @@ func (s *Server) HandleImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.cache.Import(data)
+	w.WriteHeader(http.StatusOK)
+}
+
+// HandlePull triggers this node to pull data from a source node
+func (s *Server) HandlePull(w http.ResponseWriter, r *http.Request) {
+	sourceURL := r.URL.Query().Get("source")
+	shardIDStr := r.URL.Query().Get("shard")
+
+	if sourceURL == "" || shardIDStr == "" {
+		http.Error(w, "Missing source or shard parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Call Export on Source
+	resp, err := s.httpClient.Get(fmt.Sprintf("%s/internal/export?shard=%s", sourceURL, shardIDStr))
+	if err != nil {
+		slog.Error("Failed to pull data", "source", sourceURL, "err", err)
+		http.Error(w, "Failed to pull data", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		slog.Error("Source returned error", "status", resp.StatusCode)
+		http.Error(w, "Source returned error", http.StatusBadGateway)
+		return
+	}
+
+	// Decode and Import
+	var data map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		slog.Error("Failed to decode pulled data", "err", err)
+		http.Error(w, "Failed to decode data", http.StatusInternalServerError)
+		return
+	}
+
+	s.cache.Import(data)
+	slog.Info("Successfully pulled data", "shard", shardIDStr, "keys", len(data))
 	w.WriteHeader(http.StatusOK)
 }

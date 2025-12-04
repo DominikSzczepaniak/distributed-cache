@@ -91,6 +91,8 @@ func (c *CLI) executeCommand(line string) error {
 		return c.cmdPut(args)
 	case "get":
 		return c.cmdGet(args)
+	case "load":
+		return c.cmdLoad(args)
 	case "help":
 		c.cmdHelp()
 		return nil
@@ -136,11 +138,37 @@ func (c *CLI) cmdGet(args []string) error {
 	return nil
 }
 
+func (c *CLI) cmdLoad(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: load <count>")
+	}
+
+	var count int
+	if _, err := fmt.Sscanf(args[0], "%d", &count); err != nil {
+		return fmt.Errorf("invalid count: %v", err)
+	}
+
+	fmt.Printf("Loading %d keys...\n", count)
+	for i := 0; i < count; i++ {
+		key := fmt.Sprintf("key-%d", i)
+		value := fmt.Sprintf("val-%d", i)
+		if err := c.client.Put(key, value); err != nil {
+			fmt.Printf("Failed to put %s: %v\n", key, err)
+		}
+		if i%100 == 0 {
+			fmt.Printf(".")
+		}
+	}
+	fmt.Println("\nDone.")
+	return nil
+}
+
 func (c *CLI) cmdHelp() {
 	fmt.Println("Available Commands:")
 	fmt.Println("----------------------------------------")
 	fmt.Println("  put <key> <value>  - Store a key-value pair")
 	fmt.Println("  get <key>          - Retrieve value for key")
+	fmt.Println("  load <count>       - Load N keys (key-i, val-i)")
 	fmt.Println("  help               - Show this help message")
 	fmt.Println("  exit               - Exit the CLI")
 	fmt.Println("----------------------------------------")

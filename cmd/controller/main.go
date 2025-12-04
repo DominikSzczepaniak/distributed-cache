@@ -78,6 +78,29 @@ func main() {
 		json.NewEncoder(w).Encode(resp)
 	})
 
+	// Register endpoint
+	mux.HandleFunc("/cluster/register", func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			NodeID  string `json:"node_id"`
+			Address string `json:"address"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if body.NodeID == "" || body.Address == "" {
+			http.Error(w, "Missing node_id or address", http.StatusBadRequest)
+			return
+		}
+
+		ctrl.RegisterNode(body.NodeID, body.Address)
+		w.WriteHeader(http.StatusOK)
+	})
+
 	// Topology endpoint
 	mux.HandleFunc("/topology", func(w http.ResponseWriter, req *http.Request) {
 		config := ctrl.GetConfig()

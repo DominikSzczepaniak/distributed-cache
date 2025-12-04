@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"flag"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -87,14 +90,60 @@ func main() {
 		}
 	})
 
+	mux.HandleFunc("/internal/pull", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			srv.HandlePull(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// Extract port from NodeID
+	_, port, err := net.SplitHostPort(config.NodeID)
+	if err != nil {
+		// Fallback if no port found (though validation should catch this)
+		port = "9000"
+	}
+
 	server := &http.Server{
-		Addr:    config.NodeID, // Using NodeID as bind address for now
+		Addr:    ":" + port, // Bind to all interfaces
 		Handler: mux,
 	}
+
+	// 6. Register with Controller
+	go func() {
+		// Wait for server to start
+		time.Sleep(1 * time.Second)
+		registerWithController(config)
+	}()
 
 	log.Printf("DataNode listening on %s", config.NodeID)
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("DataNode failed: %v", err)
+	}
+}
+
+func registerWithController(config DataNodeConfig) {
+	// Simple retry loop
+	for {
+		// Construct JSON body
+		// Address: we assume NodeID is the address for now as per config
+		body := fmt.Sprintf(`{"node_id": "%s", "address": "%s"}`, config.NodeID, config.NodeID)
+		resp, err := http.Post(config.ControllerURL+"/cluster/register", "application/json", bytes.NewBuffer([]byte(body)))
+		if err == nil && resp.StatusCode == http.StatusOK {
+			log.Printf("Successfully registered with Controller at %s", config.ControllerURL)
+			resp.Body.Close()
+			return
+		}
+
+		if err != nil {
+			log.Printf("Failed to register: %v", err)
+		} else {
+			log.Printf("Failed to register: status %d", resp.StatusCode)
+			resp.Body.Close()
+		}
+
+		time.Sleep(2 * time.Second)
 	}
 }
 

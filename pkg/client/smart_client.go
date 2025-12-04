@@ -182,6 +182,12 @@ func (c *SmartClient) Put(key, value string) error {
 			c.FetchTopology()
 			continue
 
+		case http.StatusLocked: // 423 - Shard Locked/Migrating
+			slog.Info("Shard locked (migrating), waiting...", "attempt", attempt)
+			time.Sleep(100 * time.Millisecond)
+			c.FetchTopology()
+			continue
+
 		case http.StatusServiceUnavailable: // 503 - Node fenced
 			slog.Info("Node fenced, waiting for failover", "attempt", attempt)
 			time.Sleep(200 * time.Millisecond)
@@ -224,6 +230,12 @@ func (c *SmartClient) Get(key string) (string, error) {
 
 		case http.StatusNotFound:
 			return "", fmt.Errorf("key not found: %s", key)
+
+		case http.StatusLocked: // 423 - Shard Locked/Migrating
+			slog.Info("Shard locked (migrating), waiting...", "attempt", attempt)
+			time.Sleep(100 * time.Millisecond)
+			c.FetchTopology()
+			continue
 
 		case http.StatusServiceUnavailable: // 503 - Node fenced
 			slog.Info("Node fenced, waiting for failover", "attempt", attempt)
