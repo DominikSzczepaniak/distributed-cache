@@ -65,6 +65,13 @@ func main() {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	mux.HandleFunc("/internal/replicate", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			srv.HandleReplicate(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 
 	server := &http.Server{
 		Addr:    config.NodeID, // Using NodeID as bind address for now

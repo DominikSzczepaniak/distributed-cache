@@ -1,9 +1,13 @@
 package datanode
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"hash/fnv"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/cache"
 )
@@ -15,10 +19,11 @@ type WriteRequest struct {
 }
 
 type Server struct {
-	cache    *cache.ConcurrentMapCache
-	lease    *LeaseManager
-	stateMgr *StateManager
-	nodeID   string
+	cache      *cache.ConcurrentMapCache
+	lease      *LeaseManager
+	stateMgr   *StateManager
+	nodeID     string
+	httpClient *http.Client
 }
 
 func NewServer(c *cache.ConcurrentMapCache, l *LeaseManager, s *StateManager, nodeID string) *Server {
@@ -27,7 +32,30 @@ func NewServer(c *cache.ConcurrentMapCache, l *LeaseManager, s *StateManager, no
 		lease:    l,
 		stateMgr: s,
 		nodeID:   nodeID,
+		httpClient: &http.Client{
+			Timeout: 5 * time.Second,
+		},
 	}
+}
+
+// sendReplication sends a replication request to a replica
+func (s *Server) sendReplication(replicaURL string, req WriteRequest) error {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := s.httpClient.Post(replicaURL+"/internal/replicate", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return fmt.Errorf("failed to send replication: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("replica returned status %d", resp.StatusCode)
+	}
+
+	return nil
 }
 
 func (s *Server) HandlePut(w http.ResponseWriter, r *http.Request) {
@@ -52,11 +80,11 @@ func (s *Server) HandlePut(w http.ResponseWriter, r *http.Request) {
 
 	// 3. OWNERSHIP CHECK
 	config := s.stateMgr.Get()
+	var shardID int
 	if config.TotalShards > 0 {
 		h := fnv.New32a()
 		h.Write([]byte(req.Key))
-		shardID := int(h.Sum32()) % config.TotalShards
-		// Handle negative result from modulo if int is signed (though Sum32 is uint32, casting to int might be safe for small TotalShards, but let's be safe)
+		shardID = int(h.Sum32()) % config.TotalShards
 		if shardID < 0 {
 			shardID = -shardID
 		}
@@ -68,7 +96,17 @@ func (s *Server) HandlePut(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 4. WRITE
+	// 4. SYNCHRONOUS REPLICATION
+	replicaURLs := s.stateMgr.GetReplicaURLs(shardID)
+	for _, replicaURL := range replicaURLs {
+		if err := s.sendReplication(replicaURL, req); err != nil {
+			slog.Error("Replication failed", "replica", replicaURL, "err", err)
+			http.Error(w, "Replication Failed", http.StatusInternalServerError) // 500
+			return
+		}
+	}
+
+	// 5. LOCAL COMMIT (only after successful replication)
 	s.cache.Put(req.Key, req.Value)
 	w.WriteHeader(http.StatusOK)
 }
@@ -98,4 +136,26 @@ func (s *Server) HandleGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Write([]byte(val))
+}
+
+// HandleReplicate handles internal replication requests from the Primary
+func (s *Server) HandleReplicate(w http.ResponseWriter, r *http.Request) {
+	var req WriteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// EPOCH CHECK (Critical Fencing)
+	// If Primary thinks it's Epoch 10, but I know it's Epoch 11,
+	// the Primary has been demoted and doesn't know it yet.
+	localEpoch := s.stateMgr.GetEpoch()
+	if req.Epoch < localEpoch {
+		http.Error(w, "Primary is Stale", http.StatusPreconditionFailed) // 412
+		return
+	}
+
+	// WRITE (direct to cache, no ownership check for replicas)
+	s.cache.Put(req.Key, req.Value)
+	w.WriteHeader(http.StatusOK)
 }

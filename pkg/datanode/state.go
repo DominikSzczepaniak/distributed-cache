@@ -46,3 +46,23 @@ func (s *StateManager) GetEpoch() uint64 {
 	defer s.mu.RUnlock()
 	return s.config.Epoch
 }
+
+// GetReplicaURLs returns the URLs of replicas for a given shard
+func (s *StateManager) GetReplicaURLs(shardID int) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	shard, exists := s.config.Shards[shardID]
+	if !exists {
+		return nil
+	}
+
+	var urls []string
+	for _, replicaID := range shard.ReplicaIDs {
+		if node, ok := s.config.Nodes[replicaID]; ok {
+			// Construct URL from node address (assuming HTTP)
+			urls = append(urls, "http://"+node.Address)
+		}
+	}
+	return urls
+}
