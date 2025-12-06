@@ -111,8 +111,8 @@ func (r *Raft) receiveVote(vote VoteResponse) {
 	}
 }
 
-func (r *Raft) forwardToLeader(message Message, leader PeerClient) {
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+func (r *Raft) forwardToLeader(message Message, leader PeerClient) (bool, int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	ctx = context.WithValue(ctx, forwardHopKey{}, true)
 
@@ -126,12 +126,15 @@ func (r *Raft) forwardToLeader(message Message, leader PeerClient) {
 	if message.Value != nil {
 		msg.Value = wrapperspb.Int32(int32(*message.Value))
 	}
-	if _, err := leader.Forward(ctx, msg); err != nil {
-		if _, err2 := leader.Forward(ctx, msg); err2 != nil {
-			slog.Warn("forwardToLeader failed", "from", r.id, "error", err2)
-			return
+	resp, err := leader.Forward(ctx, msg)
+	if err != nil {
+		resp, err = leader.Forward(ctx, msg) // Retry once
+		if err != nil {
+			slog.Warn("forwardToLeader failed", "from", r.id, "error", err)
+			return false, 0, err
 		}
 	}
+	return resp.Success, int(resp.Value), nil
 }
 
 func (r *Raft) Broadcast(message Message) {
@@ -140,9 +143,22 @@ func (r *Raft) Broadcast(message Message) {
 	if !isLeader {
 		peer := r.getPeer(leaderID)
 		if peer == nil {
+			if message.ResponseChan != nil {
+				message.ResponseChan <- BroadcastResponse{Success: false, Error: fmt.Errorf("no leader known")}
+			}
 			return
 		}
-		r.forwardToLeader(message, peer)
+
+		go func() {
+			success, value, err := r.forwardToLeader(message, peer)
+			if message.ResponseChan != nil {
+				message.ResponseChan <- BroadcastResponse{
+					Success: success,
+					Value:   value,
+					Error:   err,
+				}
+			}
+		}()
 		return
 	}
 	r.mu.Lock()

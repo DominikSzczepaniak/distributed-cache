@@ -14,7 +14,11 @@ import (
 )
 
 func (r *Raft) serveGRPC(addr string) {
-	lis, err := net.Listen("tcp", addr)
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		panic(err)
+	}
+	lis, err := net.Listen("tcp", "0.0.0.0:"+port)
 	if err != nil {
 		panic(err)
 	}

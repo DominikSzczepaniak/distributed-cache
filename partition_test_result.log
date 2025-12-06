@@ -1,0 +1,195 @@
+--- 🏗️  Building binaries ---
+--- �️  Cleaning data directories ---
+--- �🚀 Starting cluster ---
+time="2025-12-06T18:12:23+01:00" level=warning msg="/Users/dominik/thesis-distributed-cache/docker-compose.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+#1 [internal] load local bake definitions
+#1 reading from stdin 2.63kB done
+#1 DONE 0.0s
+
+#2 [controller-1 internal] load build definition from Dockerfile
+#2 transferring dockerfile: 473B done
+#2 DONE 0.0s
+
+#3 [datanode-2 internal] load build definition from Dockerfile.datanode
+#3 transferring dockerfile: 250B done
+#3 DONE 0.0s
+
+#4 [controller-0 internal] load metadata for docker.io/library/golang:1.24-alpine
+#4 DONE 0.5s
+
+#5 [controller-1 internal] load metadata for docker.io/library/alpine:latest
+#5 DONE 0.5s
+
+#6 [datanode-2 internal] load metadata for docker.io/library/golang:1.24
+#6 DONE 0.5s
+
+#7 [datanode-1 internal] load .dockerignore
+#7 transferring context:
+#7 transferring context: 2B done
+#7 DONE 0.3s
+
+#8 [datanode-1 1/6] FROM docker.io/library/golang:1.24@sha256:cf1272dbf972a94f39a81dcb9dc243a8d2f981e5dd3b5a5c965f6d9ab9268b26
+#8 DONE 0.0s
+
+#9 [controller-1 stage-1 1/5] FROM docker.io/library/alpine:latest@sha256:51183f2cfa6320055da30872f211093f9ff1d3cf06f39a0bdb212314c5dc7375
+#9 DONE 0.0s
+
+#10 [controller-1 builder 1/7] FROM docker.io/library/golang:1.24-alpine@sha256:06545cc1ff10ddf04aebe20db1352ec7c96d1e43135767931c473557d0378202
+#10 DONE 0.0s
+
+#11 [controller-2 internal] load build context
+#11 transferring context: 8.99MB 0.2s done
+#11 DONE 0.2s
+
+#12 [datanode-2 2/6] WORKDIR /app
+#12 CACHED
+
+#13 [datanode-2 3/6] COPY go.mod go.sum ./
+#13 CACHED
+
+#14 [datanode-2 4/6] RUN go mod download
+#14 CACHED
+
+#15 [controller-2 builder 2/7] RUN apk add --no-cache git
+#15 CACHED
+
+#16 [controller-2 builder 3/7] WORKDIR /build
+#16 CACHED
+
+#17 [controller-2 builder 4/7] COPY go.mod go.sum ./
+#17 CACHED
+
+#18 [controller-2 builder 5/7] RUN go mod download
+#18 CACHED
+
+#19 [controller-2 builder 6/7] COPY . .
+#19 ...
+
+#20 [datanode-1 5/6] COPY . .
+#20 DONE 0.8s
+
+#20 [datanode-2 5/6] COPY . .
+#20 DONE 0.8s
+
+#19 [controller-0 builder 6/7] COPY . .
+#19 DONE 0.8s
+
+#21 [controller-1 builder 7/7] RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o controller ./cmd/controller
+#21 ...
+
+#22 [datanode-2 6/6] RUN go build -o datanode ./cmd/datanode
+#22 DONE 13.7s
+
+#21 [controller-1 builder 7/7] RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o controller ./cmd/controller
+#21 ...
+
+#22 [datanode-2 6/6] RUN go build -o datanode ./cmd/datanode
+#22 DONE 13.7s
+
+#23 [datanode-1] exporting to image
+#23 exporting layers
+#23 exporting layers 0.8s done
+#23 writing image sha256:ce796df57949b27b350bdca7adcbad7ae08530a4334e0a5248da6fedb0fb9ed0 done
+#23 naming to docker.io/library/thesis-distributed-cache-datanode-1 done
+#23 DONE 0.8s
+
+#24 [datanode-2] exporting to image
+#24 exporting layers 0.8s done
+#24 writing image sha256:2bebf387830ad45e7292545594a065aae085f91d4a53ae0b6be0088dc820bc00 done
+#24 naming to docker.io/library/thesis-distributed-cache-datanode-2 done
+#24 DONE 0.8s
+
+#21 [controller-1 builder 7/7] RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o controller ./cmd/controller
+#21 ...
+
+#25 [datanode-2] resolving provenance for metadata file
+#25 DONE 0.1s
+
+#26 [datanode-1] resolving provenance for metadata file
+#26 DONE 0.1s
+
+#21 [controller-1 builder 7/7] RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o controller ./cmd/controller
+#21 DONE 16.8s
+
+#27 [controller-2 stage-1 3/5] WORKDIR /app
+#27 CACHED
+
+#28 [controller-2 stage-1 4/5] COPY --from=builder /build/controller .
+#28 CACHED
+
+#29 [controller-2 stage-1 2/5] RUN apk --no-cache add ca-certificates
+#29 CACHED
+
+#30 [controller-2 stage-1 5/5] RUN mkdir -p /data
+#30 CACHED
+
+#31 [controller-0] exporting to image
+#31 exporting layers done
+#31 writing image sha256:0567f7cdd4fd1b64d8111fd3b3facf18d945767d2c76811099bc93e6c8e78336 done
+#31 naming to docker.io/library/thesis-distributed-cache-controller-0 done
+#31 DONE 0.0s
+
+#32 [controller-2] exporting to image
+#32 exporting layers done
+#32 writing image sha256:9cc638e0e5d890e2c2fb5df08d6bb6ef61fcc8da688881c663f74276742c9895 done
+#32 naming to docker.io/library/thesis-distributed-cache-controller-2 done
+#32 DONE 0.0s
+
+#33 [controller-1] exporting to image
+#33 exporting layers done
+#33 writing image sha256:5f17810a8a037eee068e015630822d0526db5a584d400f9a8ed4fa27d6c1b65e done
+#33 naming to docker.io/library/thesis-distributed-cache-controller-1 done
+#33 DONE 0.0s
+
+#34 [controller-2] resolving provenance for metadata file
+#34 DONE 0.0s
+
+#35 [controller-1] resolving provenance for metadata file
+#35 DONE 0.0s
+
+#36 [controller-0] resolving provenance for metadata file
+#36 DONE 0.0s
+ thesis-distributed-cache-datanode-2  Built
+ thesis-distributed-cache-controller-1  Built
+ thesis-distributed-cache-controller-2  Built
+ thesis-distributed-cache-controller-0  Built
+ thesis-distributed-cache-datanode-1  Built
+ Network raft-cluster  Creating
+ Network raft-cluster  Created
+ Network client-access  Creating
+ Network client-access  Created
+ Container controller-1  Creating
+ Container controller-0  Creating
+ Container controller-2  Creating
+ Container controller-0  Created
+ Container datanode-1  Creating
+ Container datanode-2  Creating
+ Container controller-1  Created
+ Container controller-2  Created
+ Container datanode-2  Created
+ Container datanode-1  Created
+ Container controller-1  Starting
+ Container controller-0  Starting
+ Container controller-2  Starting
+ Container controller-1  Started
+ Container controller-0  Started
+ Container datanode-2  Starting
+ Container datanode-1  Starting
+ Container controller-2  Started
+ Container datanode-1  Started
+ Container datanode-2  Started
+Waiting for cluster to stabilize (15s)...
+--- 🕵️ Finding leader by checking logs ---
+time="2025-12-06T18:13:00+01:00" level=warning msg="/Users/dominik/thesis-distributed-cache/docker-compose.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+time="2025-12-06T18:13:04+01:00" level=warning msg="/Users/dominik/thesis-distributed-cache/docker-compose.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+--- ✅ Leader found: controller-1 ---
+--- 🔌 Isolating leader 'controller-1' from network 'raft-cluster' ---
+Leader elections before partition: 1
+Waiting for new leader election (up to 60s)...
+Found new leader: controller-2
+--- ✅ New leader found: controller-2 ---
+--- ✍️  Registering 'partition-test-node' to new leader to change Raft state ---
+Attempting to register to controller-2:8082...
+--- ✅ Registration successful on controller-2 ---
+--- 🔗 Reconnecting original leader 'controller-1' to network 'raft-cluster' ---
+Waiting for state reconciliation (30s)...

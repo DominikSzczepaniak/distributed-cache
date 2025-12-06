@@ -32,6 +32,8 @@ func toProtoMsgType(m MessageType) raftpb.Message_Type {
 		return raftpb.Message_PUT
 	case DeleteMsg:
 		return raftpb.Message_DELETE
+	case CommandMsg:
+		return raftpb.Message_COMMAND
 	default:
 		panic("unknown MessageType: " + string(m))
 	}

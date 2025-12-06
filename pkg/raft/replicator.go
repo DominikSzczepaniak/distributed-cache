@@ -3,10 +3,11 @@ package raft
 import (
 	"context"
 	"fmt"
-	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
-	"google.golang.org/protobuf/types/known/wrapperspb"
 	"log/slog"
 	"time"
+
+	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 type LogEntry struct {
@@ -107,7 +108,7 @@ func (rep *Replicator) replicate() {
 
 	args := rep.parent.prepareLogRequestArgs(rep.followerId)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	slog.Debug(fmt.Sprintf("Node %d: Sending LogRequest to follower %d (nextIndex=%d, suffix=%d entries)",

@@ -182,6 +182,14 @@ func (r *Raft) IsLeader() bool {
 	return r.currentRole == Leader
 }
 
+// IsLeaderUnsafe returns whether this node is the leader WITHOUT acquiring locks.
+// Use this ONLY in callbacks from the Raft state machine (like Application.AppendMessage)
+// where the Raft mutex is already held by the calling code.
+// WARNING: This is NOT safe to use in general code - use IsLeader() instead.
+func (r *Raft) IsLeaderUnsafe() bool {
+	return r.currentRole == Leader
+}
+
 type ClusterStatus struct {
 	NodeID     int
 	Role       string

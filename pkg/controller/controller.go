@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -159,13 +160,21 @@ func (c *Controller) SetTopology(config *metadata.ClusterConfig) {
 	slog.Info("Topology manually set", "epoch", config.Epoch)
 }
 
-// RegisterNode adds a new node to the cluster and triggers rebalancing
-func (c *Controller) RegisterNode(nodeID, address string) {
+// applyUpdateTopology updates the local state from a Raft command
+func (c *Controller) applyUpdateTopology(config *metadata.ClusterConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.config = config
+	slog.Info("Topology updated via Raft", "epoch", config.Epoch)
+}
+
+// applyRegisterNode updates the local state (internal use by FSM)
+func (c *Controller) applyRegisterNode(nodeID, address string) {
 	c.mu.Lock()
 	// Check if node already exists
 	if _, exists := c.config.Nodes[nodeID]; exists {
 		c.mu.Unlock()
-		slog.Info("Node already registered", "nodeID", nodeID)
+		slog.Info("Node already registered (apply)", "nodeID", nodeID)
 		return
 	}
 
@@ -186,10 +195,52 @@ func (c *Controller) RegisterNode(nodeID, address string) {
 	c.config = &newConfig
 	c.mu.Unlock()
 
-	slog.Info("Node registered", "nodeID", nodeID, "address", address)
+	slog.Info("Node registered (apply)", "nodeID", nodeID, "address", address)
 
-	// Trigger Rebalance
-	go c.Rebalance()
+	// Trigger Rebalance (only on leader? or everyone? Rebalance initiates moves, so only leader should do it)
+	// But applyRegisterNode runs on followers too.
+	// Followers shouldn't trigger Rebalance.
+	// We can check if we are leader before triggering Rebalance.
+	// NOTE: Use IsLeaderUnsafe() because this is called from within Raft's appendEntries
+	// which holds the Raft mutex. Using IsLeader() would cause a deadlock.
+	if c.raft.IsLeaderUnsafe() {
+		go c.Rebalance()
+	}
+}
+
+// RegisterNode broadcasts a RegisterNode command to the cluster
+func (c *Controller) RegisterNode(nodeID, address string) error {
+	payload := RegisterNodePayload{
+		NodeID:  nodeID,
+		Address: address,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	cmd := Command{
+		Type:    CmdRegisterNode,
+		Payload: data,
+	}
+	cmdBytes, err := json.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+
+	msg := raft.Message{
+		MsgType: raft.CommandMsg,
+		Data:    cmdBytes,
+	}
+
+	success, _, err := c.raft.BroadcastSync(msg, 5*time.Second)
+	if err != nil {
+		return err
+	}
+	if !success {
+		return fmt.Errorf("failed to register node: consensus not reached")
+	}
+	return nil
 }
 
 // Rebalance attempts to balance shards across all active nodes

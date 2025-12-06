@@ -13,14 +13,6 @@ import (
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft"
 )
 
-// DummyApp implements raft.Application
-type DummyApp struct{}
-
-func (a *DummyApp) AppendMessage(message raft.Message) (bool, int) { return true, 0 }
-func (a *DummyApp) GetSnapshot() ([]byte, error)                   { return []byte("{}"), nil }
-func (a *DummyApp) RestoreFromSnapshot(data []byte) (error, int)   { return nil, 0 }
-func (a *DummyApp) GetValue(key int) int                           { return 0 }
-
 func main() {
 	// Logger setup
 	opts := &slog.HandlerOptions{
@@ -34,8 +26,8 @@ func main() {
 	// Load Config
 	cfg := raft.LoadConfig()
 
-	// Initialize Application (Dummy for now, as Controller logic handles state separately)
-	app := &DummyApp{}
+	// Initialize Application
+	app := controller.NewControllerApp()
 
 	// Initialize Raft
 	r := raft.NewRaft(app, cfg)
@@ -43,6 +35,9 @@ func main() {
 	// Initialize Controller
 	// Grace period 5s to match lease duration in docker-compose
 	ctrl := controller.NewController(r, 5*time.Second)
+
+	// Link App to Controller
+	app.SetController(ctrl)
 
 	// Start HTTP API
 	apiAddr := os.Getenv("API_ADDR")
@@ -97,7 +92,11 @@ func main() {
 			return
 		}
 
-		ctrl.RegisterNode(body.NodeID, body.Address)
+		if err := ctrl.RegisterNode(body.NodeID, body.Address); err != nil {
+			slog.Error("Failed to register node", "error", err)
+			http.Error(w, "Failed to register node: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 
