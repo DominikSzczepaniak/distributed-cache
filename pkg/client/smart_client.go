@@ -177,6 +177,11 @@ func (c *SmartClient) Put(key, value string) error {
 		case http.StatusOK:
 			return nil
 
+		case http.StatusBadRequest: // 400 - Not Primary for Shard
+			slog.Info("Not primary for shard, refreshing topology", "attempt", attempt)
+			c.FetchTopology()
+			continue
+
 		case http.StatusPreconditionFailed: // 412 - Stale epoch
 			slog.Info("Epoch stale, refreshing topology", "attempt", attempt)
 			c.FetchTopology()
@@ -191,6 +196,7 @@ func (c *SmartClient) Put(key, value string) error {
 		case http.StatusServiceUnavailable: // 503 - Node fenced
 			slog.Info("Node fenced, waiting for failover", "attempt", attempt)
 			time.Sleep(200 * time.Millisecond)
+			c.FetchTopology()
 			continue
 
 		case http.StatusInternalServerError: // 500 - Replication failed
@@ -199,6 +205,7 @@ func (c *SmartClient) Put(key, value string) error {
 			continue
 
 		default:
+			slog.Warn("Put received unexpected status", "status", resp.StatusCode, "attempt", attempt)
 			return fmt.Errorf("unexpected error: status %d", resp.StatusCode)
 		}
 	}
@@ -247,4 +254,70 @@ func (c *SmartClient) Get(key string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("max retries exceeded for Get(%s)", key)
+}
+
+// deleteRequest is the JSON body for delete operations
+type deleteRequest struct {
+	Key   string `json:"key"`
+	Epoch uint64 `json:"epoch"`
+}
+
+// Delete removes a key from the cluster with retry logic
+func (c *SmartClient) Delete(key string) error {
+	for attempt := 0; attempt < c.maxRetries; attempt++ {
+		route, err := c.Route(key)
+		if err != nil {
+			// Routing error, refresh topology
+			c.FetchTopology()
+			continue
+		}
+
+		reqBody := deleteRequest{Key: key, Epoch: route.Epoch}
+		body, _ := json.Marshal(reqBody)
+
+		req, err := http.NewRequest(http.MethodDelete, route.TargetURL+"/data", bytes.NewBuffer(body))
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			// Network error (node down)
+			slog.Warn("Delete failed, refreshing topology", "attempt", attempt, "err", err)
+			c.FetchTopology()
+			continue
+		}
+		resp.Body.Close()
+
+		switch resp.StatusCode {
+		case http.StatusOK:
+			return nil
+
+		case http.StatusPreconditionFailed: // 412 - Stale epoch
+			slog.Info("Epoch stale, refreshing topology", "attempt", attempt)
+			c.FetchTopology()
+			continue
+
+		case http.StatusLocked: // 423 - Shard Locked/Migrating
+			slog.Info("Shard locked (migrating), waiting...", "attempt", attempt)
+			time.Sleep(100 * time.Millisecond)
+			c.FetchTopology()
+			continue
+
+		case http.StatusServiceUnavailable: // 503 - Node fenced
+			slog.Info("Node fenced, waiting for failover", "attempt", attempt)
+			time.Sleep(200 * time.Millisecond)
+			continue
+
+		case http.StatusInternalServerError: // 500 - Replication failed
+			slog.Warn("Delete replication failed, retrying", "attempt", attempt)
+			time.Sleep(100 * time.Millisecond)
+			continue
+
+		default:
+			return fmt.Errorf("unexpected error: status %d", resp.StatusCode)
+		}
+	}
+	return fmt.Errorf("max retries exceeded for Delete(%s)", key)
 }

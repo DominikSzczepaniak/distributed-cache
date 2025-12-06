@@ -64,6 +64,8 @@ func main() {
 			srv.HandlePut(w, r)
 		} else if r.Method == http.MethodGet {
 			srv.HandleGet(w, r)
+		} else if r.Method == http.MethodDelete {
+			srv.HandleDelete(w, r)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -75,6 +77,14 @@ func main() {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	mux.HandleFunc("/internal/replicate-delete", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			srv.HandleDeleteReplicate(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
 	mux.HandleFunc("/internal/export", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			srv.HandleExport(w, r)

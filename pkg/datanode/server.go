@@ -19,6 +19,12 @@ type WriteRequest struct {
 	Epoch uint64 `json:"epoch"` // Client MUST provide this
 }
 
+// DeleteRequest is used for delete operations
+type DeleteRequest struct {
+	Key   string `json:"key"`
+	Epoch uint64 `json:"epoch"` // Client MUST provide this
+}
+
 type Server struct {
 	cache      *cache.ConcurrentMapCache
 	lease      *LeaseManager
@@ -49,6 +55,26 @@ func (s *Server) sendReplication(replicaURL string, req WriteRequest) error {
 	resp, err := s.httpClient.Post(replicaURL+"/internal/replicate", "application/json", bytes.NewBuffer(body))
 	if err != nil {
 		return fmt.Errorf("failed to send replication: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("replica returned status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// sendDeleteReplication sends a delete replication request to a replica
+func (s *Server) sendDeleteReplication(replicaURL string, req DeleteRequest) error {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("failed to marshal delete request: %w", err)
+	}
+
+	resp, err := s.httpClient.Post(replicaURL+"/internal/replicate-delete", "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		return fmt.Errorf("failed to send delete replication: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -117,6 +143,65 @@ func (s *Server) HandlePut(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// HandleDelete handles DELETE requests - same safety checks as PUT
+func (s *Server) HandleDelete(w http.ResponseWriter, r *http.Request) {
+	// 1. LEASE CHECK (Safety against Split Brain)
+	if !s.lease.IsActive() {
+		http.Error(w, "Node is Fenced (Lease Expired)", http.StatusServiceUnavailable) // 503
+		return
+	}
+
+	var req DeleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// 2. EPOCH CHECK (Safety against Stale Clients)
+	localEpoch := s.stateMgr.GetEpoch()
+	if req.Epoch < localEpoch {
+		http.Error(w, "Client Epoch Stale", http.StatusPreconditionFailed) // 412
+		return
+	}
+
+	// 3. OWNERSHIP CHECK
+	config := s.stateMgr.Get()
+	var shardID int
+	if config.TotalShards > 0 {
+		h := fnv.New32a()
+		h.Write([]byte(req.Key))
+		shardID = int(h.Sum32()) % config.TotalShards
+		if shardID < 0 {
+			shardID = -shardID
+		}
+
+		shard, exists := config.Shards[shardID]
+		if !exists || shard.PrimaryID != s.nodeID {
+			http.Error(w, "Not Primary for Shard", http.StatusBadRequest) // 400
+			return
+		}
+
+		if shard.Status == metadata.ShardStatusLocked || shard.Status == metadata.ShardStatusMigrating {
+			http.Error(w, "Shard is Locked/Migrating", http.StatusLocked) // 423
+			return
+		}
+	}
+
+	// 4. SYNCHRONOUS REPLICATION
+	replicaURLs := s.stateMgr.GetReplicaURLs(shardID)
+	for _, replicaURL := range replicaURLs {
+		if err := s.sendDeleteReplication(replicaURL, req); err != nil {
+			slog.Error("Delete replication failed", "replica", replicaURL, "err", err)
+			http.Error(w, "Replication Failed", http.StatusInternalServerError) // 500
+			return
+		}
+	}
+
+	// 5. LOCAL DELETE (only after successful replication)
+	s.cache.Delete(req.Key)
+	w.WriteHeader(http.StatusOK)
+}
+
 func (s *Server) HandleGet(w http.ResponseWriter, r *http.Request) {
 	// 1. LEASE CHECK
 	if !s.lease.IsActive() {
@@ -166,7 +251,26 @@ func (s *Server) HandleReplicate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// HandleExport streams all keys belonging to a specific shard
+// HandleDeleteReplicate handles internal delete replication requests from the Primary
+func (s *Server) HandleDeleteReplicate(w http.ResponseWriter, r *http.Request) {
+	var req DeleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// EPOCH CHECK (Critical Fencing)
+	localEpoch := s.stateMgr.GetEpoch()
+	if req.Epoch < localEpoch {
+		http.Error(w, "Primary is Stale", http.StatusPreconditionFailed) // 412
+		return
+	}
+
+	// DELETE (direct from cache, no ownership check for replicas)
+	s.cache.Delete(req.Key)
+	w.WriteHeader(http.StatusOK)
+}
+
 func (s *Server) HandleExport(w http.ResponseWriter, r *http.Request) {
 	// TODO: Add authorization check (e.g., token from Controller)
 

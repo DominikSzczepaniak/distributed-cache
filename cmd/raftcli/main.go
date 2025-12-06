@@ -91,6 +91,8 @@ func (c *CLI) executeCommand(line string) error {
 		return c.cmdPut(args)
 	case "get":
 		return c.cmdGet(args)
+	case "delete", "del":
+		return c.cmdDelete(args)
 	case "load":
 		return c.cmdLoad(args)
 	case "help":
@@ -138,6 +140,22 @@ func (c *CLI) cmdGet(args []string) error {
 	return nil
 }
 
+func (c *CLI) cmdDelete(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: delete <key>")
+	}
+
+	key := args[0]
+
+	err := c.client.Delete(key)
+	if err != nil {
+		return fmt.Errorf("DELETE failed: %v", err)
+	}
+
+	fmt.Printf("✓ DELETE successful: key=%s\n", key)
+	return nil
+}
+
 func (c *CLI) cmdLoad(args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: load <count>")
@@ -168,6 +186,7 @@ func (c *CLI) cmdHelp() {
 	fmt.Println("----------------------------------------")
 	fmt.Println("  put <key> <value>  - Store a key-value pair")
 	fmt.Println("  get <key>          - Retrieve value for key")
+	fmt.Println("  delete <key>       - Delete a key")
 	fmt.Println("  load <count>       - Load N keys (key-i, val-i)")
 	fmt.Println("  help               - Show this help message")
 	fmt.Println("  exit               - Exit the CLI")
