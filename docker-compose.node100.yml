@@ -1,11 +1,10 @@
 # Docker Compose for Computer 192.168.1.100
-# Components: Controller 0, DataNode 1, DataNode 2, Topology Init
+# Components: Controller 0, DataNode 1, DataNode 2
 #
 # Usage:
 #   docker-compose -f docker-compose.node100.yml up --build
 #
-# Before running, ensure the other computer (192.168.1.101) is also starting its containers.
-# The topology-init service will automatically configure shards once all datanodes are registered.
+# The controller will automatically assign shards and replicas when datanodes register.
 
 version: '3.8'
 
@@ -79,20 +78,3 @@ services:
     ports:
       - "9011:9011"   # DataNode port
     restart: unless-stopped
-
-  # Topology Init - runs once to configure shards after all datanodes register
-  topology-init:
-    build:
-      context: .
-      dockerfile: deploy/Dockerfile.init
-    container_name: topology-init
-    environment:
-      - CONTROLLER_URL=http://192.168.1.100:8080
-      - EXPECTED_NODES=4    # Total datanodes across both machines
-      - TOTAL_SHARDS=1
-      - NODE_LIST=192.168.1.100:9010,192.168.1.100:9011,192.168.1.101:9010,192.168.1.101:9011
-    depends_on:
-      - controller-0
-      - datanode-1
-      - datanode-2
-    restart: "no"  # Run once and exit

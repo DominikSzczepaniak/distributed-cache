@@ -244,6 +244,7 @@ func (c *Controller) RegisterNode(nodeID, address string) error {
 }
 
 // Rebalance attempts to balance shards across all active nodes
+// It assigns primaries and replicas to unassigned shards
 func (c *Controller) Rebalance() {
 	c.mu.RLock()
 	config := c.config
@@ -257,90 +258,98 @@ func (c *Controller) Rebalance() {
 	c.mu.RUnlock()
 
 	if len(activeNodes) == 0 {
+		slog.Info("Rebalance: No active nodes")
 		return
 	}
 
-	targetPerNode := totalShards / len(activeNodes)
-	if targetPerNode == 0 {
-		targetPerNode = 1 // Avoid 0 if more nodes than shards
-	}
+	slog.Info("Rebalance: Starting", "activeNodes", len(activeNodes), "totalShards", totalShards)
 
-	// Identify Rich and Poor nodes
-	// We need to know how many shards each node has
-	shardsPerNode := make(map[string][]int)
-	for _, nodeID := range activeNodes {
-		shardsPerNode[nodeID] = []int{}
-	}
-
-	// First, handle unassigned shards
-	unassignedShards := []int{}
+	// Check for unassigned or under-replicated shards
+	needsUpdate := false
 	c.mu.RLock()
 	for _, shard := range config.Shards {
 		if shard.PrimaryID == "" {
-			unassignedShards = append(unassignedShards, shard.ID)
-		} else {
-			shardsPerNode[shard.PrimaryID] = append(shardsPerNode[shard.PrimaryID], shard.ID)
+			needsUpdate = true
+			break
+		}
+		// Check if we need more replicas (want at least min(3, len(activeNodes)-1) replicas)
+		desiredReplicas := len(activeNodes) - 1
+		if desiredReplicas > 3 {
+			desiredReplicas = 3
+		}
+		if len(shard.ReplicaIDs) < desiredReplicas {
+			needsUpdate = true
+			break
 		}
 	}
 	c.mu.RUnlock()
 
-	if len(unassignedShards) > 0 {
-		c.mu.Lock()
-		newConfig := *c.config
-		newShards := make(map[int]metadata.ShardMetadata)
-		for k, v := range c.config.Shards {
-			newShards[k] = v
-		}
-		newConfig.Shards = newShards
-
-		for i, shardID := range unassignedShards {
-			targetNodeID := activeNodes[i%len(activeNodes)]
-			shardMeta := newConfig.Shards[shardID]
-			shardMeta.PrimaryID = targetNodeID
-			shardMeta.Status = metadata.ShardStatusActive
-			newConfig.Shards[shardID] = shardMeta
-
-			// Update local count for subsequent rebalancing
-			shardsPerNode[targetNodeID] = append(shardsPerNode[targetNodeID], shardID)
-			slog.Info("Assigned unassigned shard", "shard", shardID, "node", targetNodeID)
-		}
-		newConfig.Epoch++
-		c.config = &newConfig
-		c.mu.Unlock()
-
-		// Refresh config for next step
-		config = c.config
+	if !needsUpdate {
+		slog.Info("Rebalance: No changes needed")
+		return
 	}
 
-	// Move shards from Rich to Poor
-	for _, richNodeID := range activeNodes {
-		shards := shardsPerNode[richNodeID]
-		if len(shards) > targetPerNode {
-			// This node is Rich
-			excess := len(shards) - targetPerNode
-			for i := 0; i < excess; i++ {
-				// Find a Poor node
-				var targetNodeID string
-				for _, poorNodeID := range activeNodes {
-					if len(shardsPerNode[poorNodeID]) < targetPerNode {
-						targetNodeID = poorNodeID
-						break
-					}
-				}
+	c.mu.Lock()
+	newConfig := *c.config
+	newShards := make(map[int]metadata.ShardMetadata)
+	for k, v := range c.config.Shards {
+		newShards[k] = v
+	}
+	newConfig.Shards = newShards
 
-				if targetNodeID != "" {
-					// Move shard
-					shardID := shards[i]
-					slog.Info("Rebalancing: Moving shard", "shard", shardID, "from", richNodeID, "to", targetNodeID)
-					if err := c.MoveShard(shardID, targetNodeID); err != nil {
-						slog.Error("Rebalancing failed", "shard", shardID, "err", err)
-					} else {
-						// Update local counts to reflect move
-						shardsPerNode[targetNodeID] = append(shardsPerNode[targetNodeID], shardID)
-						// We don't remove from richNodeID list because we just iterate excess times
-					}
+	// Assign primaries and replicas for each shard
+	nodeIndex := 0
+	for shardID, shard := range newConfig.Shards {
+		// Assign primary if not set
+		if shard.PrimaryID == "" {
+			shard.PrimaryID = activeNodes[nodeIndex%len(activeNodes)]
+			shard.Status = metadata.ShardStatusActive
+			slog.Info("Rebalance: Assigned primary", "shard", shardID, "primary", shard.PrimaryID)
+			nodeIndex++
+		}
+
+		// Assign replicas (all other active nodes, up to 3 replicas)
+		desiredReplicas := len(activeNodes) - 1
+		if desiredReplicas > 3 {
+			desiredReplicas = 3
+		}
+
+		if len(shard.ReplicaIDs) < desiredReplicas {
+			// Build new replica list
+			existingReplicas := make(map[string]bool)
+			for _, r := range shard.ReplicaIDs {
+				existingReplicas[r] = true
+			}
+
+			newReplicas := make([]string, 0, desiredReplicas)
+			// Keep existing replicas that are still active
+			for _, r := range shard.ReplicaIDs {
+				if _, exists := config.Nodes[r]; exists && config.Nodes[r].Status == metadata.StatusActive {
+					newReplicas = append(newReplicas, r)
 				}
 			}
+
+			// Add more replicas from active nodes
+			for _, nodeID := range activeNodes {
+				if len(newReplicas) >= desiredReplicas {
+					break
+				}
+				// Skip if this is the primary or already a replica
+				if nodeID == shard.PrimaryID || existingReplicas[nodeID] {
+					continue
+				}
+				newReplicas = append(newReplicas, nodeID)
+				slog.Info("Rebalance: Added replica", "shard", shardID, "replica", nodeID)
+			}
+			shard.ReplicaIDs = newReplicas
 		}
+
+		newConfig.Shards[shardID] = shard
 	}
+
+	newConfig.Epoch++
+	c.config = &newConfig
+	c.mu.Unlock()
+
+	slog.Info("Rebalance: Complete", "epoch", newConfig.Epoch)
 }
