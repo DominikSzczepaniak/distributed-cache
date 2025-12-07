@@ -8,6 +8,7 @@
 #   docker-compose -f docker-compose.node101.yml up --build
 #
 # Before running, ensure the other computer (192.168.1.100) is also starting its containers.
+# The topology-init service on node100 will configure the cluster once all nodes are up.
 
 version: '3.8'
 

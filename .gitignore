@@ -1,11 +1,6 @@
 .idea/
 data/
-raftnode
 
 **/.DS_Store
 codelalalalala
 *.log
-raftcli
-raftcli-linux
-raftnode
-datanode 
