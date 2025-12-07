@@ -1,8 +1,8 @@
 # Docker Compose for Computer 192.168.1.101
 # Components: Controller 1, Controller 2, DataNode 3, DataNode 4
 #
-# IMPORTANT: This setup requires the controller to derive its listen port from RAFT_ADDRS.
-# Controller 1 listens on port 9000, Controller 2 on port 9001 based on their RAFT_ID.
+# IMPORTANT: Controller 1 uses Raft port 9000, Controller 2 uses Raft port 9001.
+# The controller derives its listen port from RAFT_ADDRS[RAFT_ID].
 #
 # Usage:
 #   docker-compose -f docker-compose.node101.yml up --build
@@ -45,7 +45,9 @@ services:
       API_IDEMPOTENCY_TTL: "5m"
     volumes:
       - ./data/node1:/data
-    network_mode: host
+    ports:
+      - "9000:9000"   # Raft port for controller-1
+      - "8080:8080"   # API port for controller-1
     restart: unless-stopped
 
   controller-2:
@@ -80,7 +82,9 @@ services:
       API_IDEMPOTENCY_TTL: "5m"
     volumes:
       - ./data/node2:/data
-    network_mode: host
+    ports:
+      - "9001:9001"   # Raft port for controller-2
+      - "8081:8081"   # API port for controller-2
     restart: unless-stopped
 
   datanode-3:
@@ -95,7 +99,8 @@ services:
       - LEASE_DURATION=5s
     depends_on:
       - controller-1
-    network_mode: host
+    ports:
+      - "9010:9010"   # DataNode port
     restart: unless-stopped
 
   datanode-4:
@@ -110,5 +115,6 @@ services:
       - LEASE_DURATION=5s
     depends_on:
       - controller-1
-    network_mode: host
+    ports:
+      - "9011:9011"   # DataNode port
     restart: unless-stopped

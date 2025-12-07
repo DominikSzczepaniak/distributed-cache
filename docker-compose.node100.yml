@@ -42,7 +42,9 @@ services:
       API_IDEMPOTENCY_TTL: "5m"
     volumes:
       - ./data/node0:/data
-    network_mode: host
+    ports:
+      - "9000:9000"   # Raft port
+      - "8080:8080"   # API port
     restart: unless-stopped
 
   datanode-1:
@@ -57,7 +59,8 @@ services:
       - LEASE_DURATION=5s
     depends_on:
       - controller-0
-    network_mode: host
+    ports:
+      - "9010:9010"   # DataNode port
     restart: unless-stopped
 
   datanode-2:
@@ -72,5 +75,6 @@ services:
       - LEASE_DURATION=5s
     depends_on:
       - controller-0
-    network_mode: host
+    ports:
+      - "9011:9011"   # DataNode port
     restart: unless-stopped
