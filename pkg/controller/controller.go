@@ -351,5 +351,46 @@ func (c *Controller) Rebalance() {
 	c.config = &newConfig
 	c.mu.Unlock()
 
-	slog.Info("Rebalance: Complete", "epoch", newConfig.Epoch)
+	slog.Info("Rebalance: Complete (local)", "epoch", newConfig.Epoch)
+
+	// Broadcast the updated topology via Raft so all followers get it
+	if err := c.BroadcastTopologyUpdate(&newConfig); err != nil {
+		slog.Error("Rebalance: Failed to broadcast topology update", "err", err)
+	} else {
+		slog.Info("Rebalance: Topology broadcasted via Raft", "epoch", newConfig.Epoch)
+	}
+}
+
+// BroadcastTopologyUpdate broadcasts a topology update to all nodes via Raft
+func (c *Controller) BroadcastTopologyUpdate(config *metadata.ClusterConfig) error {
+	payload := UpdateTopologyPayload{
+		Config: *config,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	cmd := Command{
+		Type:    CmdUpdateTopology,
+		Payload: data,
+	}
+	cmdBytes, err := json.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+
+	msg := raft.Message{
+		MsgType: raft.CommandMsg,
+		Data:    cmdBytes,
+	}
+
+	success, _, err := c.raft.BroadcastSync(msg, 5*time.Second)
+	if err != nil {
+		return err
+	}
+	if !success {
+		return fmt.Errorf("failed to broadcast topology: consensus not reached")
+	}
+	return nil
 }
