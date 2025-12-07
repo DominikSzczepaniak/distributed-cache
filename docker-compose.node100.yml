@@ -1,0 +1,76 @@
+# Docker Compose for Computer 192.168.1.100
+# Components: Controller 0, DataNode 1, DataNode 2
+#
+# Usage:
+#   docker-compose -f docker-compose.node100.yml up --build
+#
+# Before running, ensure the other computer (192.168.1.101) is also starting its containers.
+
+version: '3.8'
+
+services:
+  controller-0:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    container_name: controller-0
+    hostname: controller-0
+    environment:
+      # Raft configuration
+      RAFT_ID: "0"
+      TOTAL_NODES: "3"
+      # Controller 0 on this machine, Controllers 1 & 2 on 192.168.1.101
+      RAFT_ADDRS: "192.168.1.100:9000,192.168.1.101:9000,192.168.1.101:9001"
+      FILENAME: "/data/node0"
+      SNAPSHOT_THRESHOLD: "100"
+
+      # Connection management
+      RAFT_INITIAL_BACKOFF: "1s"
+      RAFT_MAX_BACKOFF: "30s"
+      RAFT_BACKOFF_MULTIPLIER: "2.0"
+      RAFT_MAX_RETRIES: "-1"
+      RAFT_CONN_TIMEOUT: "5s"
+      RAFT_HEALTH_CHECK_INTERVAL: "1s"
+
+      # HTTP API configuration
+      API_ADDR: ":8080"
+
+      # Retry configuration
+      API_RETRY_MAX_ATTEMPTS: "3"
+      API_RETRY_INITIAL_DELAY: "100ms"
+      API_RETRY_MAX_DELAY: "5s"
+      API_IDEMPOTENCY_TTL: "5m"
+    volumes:
+      - ./data/node0:/data
+    network_mode: host
+    restart: unless-stopped
+
+  datanode-1:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.datanode
+    container_name: datanode-1
+    hostname: datanode-1
+    environment:
+      - CONTROLLER_URL=http://192.168.1.100:8080
+      - NODE_ID=192.168.1.100:9010
+      - LEASE_DURATION=5s
+    depends_on:
+      - controller-0
+    network_mode: host
+    restart: unless-stopped
+
+  datanode-2:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.datanode
+    container_name: datanode-2
+    hostname: datanode-2
+    environment:
+      - CONTROLLER_URL=http://192.168.1.100:8080
+      - NODE_ID=192.168.1.100:9011
+      - LEASE_DURATION=5s
+    depends_on:
+      - controller-0
+    network_mode: host
+    restart: unless-stopped
