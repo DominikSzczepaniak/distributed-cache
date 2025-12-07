@@ -90,6 +90,7 @@ services:
       - CONTROLLER_URL=http://192.168.1.100:8080
       - EXPECTED_NODES=4    # Total datanodes across both machines
       - TOTAL_SHARDS=1
+      - NODE_LIST=192.168.1.100:9010,192.168.1.100:9011,192.168.1.101:9010,192.168.1.101:9011
     depends_on:
       - controller-0
       - datanode-1

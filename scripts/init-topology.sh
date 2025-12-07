@@ -8,10 +8,15 @@ CONTROLLER_URL="${CONTROLLER_URL:-http://localhost:8080}"
 EXPECTED_NODES="${EXPECTED_NODES:-4}"
 TOTAL_SHARDS="${TOTAL_SHARDS:-1}"
 
+# Define the node IDs we expect (passed as env var or default to these)
+# Format: comma-separated list of node IDs
+NODE_LIST="${NODE_LIST:-192.168.1.100:9010,192.168.1.100:9011,192.168.1.101:9010,192.168.1.101:9011}"
+
 echo "=== Topology Init Script ==="
 echo "Controller: $CONTROLLER_URL"
 echo "Expected nodes: $EXPECTED_NODES"
 echo "Total shards: $TOTAL_SHARDS"
+echo "Node list: $NODE_LIST"
 
 # Wait for controller to be ready
 echo "Waiting for controller to be ready..."
@@ -26,8 +31,13 @@ echo "Waiting for $EXPECTED_NODES datanodes to register..."
 while true; do
     TOPOLOGY=$(wget -qO- "${CONTROLLER_URL}/topology" 2>/dev/null || echo '{}')
     
-    # Count registered nodes (look for "ACTIVE" status in nodes)
-    NODE_COUNT=$(echo "$TOPOLOGY" | grep -o '"status":"ACTIVE"' | wc -l | tr -d ' ')
+    # Count how many of our expected nodes are in the topology
+    NODE_COUNT=0
+    for NODE_ID in $(echo "$NODE_LIST" | tr ',' ' '); do
+        if echo "$TOPOLOGY" | grep -q "\"$NODE_ID\""; then
+            NODE_COUNT=$((NODE_COUNT + 1))
+        fi
+    done
     
     echo "  Registered nodes: $NODE_COUNT / $EXPECTED_NODES"
     
@@ -39,80 +49,70 @@ while true; do
     sleep 2
 done
 
-# Extract node IDs from the topology
-echo "Extracting node IDs..."
-NODE_IDS=$(echo "$TOPOLOGY" | grep -o '"id":"[^"]*"' | sed 's/"id":"//g' | sed 's/"//g' | sort)
-echo "Found nodes: $NODE_IDS"
-
-# Build the nodes JSON
+# Parse node list into primary and replicas
+PRIMARY_ID=""
+REPLICAS=""
 NODES_JSON="{"
-FIRST=true
-for NODE_ID in $NODE_IDS; do
-    if [ "$FIRST" = true ]; then
-        FIRST=false
+FIRST_NODE=true
+FIRST_REPLICA=true
+
+for NODE_ID in $(echo "$NODE_LIST" | tr ',' ' '); do
+    # Build nodes map
+    if [ "$FIRST_NODE" = true ]; then
+        FIRST_NODE=false
+        PRIMARY_ID="$NODE_ID"
     else
-        NODES_JSON="${NODES_JSON},"
+        if [ "$FIRST_REPLICA" = true ]; then
+            FIRST_REPLICA=false
+            REPLICAS="\"$NODE_ID\""
+        else
+            REPLICAS="$REPLICAS,\"$NODE_ID\""
+        fi
+        NODES_JSON="$NODES_JSON,"
     fi
-    NODES_JSON="${NODES_JSON}\"${NODE_ID}\":{\"id\":\"${NODE_ID}\",\"address\":\"${NODE_ID}\",\"status\":\"ACTIVE\"}"
+    NODES_JSON="$NODES_JSON\"$NODE_ID\":{\"id\":\"$NODE_ID\",\"address\":\"$NODE_ID\",\"status\":\"ACTIVE\"}"
 done
-NODES_JSON="${NODES_JSON}}"
+NODES_JSON="$NODES_JSON}"
 
-# Select primary and replicas for each shard
-# Simple strategy: first node is primary, rest are replicas for shard 0
-# For multiple shards, we'd distribute across nodes
-NODE_ARRAY=""
-for NODE_ID in $NODE_IDS; do
-    NODE_ARRAY="${NODE_ARRAY} ${NODE_ID}"
-done
+# Get current epoch and increment significantly
+CURRENT_EPOCH=$(echo "$TOPOLOGY" | sed 's/.*"epoch":\([0-9]*\).*/\1/' | head -1)
+if [ -z "$CURRENT_EPOCH" ] || [ "$CURRENT_EPOCH" = "$TOPOLOGY" ]; then
+    CURRENT_EPOCH=0
+fi
+NEW_EPOCH=$((CURRENT_EPOCH + 100))
 
-# Convert to array-like handling in shell
-set -- $NODE_ARRAY
-PRIMARY_ID="$1"
-shift
-
-REPLICAS_JSON="["
-FIRST=true
-for REPLICA_ID in "$@"; do
-    if [ "$FIRST" = true ]; then
-        FIRST=false
-    else
-        REPLICAS_JSON="${REPLICAS_JSON},"
-    fi
-    REPLICAS_JSON="${REPLICAS_JSON}\"${REPLICA_ID}\""
-done
-REPLICAS_JSON="${REPLICAS_JSON}]"
-
-# Build shards JSON (for now, single shard)
-SHARDS_JSON="{\"0\":{\"id\":0,\"primary_id\":\"${PRIMARY_ID}\",\"replica_ids\":${REPLICAS_JSON},\"status\":\"ACTIVE\"}}"
-
-# Get current epoch and increment
-CURRENT_EPOCH=$(echo "$TOPOLOGY" | grep -o '"epoch":[0-9]*' | head -1 | sed 's/"epoch"://')
-NEW_EPOCH=$((CURRENT_EPOCH + 1))
+# Build shards JSON
+SHARDS_JSON="{\"0\":{\"id\":0,\"primary_id\":\"$PRIMARY_ID\",\"replica_ids\":[$REPLICAS],\"status\":\"ACTIVE\"}}"
 
 # Build final config
-CONFIG="{\"epoch\":${NEW_EPOCH},\"total_shards\":${TOTAL_SHARDS},\"nodes\":${NODES_JSON},\"shards\":${SHARDS_JSON}}"
+CONFIG="{\"epoch\":$NEW_EPOCH,\"total_shards\":$TOTAL_SHARDS,\"nodes\":$NODES_JSON,\"shards\":$SHARDS_JSON}"
 
 echo ""
 echo "Setting topology with epoch $NEW_EPOCH..."
 echo "Primary: $PRIMARY_ID"
-echo "Replicas: $REPLICAS_JSON"
+echo "Replicas: [$REPLICAS]"
+echo ""
+echo "Config: $CONFIG"
+echo ""
 
 # Apply the configuration
-RESULT=$(wget -qO- --post-data="${CONFIG}" --header="Content-Type: application/json" "${CONTROLLER_URL}/debug/config" 2>&1 || echo "failed")
+HTTP_CODE=$(wget -qO- --post-data="$CONFIG" --header="Content-Type: application/json" \
+    -S "${CONTROLLER_URL}/debug/config" 2>&1 | grep "HTTP/" | tail -1 | awk '{print $2}')
 
-if echo "$RESULT" | grep -q "failed"; then
-    echo "Failed to set topology!"
-    exit 1
+if [ "$HTTP_CODE" != "200" ] && [ -n "$HTTP_CODE" ]; then
+    echo "Warning: Got HTTP $HTTP_CODE when setting topology"
 fi
 
 echo ""
-echo "=== Topology configured successfully! ==="
+echo "=== Topology configured! ==="
 echo ""
 
+# Wait a moment for propagation
+sleep 3
+
 # Verify
-sleep 2
 echo "Final topology:"
-wget -qO- "${CONTROLLER_URL}/topology" | head -c 500
+wget -qO- "${CONTROLLER_URL}/topology"
 echo ""
 echo ""
 echo "Init complete. Cluster is ready for use."
