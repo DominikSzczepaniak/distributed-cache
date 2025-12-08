@@ -22,7 +22,7 @@ type Controller struct {
 func NewController(r *raft.Raft, gracePeriod time.Duration) *Controller {
 	c := &Controller{
 		raft:   r,
-		config: metadata.NewClusterConfig(10), // Default 10 shards, should be loaded from Raft
+		config: metadata.NewClusterConfig(10),
 	}
 
 	c.reaper = NewReaper(gracePeriod, c.HandleNodeFailure)
@@ -51,17 +51,12 @@ func (c *Controller) MoveShard(shardID int, targetNodeID string) error {
 
 	slog.Info("Starting migration", "shard", shardID, "source", sourceNodeID, "target", targetNodeID)
 
-	// Phase 1: Copy (Background)
-	// Tell Target to pull from Source
 	if err := c.triggerPull(targetNode.Address, sourceNode.Address, shardID); err != nil {
 		return fmt.Errorf("phase 1 copy failed: %w", err)
 	}
 
-	// Phase 2: Freeze (Critical Section)
 	c.mu.Lock()
-	// Update status to Locked
-	newConfig := *c.config // Shallow copy
-	// Deep copy shards map
+	newConfig := *c.config
 	newShards := make(map[int]metadata.ShardMetadata)
 	for k, v := range c.config.Shards {
 		newShards[k] = v
@@ -76,8 +71,6 @@ func (c *Controller) MoveShard(shardID int, targetNodeID string) error {
 	c.mu.Unlock()
 	slog.Info("Phase 2: Shard Locked", "shard", shardID, "epoch", newConfig.Epoch)
 
-	// Phase 3: Catchup & Switch
-	// Pull again to get diffs
 	if err := c.triggerPull(targetNode.Address, sourceNode.Address, shardID); err != nil {
 		// TODO: Rollback? For now just error out, system stays locked (safe but unavailable)
 		return fmt.Errorf("phase 3 catchup failed: %w", err)
@@ -104,8 +97,6 @@ func (c *Controller) MoveShard(shardID int, targetNodeID string) error {
 }
 
 func (c *Controller) triggerPull(targetAddr, sourceAddr string, shardID int) error {
-	// Target needs to pull from Source
-	// POST http://target/internal/pull?source=http://source&shard=ID
 	url := fmt.Sprintf("http://%s/internal/pull?source=http://%s&shard=%d", targetAddr, sourceAddr, shardID)
 	resp, err := http.Post(url, "application/json", nil)
 	if err != nil {
@@ -125,20 +116,17 @@ func (c *Controller) HandleNodeFailure(nodeID string) {
 
 	slog.Warn("Node failure detected", "nodeID", nodeID)
 
-	// Rebalance topology
 	newConfig := metadata.Rebalance(c.config, nodeID)
 
-	// Propose new config to Raft
 	// TODO: This should be a Raft command. For now we just update local state
 	// and assume Raft will handle the consensus part later.
-	// In a real implementation:
+	// Maybe?:
 	// cmd := NewUpdateTopologyCommand(newConfig)
 	// c.raft.BroadcastSync(cmd)
 
 	c.config = newConfig
 	slog.Info("Topology rebalanced", "epoch", newConfig.Epoch)
 
-	// Trigger Rebalance to assign unassigned shards to active nodes
 	go c.Rebalance()
 }
 
@@ -160,7 +148,6 @@ func (c *Controller) SetTopology(config *metadata.ClusterConfig) {
 	slog.Info("Topology manually set", "epoch", config.Epoch)
 }
 
-// applyUpdateTopology updates the local state from a Raft command
 func (c *Controller) applyUpdateTopology(config *metadata.ClusterConfig) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -168,17 +155,14 @@ func (c *Controller) applyUpdateTopology(config *metadata.ClusterConfig) {
 	slog.Info("Topology updated via Raft", "epoch", config.Epoch)
 }
 
-// applyRegisterNode updates the local state (internal use by FSM)
 func (c *Controller) applyRegisterNode(nodeID, address string) {
 	c.mu.Lock()
-	// Check if node already exists
 	if _, exists := c.config.Nodes[nodeID]; exists {
 		c.mu.Unlock()
 		slog.Info("Node already registered (apply)", "nodeID", nodeID)
 		return
 	}
 
-	// Add node
 	newConfig := *c.config
 	newNodes := make(map[string]metadata.NodeMetadata)
 	for k, v := range c.config.Nodes {
@@ -197,18 +181,13 @@ func (c *Controller) applyRegisterNode(nodeID, address string) {
 
 	slog.Info("Node registered (apply)", "nodeID", nodeID, "address", address)
 
-	// Trigger Rebalance (only on leader? or everyone? Rebalance initiates moves, so only leader should do it)
-	// But applyRegisterNode runs on followers too.
-	// Followers shouldn't trigger Rebalance.
-	// We can check if we are leader before triggering Rebalance.
-	// NOTE: Use IsLeaderUnsafe() because this is called from within Raft's appendEntries
-	// which holds the Raft mutex. Using IsLeader() would cause a deadlock.
+	// NOTE: We need to use IsLeaderUnsafe() because this is called from within Raft's
+	// appendEntries which holds the Raft mutex. Using IsLeader() would cause a deadlock.
 	if c.raft.IsLeaderUnsafe() {
 		go c.Rebalance()
 	}
 }
 
-// RegisterNode broadcasts a RegisterNode command to the cluster
 func (c *Controller) RegisterNode(nodeID, address string) error {
 	payload := RegisterNodePayload{
 		NodeID:  nodeID,
@@ -243,8 +222,6 @@ func (c *Controller) RegisterNode(nodeID, address string) error {
 	return nil
 }
 
-// Rebalance attempts to balance shards across all active nodes
-// It assigns primaries and replicas to unassigned shards
 func (c *Controller) Rebalance() {
 	c.mu.RLock()
 	config := c.config
@@ -264,7 +241,6 @@ func (c *Controller) Rebalance() {
 
 	slog.Info("Rebalance: Starting", "activeNodes", len(activeNodes), "totalShards", totalShards)
 
-	// Check for unassigned or under-replicated shards
 	needsUpdate := false
 	c.mu.RLock()
 	for _, shard := range config.Shards {
@@ -272,7 +248,7 @@ func (c *Controller) Rebalance() {
 			needsUpdate = true
 			break
 		}
-		// Check if we need more replicas (want at least min(3, len(activeNodes)-1) replicas)
+
 		desiredReplicas := len(activeNodes) - 1
 		if desiredReplicas > 3 {
 			desiredReplicas = 3
@@ -297,10 +273,8 @@ func (c *Controller) Rebalance() {
 	}
 	newConfig.Shards = newShards
 
-	// Assign primaries and replicas for each shard
 	nodeIndex := 0
 	for shardID, shard := range newConfig.Shards {
-		// Assign primary if not set
 		if shard.PrimaryID == "" {
 			shard.PrimaryID = activeNodes[nodeIndex%len(activeNodes)]
 			shard.Status = metadata.ShardStatusActive
@@ -308,33 +282,28 @@ func (c *Controller) Rebalance() {
 			nodeIndex++
 		}
 
-		// Assign replicas (all other active nodes, up to 3 replicas)
 		desiredReplicas := len(activeNodes) - 1
 		if desiredReplicas > 3 {
 			desiredReplicas = 3
 		}
 
 		if len(shard.ReplicaIDs) < desiredReplicas {
-			// Build new replica list
 			existingReplicas := make(map[string]bool)
 			for _, r := range shard.ReplicaIDs {
 				existingReplicas[r] = true
 			}
 
 			newReplicas := make([]string, 0, desiredReplicas)
-			// Keep existing replicas that are still active
 			for _, r := range shard.ReplicaIDs {
 				if _, exists := config.Nodes[r]; exists && config.Nodes[r].Status == metadata.StatusActive {
 					newReplicas = append(newReplicas, r)
 				}
 			}
 
-			// Add more replicas from active nodes
 			for _, nodeID := range activeNodes {
 				if len(newReplicas) >= desiredReplicas {
 					break
 				}
-				// Skip if this is the primary or already a replica
 				if nodeID == shard.PrimaryID || existingReplicas[nodeID] {
 					continue
 				}
@@ -353,7 +322,6 @@ func (c *Controller) Rebalance() {
 
 	slog.Info("Rebalance: Complete (local)", "epoch", newConfig.Epoch)
 
-	// Broadcast the updated topology via Raft so all followers get it
 	if err := c.BroadcastTopologyUpdate(&newConfig); err != nil {
 		slog.Error("Rebalance: Failed to broadcast topology update", "err", err)
 	} else {
@@ -361,7 +329,6 @@ func (c *Controller) Rebalance() {
 	}
 }
 
-// BroadcastTopologyUpdate broadcasts a topology update to all nodes via Raft
 func (c *Controller) BroadcastTopologyUpdate(config *metadata.ClusterConfig) error {
 	payload := UpdateTopologyPayload{
 		Config: *config,

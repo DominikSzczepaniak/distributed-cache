@@ -16,13 +16,12 @@ import (
 type WriteRequest struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
-	Epoch uint64 `json:"epoch"` // Client MUST provide this
+	Epoch uint64 `json:"epoch"`
 }
 
-// DeleteRequest is used for delete operations
 type DeleteRequest struct {
 	Key   string `json:"key"`
-	Epoch uint64 `json:"epoch"` // Client MUST provide this
+	Epoch uint64 `json:"epoch"`
 }
 
 type Server struct {
@@ -45,7 +44,6 @@ func NewServer(c *cache.ConcurrentMapCache, l *LeaseManager, s *StateManager, no
 	}
 }
 
-// sendReplication sends a replication request to a replica
 func (s *Server) sendReplication(replicaURL string, req WriteRequest) error {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -65,7 +63,6 @@ func (s *Server) sendReplication(replicaURL string, req WriteRequest) error {
 	return nil
 }
 
-// sendDeleteReplication sends a delete replication request to a replica
 func (s *Server) sendDeleteReplication(replicaURL string, req DeleteRequest) error {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -86,9 +83,8 @@ func (s *Server) sendDeleteReplication(replicaURL string, req DeleteRequest) err
 }
 
 func (s *Server) HandlePut(w http.ResponseWriter, r *http.Request) {
-	// 1. LEASE CHECK (Safety against Split Brain)
 	if !s.lease.IsActive() {
-		http.Error(w, "Node is Fenced (Lease Expired)", http.StatusServiceUnavailable) // 503
+		http.Error(w, "Node is Fenced (Lease Expired)", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -98,14 +94,12 @@ func (s *Server) HandlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. EPOCH CHECK (Safety against Stale Clients)
 	localEpoch := s.stateMgr.GetEpoch()
 	if req.Epoch < localEpoch {
-		http.Error(w, "Client Epoch Stale", http.StatusPreconditionFailed) // 412
+		http.Error(w, "Client Epoch Stale", http.StatusPreconditionFailed)
 		return
 	}
 
-	// 3. OWNERSHIP CHECK
 	config := s.stateMgr.Get()
 	var shardID int
 	if config.TotalShards > 0 {
@@ -118,36 +112,31 @@ func (s *Server) HandlePut(w http.ResponseWriter, r *http.Request) {
 
 		shard, exists := config.Shards[shardID]
 		if !exists || shard.PrimaryID != s.nodeID {
-			http.Error(w, "Not Primary for Shard", http.StatusBadRequest) // 400
+			http.Error(w, "Not Primary for Shard", http.StatusBadRequest)
 			return
 		}
 
 		if shard.Status == metadata.ShardStatusLocked || shard.Status == metadata.ShardStatusMigrating {
-			http.Error(w, "Shard is Locked/Migrating", http.StatusLocked) // 423
+			http.Error(w, "Shard is Locked/Migrating", http.StatusLocked)
 			return
 		}
 	}
 
-	// 4. SYNCHRONOUS REPLICATION
 	replicaURLs := s.stateMgr.GetReplicaURLs(shardID)
 	for _, replicaURL := range replicaURLs {
 		if err := s.sendReplication(replicaURL, req); err != nil {
 			slog.Error("Replication failed", "replica", replicaURL, "err", err)
-			http.Error(w, "Replication Failed", http.StatusInternalServerError) // 500
+			http.Error(w, "Replication Failed", http.StatusInternalServerError)
 			return
 		}
 	}
 
-	// 5. LOCAL COMMIT (only after successful replication)
 	s.cache.Put(req.Key, req.Value)
 	w.WriteHeader(http.StatusOK)
 }
-
-// HandleDelete handles DELETE requests - same safety checks as PUT
 func (s *Server) HandleDelete(w http.ResponseWriter, r *http.Request) {
-	// 1. LEASE CHECK (Safety against Split Brain)
 	if !s.lease.IsActive() {
-		http.Error(w, "Node is Fenced (Lease Expired)", http.StatusServiceUnavailable) // 503
+		http.Error(w, "Node is Fenced (Lease Expired)", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -157,14 +146,12 @@ func (s *Server) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. EPOCH CHECK (Safety against Stale Clients)
 	localEpoch := s.stateMgr.GetEpoch()
 	if req.Epoch < localEpoch {
-		http.Error(w, "Client Epoch Stale", http.StatusPreconditionFailed) // 412
+		http.Error(w, "Client Epoch Stale", http.StatusPreconditionFailed)
 		return
 	}
 
-	// 3. OWNERSHIP CHECK
 	config := s.stateMgr.Get()
 	var shardID int
 	if config.TotalShards > 0 {
@@ -177,45 +164,37 @@ func (s *Server) HandleDelete(w http.ResponseWriter, r *http.Request) {
 
 		shard, exists := config.Shards[shardID]
 		if !exists || shard.PrimaryID != s.nodeID {
-			http.Error(w, "Not Primary for Shard", http.StatusBadRequest) // 400
+			http.Error(w, "Not Primary for Shard", http.StatusBadRequest)
 			return
 		}
 
 		if shard.Status == metadata.ShardStatusLocked || shard.Status == metadata.ShardStatusMigrating {
-			http.Error(w, "Shard is Locked/Migrating", http.StatusLocked) // 423
+			http.Error(w, "Shard is Locked/Migrating", http.StatusLocked)
 			return
 		}
 	}
 
-	// 4. SYNCHRONOUS REPLICATION
 	replicaURLs := s.stateMgr.GetReplicaURLs(shardID)
 	for _, replicaURL := range replicaURLs {
 		if err := s.sendDeleteReplication(replicaURL, req); err != nil {
 			slog.Error("Delete replication failed", "replica", replicaURL, "err", err)
-			http.Error(w, "Replication Failed", http.StatusInternalServerError) // 500
+			http.Error(w, "Replication Failed", http.StatusInternalServerError)
 			return
 		}
 	}
 
-	// 5. LOCAL DELETE (only after successful replication)
 	s.cache.Delete(req.Key)
 	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) HandleGet(w http.ResponseWriter, r *http.Request) {
-	// 1. LEASE CHECK
 	if !s.lease.IsActive() {
-		http.Error(w, "Node is Fenced (Lease Expired)", http.StatusServiceUnavailable) // 503
+		http.Error(w, "Node is Fenced (Lease Expired)", http.StatusServiceUnavailable)
 		return
 	}
 
-	// Parse key from query param "key"
 	key := r.URL.Query().Get("key")
 	if key == "" {
-		// Fallback: try path if needed, but query param is standard for simple GET
-		// Or maybe /data/key?
-		// Let's stick to query param ?key=... for now based on typical patterns unless specified.
-		// Prompt didn't specify URL structure for GET, just "GET /data".
 		http.Error(w, "Missing key parameter", http.StatusBadRequest)
 		return
 	}
@@ -229,7 +208,6 @@ func (s *Server) HandleGet(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(val))
 }
 
-// HandleReplicate handles internal replication requests from the Primary
 func (s *Server) HandleReplicate(w http.ResponseWriter, r *http.Request) {
 	var req WriteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -237,21 +215,15 @@ func (s *Server) HandleReplicate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// EPOCH CHECK (Critical Fencing)
-	// If Primary thinks it's Epoch 10, but I know it's Epoch 11,
-	// the Primary has been demoted and doesn't know it yet.
 	localEpoch := s.stateMgr.GetEpoch()
 	if req.Epoch < localEpoch {
-		http.Error(w, "Primary is Stale", http.StatusPreconditionFailed) // 412
+		http.Error(w, "Primary is Stale", http.StatusPreconditionFailed)
 		return
 	}
 
-	// WRITE (direct to cache, no ownership check for replicas)
 	s.cache.Put(req.Key, req.Value)
 	w.WriteHeader(http.StatusOK)
 }
-
-// HandleDeleteReplicate handles internal delete replication requests from the Primary
 func (s *Server) HandleDeleteReplicate(w http.ResponseWriter, r *http.Request) {
 	var req DeleteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -259,21 +231,17 @@ func (s *Server) HandleDeleteReplicate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// EPOCH CHECK (Critical Fencing)
 	localEpoch := s.stateMgr.GetEpoch()
 	if req.Epoch < localEpoch {
-		http.Error(w, "Primary is Stale", http.StatusPreconditionFailed) // 412
+		http.Error(w, "Primary is Stale", http.StatusPreconditionFailed)
 		return
 	}
 
-	// DELETE (direct from cache, no ownership check for replicas)
 	s.cache.Delete(req.Key)
 	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) HandleExport(w http.ResponseWriter, r *http.Request) {
-	// TODO: Add authorization check (e.g., token from Controller)
-
 	shardIDStr := r.URL.Query().Get("shard")
 	if shardIDStr == "" {
 		http.Error(w, "Missing shard parameter", http.StatusBadRequest)
@@ -301,10 +269,7 @@ func (s *Server) HandleExport(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// HandleImport accepts a stream of keys and inserts them into the cache
 func (s *Server) HandleImport(w http.ResponseWriter, r *http.Request) {
-	// TODO: Add authorization check
-
 	var data map[string]string
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -315,7 +280,6 @@ func (s *Server) HandleImport(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// HandlePull triggers this node to pull data from a source node
 func (s *Server) HandlePull(w http.ResponseWriter, r *http.Request) {
 	sourceURL := r.URL.Query().Get("source")
 	shardIDStr := r.URL.Query().Get("shard")
@@ -325,7 +289,6 @@ func (s *Server) HandlePull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Call Export on Source
 	resp, err := s.httpClient.Get(fmt.Sprintf("%s/internal/export?shard=%s", sourceURL, shardIDStr))
 	if err != nil {
 		slog.Error("Failed to pull data", "source", sourceURL, "err", err)
@@ -340,7 +303,6 @@ func (s *Server) HandlePull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Decode and Import
 	var data map[string]string
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		slog.Error("Failed to decode pulled data", "err", err)

@@ -24,7 +24,6 @@ type LeaseManager struct {
 	stateMgr      *StateManager
 }
 
-// NewLeaseManager creates a new LeaseManager
 func NewLeaseManager(controllerURL, nodeID string, duration time.Duration, stateMgr *StateManager) *LeaseManager {
 	return &LeaseManager{
 		duration:      duration,
@@ -35,9 +34,7 @@ func NewLeaseManager(controllerURL, nodeID string, duration time.Duration, state
 	}
 }
 
-// Start runs the background renewal loop
 func (l *LeaseManager) Start() {
-	// Renew immediately on start
 	if l.renew() {
 		l.extendLease()
 	}
@@ -62,9 +59,7 @@ func (l *LeaseManager) extendLease() {
 	log.Printf("Lease renewed. Valid until: %s", l.validUntil.Format(time.RFC3339))
 }
 
-// renew sends a heartbeat to the Controller
 func (l *LeaseManager) renew() bool {
-	// Payload for heartbeat - simple map for now as per prompt, or we could use a struct
 	payload := map[string]string{"node_id": l.nodeID}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -85,7 +80,6 @@ func (l *LeaseManager) renew() bool {
 		return false
 	}
 
-	// Parse response for Epoch
 	var response struct {
 		Epoch uint64 `json:"epoch"`
 	}
@@ -96,7 +90,6 @@ func (l *LeaseManager) renew() bool {
 		return true
 	}
 
-	// Check Epoch
 	localEpoch := l.stateMgr.GetEpoch()
 	if response.Epoch > localEpoch {
 		log.Printf("Local Epoch %d < Remote Epoch %d. Fetching topology...", localEpoch, response.Epoch)
@@ -136,7 +129,6 @@ func (l *LeaseManager) fetchTopology() {
 	log.Printf("Updated topology to Epoch %d", config.Epoch)
 }
 
-// IsActive checks if the current lease is valid
 func (l *LeaseManager) IsActive() bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

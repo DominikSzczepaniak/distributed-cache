@@ -27,7 +27,6 @@ func main() {
 	fmt.Println("=== Go RPS Benchmark (connection pooling) ===")
 	fmt.Printf("Workers: %d, Duration: %v\n\n", workers, duration)
 
-	// HTTP client with connection pooling
 	client := &http.Client{
 		Transport: &http.Transport{
 			MaxIdleConns:        200,
@@ -37,7 +36,6 @@ func main() {
 		Timeout: 5 * time.Second,
 	}
 
-	// Wait for datanode
 	fmt.Println("Waiting for datanode...")
 	for i := 0; i < 30; i++ {
 		resp, err := client.Get(datanodeURL + "/health")
@@ -49,7 +47,6 @@ func main() {
 	}
 	fmt.Println("Datanode ready!")
 
-	// Warmup
 	fmt.Println("Warmup...")
 	for i := 0; i < 100; i++ {
 		doPut(client, fmt.Sprintf("warmup-%d", i), "val")
@@ -63,7 +60,6 @@ func main() {
 
 	start := time.Now()
 
-	// Start workers
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
 		go func(id int) {
@@ -79,7 +75,6 @@ func main() {
 		}(w)
 	}
 
-	// Run for duration
 	time.Sleep(duration)
 	atomic.StoreInt32(&stop, 1)
 	wg.Wait()

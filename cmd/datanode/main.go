@@ -22,10 +22,8 @@ type DataNodeConfig struct {
 }
 
 func main() {
-	// 1. Parse Configuration
 	config := parseConfig()
 
-	// 2. Validate Configuration
 	if config.ControllerURL == "" {
 		log.Fatal("Error: CONTROLLER_URL is required")
 	}
@@ -35,24 +33,15 @@ func main() {
 
 	log.Printf("Starting DataNode with Config: %+v", config)
 
-	// 3. Initialize State Manager
 	stateMgr := datanode.NewStateManager()
 
-	// 4. Start Lease Manager
 	leaseMgr := datanode.NewLeaseManager(config.ControllerURL, config.NodeID, config.LeaseDuration, stateMgr)
 	leaseMgr.Start()
 
-	// 5. Initialize Cache and Server
 	c := cache.NewConcurrentMapCache()
 	srv := datanode.NewServer(c, leaseMgr, stateMgr, config.NodeID)
 
-	// 6. Start HTTP Server
-	// We assume NodeID contains the port (e.g., "10.0.1.5:9000") or we just listen on the port part.
-	// For simplicity, if NodeID is just an address, we listen on it.
-	// In a real scenario, we might want to separate BindAddress from NodeID (public address).
-	// But for this stage, we'll use NodeID as the bind address if it looks like one,
-	// or just take a separate bind flag if needed.
-	// The prompt examples "10.0.1.5:9000" suggest NodeID is the address.
+	// NodeID contains the port (e.g., "10.0.1.5:9000") - we listen on it
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -108,21 +97,17 @@ func main() {
 		}
 	})
 
-	// Extract port from NodeID
 	_, port, err := net.SplitHostPort(config.NodeID)
 	if err != nil {
-		// Fallback if no port found (though validation should catch this)
 		port = "9000"
 	}
 
 	server := &http.Server{
-		Addr:    ":" + port, // Bind to all interfaces
+		Addr:    ":" + port,
 		Handler: mux,
 	}
 
-	// 6. Register with Controller
 	go func() {
-		// Wait for server to start
 		time.Sleep(1 * time.Second)
 		registerWithController(config)
 	}()
@@ -134,10 +119,7 @@ func main() {
 }
 
 func registerWithController(config DataNodeConfig) {
-	// Simple retry loop
 	for {
-		// Construct JSON body
-		// Address: we assume NodeID is the address for now as per config
 		body := fmt.Sprintf(`{"node_id": "%s", "address": "%s"}`, config.NodeID, config.NodeID)
 		resp, err := http.Post(config.ControllerURL+"/cluster/register", "application/json", bytes.NewBuffer([]byte(body)))
 		if err == nil && resp.StatusCode == http.StatusOK {
@@ -160,13 +142,11 @@ func registerWithController(config DataNodeConfig) {
 func parseConfig() DataNodeConfig {
 	var config DataNodeConfig
 
-	// Flags
 	flag.StringVar(&config.ControllerURL, "controller", "", "URL of the Controller (Raft Leader)")
 	flag.StringVar(&config.NodeID, "node-id", "", "Unique ID for this node (e.g., ip:port)")
 	flag.DurationVar(&config.LeaseDuration, "lease", 5*time.Second, "Lease duration")
 	flag.Parse()
 
-	// Environment Variables (override flags if set, or serve as defaults)
 	if url := os.Getenv("CONTROLLER_URL"); url != "" {
 		config.ControllerURL = url
 	}

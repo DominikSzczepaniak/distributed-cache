@@ -5,23 +5,17 @@ import (
 	"time"
 )
 
-// Rebalance handles node failure by updating the cluster configuration.
-// It returns a new ClusterConfig with the updated topology.
 func Rebalance(config *ClusterConfig, deadNodeID string) *ClusterConfig {
-	// Deep copy the config to avoid mutating the original
 	newConfig := deepCopyConfig(config)
 
-	// Increment Epoch
 	newConfig.Epoch++
 
-	// Mark node as Dead
 	if status, exists := newConfig.Nodes[deadNodeID]; exists {
 		status.Status = StatusDead
-		status.LastHeartbeat = time.Time{} // Clear heartbeat
+		status.LastHeartbeat = time.Time{}
 		newConfig.Nodes[deadNodeID] = status
 	}
 
-	// Reassign Shards
 	for i, shard := range newConfig.Shards {
 		if shard.PrimaryID == deadNodeID {
 			if len(shard.ReplicaIDs) > 0 {
@@ -59,7 +53,6 @@ func Rebalance(config *ClusterConfig, deadNodeID string) *ClusterConfig {
 	return newConfig
 }
 
-// deepCopyConfig creates a deep copy of ClusterConfig
 func deepCopyConfig(config *ClusterConfig) *ClusterConfig {
 	data, _ := json.Marshal(config)
 	var newConfig ClusterConfig

@@ -35,7 +35,6 @@ func (c *ConcurrentMapCache) Put(key, value string) {
 	c.mu.Unlock()
 }
 
-// ExportShard returns all key-value pairs that belong to the specified shardID
 func (c *ConcurrentMapCache) ExportShard(shardID int, totalShards int) map[string]string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -56,7 +55,6 @@ func (c *ConcurrentMapCache) ExportShard(shardID int, totalShards int) map[strin
 	return result
 }
 
-// Import bulk inserts key-value pairs into the cache
 func (c *ConcurrentMapCache) Import(data map[string]string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -12,7 +12,7 @@ import (
 
 func runCacheOperations(b *testing.B, cache cachemodel.Cache, numKeys int, rng *rand.Rand) {
 	for i := 0; i < numKeys; i++ {
-		cache.Put(strconv.Itoa(i), strconv.Itoa(i*10)) // Converted to string keys/values
+		cache.Put(strconv.Itoa(i), strconv.Itoa(i*10))
 	}
 
 	b.ResetTimer()
@@ -25,19 +25,17 @@ func runCacheOperations(b *testing.B, cache cachemodel.Cache, numKeys int, rng *
 		value := rng.Intn(1000000)
 
 		if opChoice < 70 {
-			_ = cache.Get(strconv.Itoa(key)) // Converted to string key
+			_ = cache.Get(strconv.Itoa(key))
 		} else if opChoice < 90 {
-			cache.Put(strconv.Itoa(key), strconv.Itoa(value)) // Converted to string key/value
+			cache.Put(strconv.Itoa(key), strconv.Itoa(value))
 		} else {
-			cache.Delete(strconv.Itoa(key)) // Converted to string key
+			cache.Delete(strconv.Itoa(key))
 		}
 	}
 }
 
-// New benchmark functions added as per instruction
 func BenchmarkConcurrentMapCache_Get(b *testing.B) {
 	cache := cache.NewConcurrentMapCache()
-	// Pre-populate
 	for i := 0; i < 1000; i++ {
 		cache.Put(strconv.Itoa(i), strconv.Itoa(i))
 	}
@@ -67,9 +65,9 @@ func BenchmarkConcurrentMapCache_Mixed(b *testing.B) {
 
 func BenchmarkCacheComparison(b *testing.B) {
 	const (
-		numKeys         = 1000000 // number of distinct keys the cache will operate on
+		numKeys         = 1000000
 		rngSeed   int64 = 42
-		numShards       = 32 // number of shards for ShardedCache
+		numShards       = 32
 	)
 
 	b.Run("BasicMapCache_SingleThreaded", func(b *testing.B) {

@@ -14,7 +14,6 @@ import (
 )
 
 func main() {
-	// Logger setup
 	opts := &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}
@@ -23,23 +22,14 @@ func main() {
 
 	slog.Info("Starting Controller...")
 
-	// Load Config
 	cfg := raft.LoadConfig()
-
-	// Initialize Application
 	app := controller.NewControllerApp()
-
-	// Initialize Raft
 	r := raft.NewRaft(app, cfg)
 
-	// Initialize Controller
 	// Grace period 5s to match lease duration in docker-compose
 	ctrl := controller.NewController(r, 5*time.Second)
 
-	// Link App to Controller
 	app.SetController(ctrl)
-
-	// Start HTTP API
 	apiAddr := os.Getenv("API_ADDR")
 	if apiAddr == "" {
 		apiAddr = ":8080"
@@ -47,14 +37,11 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// Heartbeat endpoint
 	mux.HandleFunc("/cluster/heartbeat", func(w http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		// Parse NodeID from request body or query param?
-		// Simple implementation: Expect {"node_id": "..."}
 		var body struct {
 			NodeID string `json:"node_id"`
 		}
@@ -65,7 +52,6 @@ func main() {
 
 		ctrl.Heartbeat(body.NodeID)
 
-		// Return current epoch
 		config := ctrl.GetConfig()
 		resp := map[string]interface{}{
 			"epoch": config.Epoch,
@@ -73,7 +59,6 @@ func main() {
 		json.NewEncoder(w).Encode(resp)
 	})
 
-	// Register endpoint
 	mux.HandleFunc("/cluster/register", func(w http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -100,13 +85,11 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// Topology endpoint
 	mux.HandleFunc("/topology", func(w http.ResponseWriter, req *http.Request) {
 		config := ctrl.GetConfig()
 		json.NewEncoder(w).Encode(config)
 	})
 
-	// Debug endpoint to set topology
 	mux.HandleFunc("/debug/config", func(w http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

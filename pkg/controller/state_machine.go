@@ -102,5 +102,5 @@ func (a *ControllerApp) RestoreFromSnapshot(data []byte) (error, int) {
 }
 
 func (a *ControllerApp) GetValue(key int) int {
-	return 0 // Not used for Controller
+	return 0
 }

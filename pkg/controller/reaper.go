@@ -9,7 +9,7 @@ type Reaper struct {
 	mu          sync.RWMutex
 	lastSeen    map[string]time.Time
 	gracePeriod time.Duration
-	onDeath     func(nodeID string) // Callback to trigger failover
+	onDeath     func(nodeID string)
 }
 
 func NewReaper(gracePeriod time.Duration, onDeath func(nodeID string)) *Reaper {
