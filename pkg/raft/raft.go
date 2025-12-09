@@ -173,7 +173,7 @@ func (r *Raft) Broadcast(message Message) {
 	reps := r.replicators
 	r.mu.Unlock()
 
-	go r.logSaver.SaveValues() //TODO TEST THIS ON CRASHES - IMPORTANT
+	go r.logSaver.SaveValues()
 
 	for i := 0; i < totalNodes; i++ {
 		if i == r.id {
@@ -245,7 +245,6 @@ func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 		}
 	}
 	if leaderCommit > r.commitedLength {
-		//TODO check correctness
 		maxCommit := len(r.log) + r.snapshotter.lastIndex
 		if leaderCommit > maxCommit {
 			leaderCommit = maxCommit
