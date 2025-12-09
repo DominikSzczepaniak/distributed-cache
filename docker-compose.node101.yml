@@ -1,0 +1,110 @@
+# Docker Compose for Computer 192.168.1.101
+# Components: Controller 1, Controller 2, DataNode 3, DataNode 4
+#
+# IMPORTANT: Controller 1 uses Raft port 9000, Controller 2 uses Raft port 9001.
+# The controller derives its listen port from RAFT_ADDRS[RAFT_ID].
+#
+# Before running, ensure the other computer (192.168.1.100) is also starting its containers.
+
+services:
+  controller-1:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    container_name: controller-1
+    hostname: controller-1
+    environment:
+      # Raft configuration
+      RAFT_ID: "1"
+      TOTAL_NODES: "3"
+
+      # Controller 0 on 192.168.1.100, Controllers 1 & 2 on this machine
+      RAFT_ADDRS: "192.168.1.100:9000,192.168.1.101:9000,192.168.1.101:9001"
+      FILENAME: "/data/node1"
+      SNAPSHOT_THRESHOLD: "100"
+
+      RAFT_INITIAL_BACKOFF: "1s"
+      RAFT_MAX_BACKOFF: "30s"
+      RAFT_BACKOFF_MULTIPLIER: "2.0"
+      RAFT_MAX_RETRIES: "-1"
+      RAFT_CONN_TIMEOUT: "5s"
+      RAFT_HEALTH_CHECK_INTERVAL: "10s"
+
+      API_ADDR: ":8080"
+
+      API_RETRY_MAX_ATTEMPTS: "3"
+      API_RETRY_INITIAL_DELAY: "100ms"
+      API_RETRY_MAX_DELAY: "5s"
+      API_IDEMPOTENCY_TTL: "5m"
+    volumes:
+      - ./data/node1:/data
+    ports:
+      - "9000:9000"   # Raft port for controller-1
+      - "8080:8080"   # API port for controller-1
+    restart: unless-stopped
+
+  controller-2:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    container_name: controller-2
+    hostname: controller-2
+    environment:
+      RAFT_ID: "2"
+      TOTAL_NODES: "3"
+      RAFT_ADDRS: "192.168.1.100:9000,192.168.1.101:9000,192.168.1.101:9001"
+      FILENAME: "/data/node2"
+      SNAPSHOT_THRESHOLD: "100"
+
+      RAFT_INITIAL_BACKOFF: "1s"
+      RAFT_MAX_BACKOFF: "30s"
+      RAFT_BACKOFF_MULTIPLIER: "2.0"
+      RAFT_MAX_RETRIES: "-1"
+      RAFT_CONN_TIMEOUT: "5s"
+      RAFT_HEALTH_CHECK_INTERVAL: "10s"
+
+      # HTTP API configuration - port 8081 (different from controller-1)
+      API_ADDR: ":8081"
+
+      API_RETRY_MAX_ATTEMPTS: "3"
+      API_RETRY_INITIAL_DELAY: "100ms"
+      API_RETRY_MAX_DELAY: "5s"
+      API_IDEMPOTENCY_TTL: "5m"
+    volumes:
+      - ./data/node2:/data
+    ports:
+      - "9001:9001"
+      - "8081:8081"
+    restart: unless-stopped
+
+  datanode-3:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.datanode
+    container_name: datanode-3
+    hostname: datanode-3
+    environment:
+      - CONTROLLER_URL=http://192.168.1.101:8080
+      - NODE_ID=192.168.1.101:9010
+      - LEASE_DURATION=5s
+    depends_on:
+      - controller-1
+    ports:
+      - "9010:9010"
+    restart: unless-stopped
+
+  datanode-4:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.datanode
+    container_name: datanode-4
+    hostname: datanode-4
+    environment:
+      - CONTROLLER_URL=http://192.168.1.101:8080
+      - NODE_ID=192.168.1.101:9011
+      - LEASE_DURATION=5s
+    depends_on:
+      - controller-1
+    ports:
+      - "9011:9011"
+    restart: unless-stopped

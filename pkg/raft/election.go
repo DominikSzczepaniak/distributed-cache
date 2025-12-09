@@ -47,9 +47,12 @@ func (re *Elector) electionTimerLoop() {
 	timer := time.NewTimer(re.nextTimeout())
 	defer timer.Stop()
 
+	slog.Info(fmt.Sprintf("Node %d: Election timer loop started", re.parent.id))
+
 	for {
 		select {
 		case <-re.resetTimerCh:
+			slog.Debug(fmt.Sprintf("Node %d: Election timer reset", re.parent.id))
 			if !timer.Stop() {
 				select {
 				case <-timer.C:
@@ -59,10 +62,13 @@ func (re *Elector) electionTimerLoop() {
 			timer.Reset(re.nextTimeout())
 
 		case <-timer.C:
+			slog.Debug(fmt.Sprintf("Node %d: Election timer fired, checking if should start election", re.parent.id))
 			re.parent.mu.RLock()
 			isLeader := re.parent.currentRole == Leader
 			isSnapshotWriting := re.parent.snapshotter.installingSnapshot
+			role := re.parent.currentRole
 			re.parent.mu.RUnlock()
+			slog.Debug(fmt.Sprintf("Node %d: Election timer check complete (role=%s, isLeader=%t, isSnapshotWriting=%t)", re.parent.id, role, isLeader, isSnapshotWriting))
 			if !isLeader && !isSnapshotWriting {
 				slog.Info(fmt.Sprintf("Starting election for node %d, because isLeader is %t and snapshot is writing is %t", re.parent.id, isLeader, isSnapshotWriting))
 				re.parent.startElection()
@@ -70,6 +76,7 @@ func (re *Elector) electionTimerLoop() {
 			timer.Reset(re.nextTimeout())
 
 		case <-re.cancelTimerCh:
+			slog.Info(fmt.Sprintf("Node %d: Election timer loop cancelled", re.parent.id))
 			return
 		}
 	}
@@ -123,7 +130,7 @@ func (r *Raft) sendVoteRequest(data VoteRequestData, nodeId int) {
 	}
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
 		resp, err := peer.VoteRequest(ctx, &raftpb.VoteRequestArgs{

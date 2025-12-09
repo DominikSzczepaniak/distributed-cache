@@ -24,9 +24,9 @@ func TestDataSaver_SaveLoad(t *testing.T) {
 			votedFor:  1,
 			commitLen: 0,
 			logs: []LogEntry{
-				{Term: 1, Message: Message{MsgType: put, Key: 1, Value: intPtr(42)}},
-				{Term: 2, Message: Message{MsgType: get, Key: 2, Value: nil}},
-				{Term: 2, Message: Message{MsgType: delete, Key: 3, Value: nil}},
+				{Term: 1, Message: Message{MsgType: PutMsg, Key: 1, Value: intPtr(42)}},
+				{Term: 2, Message: Message{MsgType: GetMsg, Key: 2, Value: nil}},
+				{Term: 2, Message: Message{MsgType: DeleteMsg, Key: 3, Value: nil}},
 			},
 		},
 	}
@@ -189,7 +189,7 @@ func TestDataSaver_InvalidPath(t *testing.T) {
 	node.votedFor = 0
 	node.commitedLength = 0
 	node.log = []LogEntry{
-		{Term: 1, Message: Message{MsgType: put, Key: 1, Value: intPtr(42)}},
+		{Term: 1, Message: Message{MsgType: PutMsg, Key: 1, Value: intPtr(42)}},
 	}
 	node.mu.Unlock()
 

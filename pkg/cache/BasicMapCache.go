@@ -1,23 +1,23 @@
 package cache
 
 type BasicMapCache struct {
-	data map[int]int
+	data map[string]string
 }
 
 func NewBasicMapCache() *BasicMapCache {
 	return &BasicMapCache{
-		data: make(map[int]int),
+		data: make(map[string]string),
 	}
 }
 
-func (c *BasicMapCache) Get(key int) int {
+func (c *BasicMapCache) Get(key string) string {
 	return c.data[key]
 }
 
-func (c *BasicMapCache) Delete(key int) {
+func (c *BasicMapCache) Delete(key string) {
 	delete(c.data, key)
 }
 
-func (c *BasicMapCache) Put(key, value int) {
+func (c *BasicMapCache) Put(key, value string) {
 	c.data[key] = value
 }

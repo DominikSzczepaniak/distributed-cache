@@ -1,13 +1,14 @@
 package cache
 
 import (
+	"hash/fnv"
 	"sync"
 )
 
 const defaultNumShards = 16
 
 type cacheShard struct {
-	data map[int]int
+	data map[string]string
 	mu   sync.RWMutex
 }
 
@@ -25,7 +26,7 @@ func NewShardedCache(numShards int) *ShardedCache {
 	shards := make([]*cacheShard, numShards)
 	for i := 0; i < numShards; i++ {
 		shards[i] = &cacheShard{
-			data: make(map[int]int),
+			data: make(map[string]string),
 		}
 	}
 	return &ShardedCache{
@@ -35,11 +36,13 @@ func NewShardedCache(numShards int) *ShardedCache {
 	}
 }
 
-func (sc *ShardedCache) getShard(key int) *cacheShard {
-	return sc.shards[uint(key)&uint(sc.shardMask)]
+func (sc *ShardedCache) getShard(key string) *cacheShard {
+	h := fnv.New32a()
+	h.Write([]byte(key))
+	return sc.shards[uint(h.Sum32())&uint(sc.shardMask)]
 }
 
-func (sc *ShardedCache) Get(key int) int {
+func (sc *ShardedCache) Get(key string) string {
 	shard := sc.getShard(key)
 	shard.mu.RLock()
 	val := shard.data[key]
@@ -47,14 +50,14 @@ func (sc *ShardedCache) Get(key int) int {
 	return val
 }
 
-func (sc *ShardedCache) Delete(key int) {
+func (sc *ShardedCache) Delete(key string) {
 	shard := sc.getShard(key)
 	shard.mu.Lock()
 	delete(shard.data, key)
 	shard.mu.Unlock()
 }
 
-func (sc *ShardedCache) Put(key, value int) {
+func (sc *ShardedCache) Put(key, value string) {
 	shard := sc.getShard(key)
 	shard.mu.Lock()
 	shard.data[key] = value

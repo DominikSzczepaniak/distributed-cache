@@ -16,9 +16,9 @@ func TestMessageTypeConversion(t *testing.T) {
 		expectedProto raftpb.Message_Type
 		shouldPanic   bool
 	}{
-		{get, raftpb.Message_GET, false},
-		{put, raftpb.Message_PUT, false},
-		{delete, raftpb.Message_DELETE, false},
+		{GetMsg, raftpb.Message_GET, false},
+		{PutMsg, raftpb.Message_PUT, false},
+		{DeleteMsg, raftpb.Message_DELETE, false},
 		{MessageType("X"), 0, true},
 	}
 	for _, tt := range tests {
@@ -38,9 +38,9 @@ func TestMessageCreation(t *testing.T) {
 	t.Parallel()
 	v := 7
 	msgs := []Message{
-		{MsgType: put, Key: 1, Value: &v},
-		{MsgType: get, Key: 2, Value: nil},
-		{MsgType: delete, Key: 3, Value: nil},
+		{MsgType: PutMsg, Key: 1, Value: &v},
+		{MsgType: GetMsg, Key: 2, Value: nil},
+		{MsgType: DeleteMsg, Key: 3, Value: nil},
 	}
 	for _, msg := range msgs {
 		m := msg

@@ -2,33 +2,38 @@ package raft
 
 import "github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 
+type MessageType string
+
+const (
+	GetMsg    MessageType = "GET"
+	PutMsg    MessageType = "PUT"
+	DeleteMsg MessageType = "DELETE"
+
+	CommandMsg MessageType = "COMMAND"
+)
+
 type Message struct {
 	MsgType MessageType
 	Key     int
 	Value   *int
 
-	ResponseChan chan<- BroadcastResponse
+	Data []byte
 
+	ResponseChan     chan<- BroadcastResponse
 	IdempotencyToken string
 	ClientID         string
 }
 
-type MessageType string
-
-const (
-	get    MessageType = "GET"
-	put    MessageType = "PUT"
-	delete MessageType = "DELETE"
-)
-
 func toProtoMsgType(m MessageType) raftpb.Message_Type {
 	switch m {
-	case get:
+	case GetMsg:
 		return raftpb.Message_GET
-	case put:
+	case PutMsg:
 		return raftpb.Message_PUT
-	case delete:
+	case DeleteMsg:
 		return raftpb.Message_DELETE
+	case CommandMsg:
+		return raftpb.Message_COMMAND
 	default:
 		panic("unknown MessageType: " + string(m))
 	}

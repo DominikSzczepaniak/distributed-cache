@@ -10,7 +10,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o raftnode ./cmd/raftnode
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o controller ./cmd/controller
 
 
 
@@ -20,10 +20,10 @@ RUN apk --no-cache add ca-certificates
 
 WORKDIR /app
 
-COPY --from=builder /build/raftnode .
+COPY --from=builder /build/controller .
 
 RUN mkdir -p /data
 
-EXPOSE 9000
+EXPOSE 8080
 
-CMD ["./raftnode"]
+CMD ["./controller"]

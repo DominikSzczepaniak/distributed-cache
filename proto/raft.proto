@@ -6,13 +6,23 @@ import "google/protobuf/empty.proto";
 
 option go_package = "pkg/raft/raftpb";
 
-message Message{
-    enum Type { GET = 0; PUT=1; DELETE = 2;}
+message Message {
+    enum Type { 
+        GET = 0; 
+        PUT = 1; 
+        DELETE = 2;
+        
+        COMMAND = 3;
+    }
     Type type = 1;
+    
     int32 key = 2;
     google.protobuf.Int32Value value = 3;
+    
     string idempotency_token = 4;
     string client_id = 5;
+    
+    bytes command_payload = 6;
 }
 
 message Null {}
@@ -66,7 +76,6 @@ message LogResponse{
     bool success = 4;
 }
 
-
 message InstallSnapshotRequest{
     int32 leaderTerm = 1;
     int32 leaderId = 2;
@@ -81,7 +90,6 @@ message InstallSnapshotResponse{
     int32 term = 1;
 }
 
-
 service Raft{
     rpc Forward (Message) returns (ForwardResponse);
     rpc ForwardGet (GetRequest) returns (GetResponse);
@@ -90,5 +98,3 @@ service Raft{
     rpc Heartbeat (google.protobuf.Empty) returns (google.protobuf.Empty);
     rpc InstallSnapshot(InstallSnapshotRequest) returns (InstallSnapshotResponse);
 }
-
-

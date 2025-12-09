@@ -1,7 +1,7 @@
 package cachemodel
 
 type Cache interface {
-	Get(key int) int
-	Delete(key int)
-	Put(key, value int)
+	Get(key string) string
+	Put(key, value string)
+	Delete(key string)
 }

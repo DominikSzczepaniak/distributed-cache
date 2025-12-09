@@ -50,7 +50,7 @@ func TestSnapshotCreationOnThreshold(t *testing.T) {
 		node.log = append(node.log, LogEntry{
 			Term: 1,
 			Message: Message{
-				MsgType: put,
+				MsgType: PutMsg,
 				Key:     i,
 				Value:   intPtr(i * 10),
 			},
@@ -207,7 +207,7 @@ func TestSnapshotNoOpWhenBelowThreshold(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		node.log = append(node.log, LogEntry{
 			Term:    1,
-			Message: Message{MsgType: put, Key: i, Value: intPtr(i)},
+			Message: Message{MsgType: PutMsg, Key: i, Value: intPtr(i)},
 		})
 	}
 	node.commitedLength = 3
