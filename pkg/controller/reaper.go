@@ -39,8 +39,6 @@ func (r *Reaper) checkLiveness() {
 
 	for id, seen := range r.lastSeen {
 		if time.Since(seen) > r.gracePeriod {
-			// Node is DEAD.
-			// Critical: Remove from map so we don't trigger this twice.
 			delete(r.lastSeen, id)
 			go r.onDeath(id)
 		}

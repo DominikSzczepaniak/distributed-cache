@@ -31,7 +31,6 @@ func NewController(r *raft.Raft, gracePeriod time.Duration) *Controller {
 	return c
 }
 
-// MoveShard orchestrates the migration of a shard from its current primary to a target node
 func (c *Controller) MoveShard(shardID int, targetNodeID string) error {
 	c.mu.Lock()
 	config := c.config

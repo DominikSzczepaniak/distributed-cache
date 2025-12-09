@@ -30,7 +30,6 @@ func TestReaper_CheckLiveness_DeadNode(t *testing.T) {
 		wg.Done()
 	})
 
-	// Manually inject an old timestamp
 	r.mu.Lock()
 	r.lastSeen["node-dead"] = time.Now().Add(-200 * time.Millisecond)
 	r.mu.Unlock()
@@ -40,7 +39,6 @@ func TestReaper_CheckLiveness_DeadNode(t *testing.T) {
 	wg.Wait()
 	assert.Equal(t, "node-dead", deadNode)
 
-	// Verify it's removed
 	r.mu.RLock()
 	_, ok := r.lastSeen["node-dead"]
 	r.mu.RUnlock()

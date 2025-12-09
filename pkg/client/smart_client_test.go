@@ -44,13 +44,11 @@ func TestSmartClient_FetchTopology(t *testing.T) {
 func TestSmartClient_FetchTopology_Failover(t *testing.T) {
 	config := metadata.ClusterConfig{Epoch: 10}
 
-	// First controller fails
 	failServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Error", http.StatusInternalServerError)
 	}))
 	defer failServer.Close()
 
-	// Second controller succeeds
 	goodServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(config)
 	}))
@@ -89,7 +87,6 @@ func TestSmartClient_Route(t *testing.T) {
 	client, err := NewSmartClient([]string{server.URL})
 	require.NoError(t, err)
 
-	// Route a key
 	result, err := client.Route("test-key")
 	require.NoError(t, err)
 
@@ -100,13 +97,12 @@ func TestSmartClient_Route(t *testing.T) {
 }
 
 func TestSmartClient_Put_Success(t *testing.T) {
-	// DataNode mock
 	datanodeMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer datanodeMock.Close()
 
-	datanodeAddr := datanodeMock.URL[7:] // Remove "http://"
+	datanodeAddr := datanodeMock.URL[7:]
 
 	config := metadata.ClusterConfig{
 		Epoch:       1,
@@ -132,7 +128,6 @@ func TestSmartClient_Put_Success(t *testing.T) {
 }
 
 func TestSmartClient_Get_Success(t *testing.T) {
-	// DataNode mock
 	datanodeMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("test-value"))
 	}))

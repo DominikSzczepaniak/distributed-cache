@@ -1,32 +1,21 @@
 #!/bin/bash
 
-# Strong Consistency Test for Distributed Cache Cluster
-# This test verifies linearizability and consistency properties using curl to interact with datanodes.
-# 
-# Tests:
-# 1. Read-after-write consistency: Written data is immediately readable
-# 2. All datanodes see the same committed state (via replication)
-# 3. Data persists across simulated failures
-# 4. Sequential writes to the same key converge correctly
-
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_DIR"
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_test() { echo -e "${GREEN}[TEST]${NC} $1"; }
 
-# Cleanup function
 cleanup() {
     log_info "Cleaning up..."
     docker-compose down -v 2>/dev/null || true
@@ -37,7 +26,6 @@ echo "=============================================="
 echo "    Strong Consistency Test Suite"
 echo "=============================================="
 
-# --- Setup ---
 log_info "Cleaning up any existing containers..."
 docker-compose down -v 2>/dev/null || true
 
@@ -47,22 +35,17 @@ mkdir -p data/node0 data/node1 data/node2
 
 log_info "Building and starting cluster..."
 docker-compose up -d --build 2>&1 | tail -15
-sleep 15  # Wait for cluster to stabilize and datanodes to register
+sleep 15
 
-# --- Get DataNode Ports ---
-# datanode-1 exposes 9010, datanode-2 exposes 9011
 DATANODE1_URL="http://localhost:9010"
 DATANODE2_URL="http://localhost:9011"
 CONTROLLER_URL="http://localhost:8080"
 
-# Configure test topology - datanode-1 is primary for all shards
 configure_topology() {
     log_info "Configuring test topology (datanode-1 as primary)..."
     
-    # Wait for cluster to be ready
     sleep 5
     
-    # Set a simple topology: 1 shard, datanode-1 is primary, datanode-2 is replica
     curl -s -X POST -H "Content-Type: application/json" \
         -d '{
             "Epoch": 100,
@@ -77,16 +60,11 @@ configure_topology() {
         }' \
         "$CONTROLLER_URL/debug/config" >/dev/null 2>&1
     
-    # Wait for datanodes to pick up new topology via heartbeat
     sleep 5
     log_info "Topology configured"
 }
 
-# --- Helper Functions ---
 get_current_epoch() {
-    # The epoch check on datanodes is: req.Epoch < localEpoch (reject if client epoch is lower)
-    # So we can use a high epoch value that will always pass
-    # This is safe because the check only rejects stale/outdated epochs
     echo "999999"
 }
 
@@ -96,7 +74,6 @@ write_to_datanode() {
     local value=$3
     local epoch=${4:-1}
     
-    # Ensure epoch is a number
     if [ -z "$epoch" ]; then
         epoch=1
     fi
@@ -114,7 +91,6 @@ read_from_datanode() {
 }
 
 
-# Wait for datanodes to be ready
 log_info "Waiting for datanodes to be ready..."
 for i in {1..30}; do
     if curl -s "$DATANODE1_URL/health" >/dev/null 2>&1; then
@@ -132,10 +108,8 @@ for i in {1..30}; do
     sleep 1
 done
 
-# Configure test topology - datanode-1 as primary, datanode-2 as replica
 configure_topology
 
-# Get epoch for writes
 EPOCH=$(get_current_epoch)
 log_info "Using epoch: $EPOCH"
 
@@ -148,7 +122,6 @@ log_info "Writing key 'test-key-1' with value 'hello-world' to datanode-1..."
 WRITE_RESULT=$(write_to_datanode "$DATANODE1_URL" "test-key-1" "hello-world" "$EPOCH")
 log_info "Write result: $WRITE_RESULT"
 
-# Check if write was successful (200 OK or empty response means success)
 if echo "$WRITE_RESULT" | grep -qi "error\|fail\|unavailable\|stale\|Primary\|Fenced"; then
     log_error "Write failed: $WRITE_RESULT"
     exit 1
@@ -156,7 +129,7 @@ fi
 
 
 log_info "Immediately reading back 'test-key-1' from datanode-1..."
-sleep 1  # Small delay for any async processing
+sleep 1
 READ_RESULT=$(read_from_datanode "$DATANODE1_URL" "test-key-1")
 
 if echo "$READ_RESULT" | grep -q "hello-world"; then
@@ -223,22 +196,18 @@ fi
 log_test "TEST 4: Controller Registration via Raft"
 log_info "Registering a test node through Raft consensus..."
 
-# This tests the Raft consensus path
 REG_RESULT=$(curl -s -X POST -H "Content-Type: application/json" \
     -d '{"node_id": "test-node-9999:9000", "address": "test-node-9999:9000"}' \
     "$CONTROLLER_URL/cluster/register" 2>&1)
 
 if echo "$REG_RESULT" | grep -qi "error"; then
-    # Already registered or actual error - check topology
     log_warn "Registration returned: $REG_RESULT"
 fi
 
-# Verify the node appears in topology (on any controller)
 sleep 2
 TOPOLOGY=$(curl -s "$CONTROLLER_URL/topology" 2>/dev/null)
 log_info "Checking topology for test-node..."
 
-# The registration goes through Raft, so all controllers should see it
 echo -e "${GREEN}✓ TEST 4 PASSED: Registration request processed${NC}"
 
 # ============================================
@@ -267,7 +236,6 @@ log_info "Writing durable-key before restart..."
 write_to_datanode "$DATANODE1_URL" "durable-key" "durable-value" "$EPOCH" >/dev/null
 sleep 2
 
-# Verify it's written
 READ_BEFORE=$(read_from_datanode "$DATANODE1_URL" "durable-key")
 if ! echo "$READ_BEFORE" | grep -q "durable-value"; then
     log_error "Write before restart failed"
@@ -276,7 +244,7 @@ fi
 
 log_info "Restarting datanode-1..."
 docker restart datanode-1
-sleep 10  # Wait for recovery and lease renewal
+sleep 10
 
 log_info "Reading durable-key after restart..."
 READ_AFTER=$(read_from_datanode "$DATANODE1_URL" "durable-key")
@@ -294,7 +262,6 @@ fi
 log_test "TEST 7: Rapid Sequential Writes"
 log_info "Performing 20 rapid sequential writes..."
 
-# Refresh epoch in case it changed
 EPOCH=$(get_current_epoch)
 
 START_TIME=$(date +%s)
@@ -308,7 +275,6 @@ log_info "Wrote 20 keys in ${ELAPSED}s"
 
 sleep 2
 
-# Verify all keys exist
 FOUND=0
 for i in $(seq 1 20); do
     if read_from_datanode "$DATANODE1_URL" "rapid-$i" 2>&1 | grep -q "rapid-val-$i"; then
@@ -329,13 +295,9 @@ fi
 log_test "TEST 8: Cross-DataNode Consistency"
 log_info "Writing to datanode-1, checking if datanode-2 replica sees it..."
 
-# This tests that writes are replicated between datanodes
-# Note: This depends on how shards are assigned and if replication is configured
-
 write_to_datanode "$DATANODE1_URL" "cross-node-key" "cross-node-value" "$EPOCH" >/dev/null
 sleep 3
 
-# Try to read from datanode-2 (may fail if different shard)
 READ_DN2=$(read_from_datanode "$DATANODE2_URL" "cross-node-key" 2>&1)
 if echo "$READ_DN2" | grep -q "cross-node-value"; then
     log_info "Datanode-2 has the replicated value"

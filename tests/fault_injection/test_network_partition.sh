@@ -44,7 +44,6 @@ initial_leader=$(find_leader)
 
 echo "--- 🔌 Isolating leader '$initial_leader' from network '$NETWORK_NAME' ---"
 
-# Count current leader elections before partition
 LEADER_COUNT_BEFORE=$(docker-compose logs 2>&1 | grep -c "became leader" || echo "0")
 echo "Leader elections before partition: $LEADER_COUNT_BEFORE"
 
@@ -57,12 +56,10 @@ for i in {1..30}; do
     LEADER_COUNT_NOW=$(docker-compose logs 2>&1 | grep -c "became leader" || echo "0")
     
     if [ "$LEADER_COUNT_NOW" -gt "$LEADER_COUNT_BEFORE" ]; then
-        # A new leader was elected! Find out which node (excluding the isolated one)
         for node in "${CONTROLLERS[@]}"; do
             if [ "$node" == "$initial_leader" ]; then
                 continue
             fi
-            # Check if this node has a "became leader" message (searching ALL logs, not just tail)
             if docker-compose logs "$node" 2>&1 | grep -q "became leader"; then
                 NEW_LEADER="$node"
                 echo "Found new leader: $NEW_LEADER" >&2
@@ -85,13 +82,11 @@ echo "--- ✅ New leader found: $NEW_LEADER ---"
 
 echo "--- ✍️  Registering 'partition-test-node' to new leader to change Raft state ---"
 
-# Get port for new leader
 PORT="8080"
 if [ "$NEW_LEADER" == "controller-1" ]; then PORT="8081"; fi
 if [ "$NEW_LEADER" == "controller-2" ]; then PORT="8082"; fi
 
 echo "Attempting to register to $NEW_LEADER:$PORT..."
-# Try registration with retries
 REGISTERED=false
 for attempt in {1..5}; do
     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 -X POST -H "Content-Type: application/json" \
@@ -122,7 +117,6 @@ echo "Waiting for state reconciliation (30s)..."
 sleep 30
 
 echo "--- 📖 Verifying state on original leader '$initial_leader' ---"
-# Determine port of initial leader
 LEADER_PORT="8080"
 if [ "$initial_leader" == "controller-1" ]; then LEADER_PORT="8081"; fi
 if [ "$initial_leader" == "controller-2" ]; then LEADER_PORT="8082"; fi

@@ -1,8 +1,5 @@
 #!/bin/bash
 
-# Runner script for strong consistency test
-# Captures output to a log file and reports pass/fail
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="./consistency_test_result.log"
 

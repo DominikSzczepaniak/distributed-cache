@@ -1,6 +1,5 @@
 #!/bin/bash
 
-# Function to check if docker is running
 check_docker() {
     if ! docker info > /dev/null 2>&1; then
         echo "Error: Docker is not running. Please start Docker."
@@ -8,13 +7,11 @@ check_docker() {
     fi
 }
 
-# Function to build binaries
 build_binaries() {
     echo "Building raftcli (Linux)..."
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o raftcli-linux ./cmd/raftcli
 }
 
-# Function to start cluster
 start_cluster() {
     echo "Starting Controllers and DataNode 1..."
     docker-compose up -d --build controller-0 controller-1 controller-2 datanode-1
@@ -23,7 +20,6 @@ start_cluster() {
     echo "Cluster ready."
 }
 
-# Function to add a node
 add_node() {
     echo "Available nodes to add: datanode-2, datanode-3, datanode-4, datanode-5"
     read -p "Enter node name to add (e.g., datanode-2): " node_name
@@ -36,7 +32,6 @@ add_node() {
     fi
 }
 
-# Function to remove a node
 remove_node() {
     read -p "Enter node name to remove (e.g., datanode-2): " node_name
     if [[ "$node_name" =~ ^datanode-[1-5]$ ]]; then
@@ -48,11 +43,8 @@ remove_node() {
     fi
 }
 
-# Function to run CLI
 run_cli() {
     echo "Starting CLI (inside Docker network)..."
-    # We run the Linux binary inside a temporary Alpine container attached to the raft network.
-    # This allows it to resolve 'datanode-X' hostnames.
     docker run -it --rm \
         --network raft-cluster \
         -v "$(pwd)/raftcli-linux":/usr/local/bin/raftcli \
@@ -60,7 +52,6 @@ run_cli() {
         /usr/local/bin/raftcli controller-0:8080,controller-1:8080,controller-2:8080
 }
 
-# Main Menu
 while true; do
     echo ""
     echo "=== Distributed Cache Manager ==="

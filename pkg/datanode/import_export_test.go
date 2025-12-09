@@ -14,17 +14,14 @@ import (
 )
 
 func TestServer_ImportExport(t *testing.T) {
-	// Setup
 	c := cache.NewConcurrentMapCache()
 	stateMgr := NewStateManager()
 	leaseMgr := NewLeaseManager("http://controller", "node1", 5*time.Second, stateMgr)
 	server := NewServer(c, leaseMgr, stateMgr, "node1")
 
-	// Mock Config
 	config := metadata.NewClusterConfig(10)
 	stateMgr.Update(config)
 
-	// Test Import
 	t.Run("HandleImport", func(t *testing.T) {
 		data := map[string]string{
 			"importKey": "importVal",
@@ -44,10 +41,7 @@ func TestServer_ImportExport(t *testing.T) {
 		}
 	})
 
-	// Test Export
 	t.Run("HandleExport", func(t *testing.T) {
-		// We know "importKey" is in the cache now.
-		// We iterate through all shards to find it
 		found := false
 		for i := 0; i < 10; i++ {
 			url := fmt.Sprintf("/internal/export?shard=%d", i)

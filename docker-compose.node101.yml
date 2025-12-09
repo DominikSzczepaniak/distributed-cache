@@ -4,13 +4,7 @@
 # IMPORTANT: Controller 1 uses Raft port 9000, Controller 2 uses Raft port 9001.
 # The controller derives its listen port from RAFT_ADDRS[RAFT_ID].
 #
-# Usage:
-#   docker-compose -f docker-compose.node101.yml up --build
-#
 # Before running, ensure the other computer (192.168.1.100) is also starting its containers.
-# The topology-init service on node100 will configure the cluster once all nodes are up.
-
-version: '3.8'
 
 services:
   controller-1:
@@ -23,12 +17,12 @@ services:
       # Raft configuration
       RAFT_ID: "1"
       TOTAL_NODES: "3"
+
       # Controller 0 on 192.168.1.100, Controllers 1 & 2 on this machine
       RAFT_ADDRS: "192.168.1.100:9000,192.168.1.101:9000,192.168.1.101:9001"
       FILENAME: "/data/node1"
       SNAPSHOT_THRESHOLD: "100"
 
-      # Connection management
       RAFT_INITIAL_BACKOFF: "1s"
       RAFT_MAX_BACKOFF: "30s"
       RAFT_BACKOFF_MULTIPLIER: "2.0"
@@ -36,10 +30,8 @@ services:
       RAFT_CONN_TIMEOUT: "5s"
       RAFT_HEALTH_CHECK_INTERVAL: "10s"
 
-      # HTTP API configuration - port 8080
       API_ADDR: ":8080"
 
-      # Retry configuration
       API_RETRY_MAX_ATTEMPTS: "3"
       API_RETRY_INITIAL_DELAY: "100ms"
       API_RETRY_MAX_DELAY: "5s"
@@ -58,14 +50,12 @@ services:
     container_name: controller-2
     hostname: controller-2
     environment:
-      # Raft configuration
       RAFT_ID: "2"
       TOTAL_NODES: "3"
       RAFT_ADDRS: "192.168.1.100:9000,192.168.1.101:9000,192.168.1.101:9001"
       FILENAME: "/data/node2"
       SNAPSHOT_THRESHOLD: "100"
 
-      # Connection management
       RAFT_INITIAL_BACKOFF: "1s"
       RAFT_MAX_BACKOFF: "30s"
       RAFT_BACKOFF_MULTIPLIER: "2.0"
@@ -76,7 +66,6 @@ services:
       # HTTP API configuration - port 8081 (different from controller-1)
       API_ADDR: ":8081"
 
-      # Retry configuration
       API_RETRY_MAX_ATTEMPTS: "3"
       API_RETRY_INITIAL_DELAY: "100ms"
       API_RETRY_MAX_DELAY: "5s"
@@ -84,8 +73,8 @@ services:
     volumes:
       - ./data/node2:/data
     ports:
-      - "9001:9001"   # Raft port for controller-2
-      - "8081:8081"   # API port for controller-2
+      - "9001:9001"
+      - "8081:8081"
     restart: unless-stopped
 
   datanode-3:
@@ -101,7 +90,7 @@ services:
     depends_on:
       - controller-1
     ports:
-      - "9010:9010"   # DataNode port
+      - "9010:9010"
     restart: unless-stopped
 
   datanode-4:
@@ -117,5 +106,5 @@ services:
     depends_on:
       - controller-1
     ports:
-      - "9011:9011"   # DataNode port
+      - "9011:9011"
     restart: unless-stopped

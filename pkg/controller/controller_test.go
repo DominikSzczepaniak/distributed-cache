@@ -9,17 +9,13 @@ import (
 )
 
 func TestController_HandleNodeFailure(t *testing.T) {
-	// Mock Raft (nil for now as we don't use it in this test)
 	c := NewController(nil, 100*time.Millisecond)
 
-	// Setup initial state
 	c.config.Nodes["node1"] = metadata.NodeMetadata{ID: "node1", Status: metadata.StatusActive}
 	c.config.Shards[0] = metadata.ShardMetadata{ID: 0, PrimaryID: "node1", ReplicaIDs: []string{}}
 
-	// Trigger failure
 	c.HandleNodeFailure("node1")
 
-	// Verify state update
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 

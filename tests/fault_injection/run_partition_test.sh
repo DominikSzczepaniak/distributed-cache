@@ -1,5 +1,4 @@
 #!/bin/bash
-# Run the network partition test and output to a log file
 
 cd "$(dirname "$0")/../.."
 LOG_FILE="./partition_test_result.log"
@@ -14,7 +13,6 @@ echo ""
 echo "Test completed with exit code: $EXIT_CODE"
 echo "See $LOG_FILE for details"
 
-# Show summary
 if [ $EXIT_CODE -eq 0 ]; then
     echo "✅ TEST PASSED!"
 else

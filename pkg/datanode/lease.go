@@ -13,7 +13,6 @@ import (
 	"github.com/dominikszczepaniak/distributed-cache/pkg/metadata"
 )
 
-// LeaseManager handles the "License to Write" for a DataNode
 type LeaseManager struct {
 	mu            sync.RWMutex
 	validUntil    time.Time

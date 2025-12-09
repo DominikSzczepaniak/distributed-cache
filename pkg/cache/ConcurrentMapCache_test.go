@@ -10,7 +10,6 @@ func TestConcurrentMapCache_ExportShard(t *testing.T) {
 	totalShards := 10
 	targetShard := 1
 
-	// Helper to calculate shard
 	getShard := func(key string) int {
 		h := fnv.New32a()
 		h.Write([]byte(key))
@@ -21,10 +20,9 @@ func TestConcurrentMapCache_ExportShard(t *testing.T) {
 		return s
 	}
 
-	// Populate cache
 	expectedKeys := make(map[string]string)
 	for i := 0; i < 100; i++ {
-		key := string(rune(i)) // simple keys
+		key := string(rune(i))
 		val := "val"
 		c.Put(key, val)
 
@@ -33,10 +31,8 @@ func TestConcurrentMapCache_ExportShard(t *testing.T) {
 		}
 	}
 
-	// Export
 	exported := c.ExportShard(targetShard, totalShards)
 
-	// Verify
 	if len(exported) != len(expectedKeys) {
 		t.Errorf("Expected %d keys, got %d", len(expectedKeys), len(exported))
 	}
@@ -47,7 +43,6 @@ func TestConcurrentMapCache_ExportShard(t *testing.T) {
 		}
 	}
 
-	// Verify no extra keys
 	for k := range exported {
 		if _, ok := expectedKeys[k]; !ok {
 			t.Errorf("Exported key %s that shouldn't be there (shard %d)", k, getShard(k))

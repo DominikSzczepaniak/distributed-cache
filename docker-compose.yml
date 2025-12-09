@@ -1,4 +1,8 @@
-version: '3.8'
+# Example docker compose file - adjust for multiple servers setup.
+# This setup has 3 controllers and 5 data nodes
+# To add more controllers you need to update TOTAL_NODES and RAFT_ADDRS values.
+# To add more datanodes you just need to run it with correct controller address and assign it correct
+# node-id - it can be run even from other computer
 
 services:
   controller-0:

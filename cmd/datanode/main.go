@@ -14,7 +14,6 @@ import (
 	"github.com/dominikszczepaniak/distributed-cache/pkg/datanode"
 )
 
-// DataNodeConfig holds the configuration for the DataNode
 type DataNodeConfig struct {
 	ControllerURL string
 	NodeID        string

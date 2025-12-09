@@ -1,8 +1,0 @@
-FROM alpine:latest
-
-RUN apk add --no-cache wget
-
-COPY scripts/init-topology.sh /init-topology.sh
-RUN chmod +x /init-topology.sh
-
-ENTRYPOINT ["/init-topology.sh"]

@@ -30,7 +30,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Parse comma-separated controller addresses
 	controllerAddrs := strings.Split(os.Args[1], ",")
 	for i, addr := range controllerAddrs {
 		addr = strings.TrimSpace(addr)
