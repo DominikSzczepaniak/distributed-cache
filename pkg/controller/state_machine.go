@@ -81,7 +81,6 @@ func (a *ControllerApp) AppendMessage(msg raft.Message) (bool, int) {
 }
 
 func (a *ControllerApp) GetSnapshot() ([]byte, error) {
-	// TODO: Implement snapshotting of ClusterConfig
 	if a.controller == nil {
 		return []byte("{}"), nil
 	}
