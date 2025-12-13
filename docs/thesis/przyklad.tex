@@ -56,6 +56,37 @@ Implementation has been tested with multiple tests. The Raft algorithm was a ver
 Test
 \chapter{Introduction}
 
+\section{Distributed systems and the problem with data consistency}
+
+When we are collecting data from our system the amount might grow infinitely, yet computers have limited amount of RAM and Disk space they can support at once, whether from motherboard limits or just physical limits and law of nature. One day developers might have to come to a decision to start scaling the application. In the beggining, the application might be scaled to just two or three servers, but as more and more data is collected, the entire ecosystem might span tens and hundreds of servers. Some of the data that is collected might be needed often, very often. If we need data often, then we usually put it in cache, as it's fast and we don't want to fetch everything from slow databases. But as the amount of data grows even larger, even the cache cannot keep all the data we need. Then we need to scale cache. And there comes a problem. Assume we have two servers that split the data for cache. One of them have a value 3 for key 1, the other have value 4 for key 1. Which answer is correct? This is the problem of data consistency in the system.
+
+\section{Objective and scope of the thesis}
+
+The goal of thesis is to build a distributed in-memory cache that assures strong consistency of the data - there exist a linearizable moment in the system, where every single server agrees to data they share. As this is cache, and not database, we do not guarantee data durability. If we data is lost, then the user has to refetch data from database and put it in the cache again. We only guarantee, that whenever user asks for the data and receives a response, this response will be correct. 
+
+\section{Technology stack choice}
+
+I choose to go with Go for a programming language. This is a language that is based around concurrency which is the base of this thesis. Both single servers are operating concurrently, and they also talk to each other in concurrent way. Go is also very good for network operations, which there are a lot. Other considered choices were C++ and Java. The first was rejected because of it's complexity and the scale of this project aswell as author's skills in using it, the latter because it's slower than Go and less developer friendly.\\
+For the inter-node communication the gRPC was used, because of it's speed. For server-client communication, http was used, because of it's ease of usage.
+
+\section{Structure of this thesis}
+
+Chapter 2 presents theoretical background necessary to understand the problem of state management in distributed systems. It discusses the CAP theorem, data consistency models, consensus algorithms - what are they, why we need them. It will also briefly compare two of the most popular consensus algorithms and describe what the chosen one is doing. It also reviews existing solutions for architectures, sharding, client types and actual systems used in the industry. \\
+
+Chapter 3 presents more detailed requirements of the project and the system design. It defines high-level architecture, separation of Control Plane from Data plane. It also details communication between servers and the specific design of client. \\
+
+Chapter 4 presents a detailed implementation of Raft consensus algorithm. It details implementation of basic parts of the system aswell as more advanced. \\
+
+Chapter 5 covers the implementation details of the remaining system components. It describes the logic of the Control Plane, the Data Nodes and the client library. Special attention is given to mechanisms of shard rebalancing and failure detection. \\
+
+Chapter 6 is dedidacted to testing and verification of the system. It describes the testing methology, including unit tests, end to end tests, integration tests and failure injection tests used to validate system correctness and stability. \\
+
+Chapter 7 presents the performance analysis and benchmarks in comparison to other industry-standard systems. It contains the results of benchmark tests measuring latency and throughput (requests per second). \\
+
+Chapter 8 summarizes the thesis, evaluating the degree to which the project goals were met, discussing the encountered challenges and potential directions for future development. \\
+
+% finished here 
+
 \section{What am i building - cache, what is it purpose}
 
 \subsection{Use cases of such software}
