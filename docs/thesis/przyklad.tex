@@ -85,56 +85,260 @@ Chapter 7 presents the performance analysis and benchmarks in comparison to othe
 
 Chapter 8 summarizes the thesis, evaluating the degree to which the project goals were met, discussing the encountered challenges and potential directions for future development. \\
 
+
+%chapter 2
+
+\chapter{Theoretical Foundations and Overview of Solutions}
+
+\section{Consistency models in distributed systems}
+
+Distributed systems need to agree on the data they have. Because of how the systems are built, we define three possible consistency models, ranked by their strength:
+\begin{itemize}
+    \item Strong consistency - in this model all nodes agree on the order in which operations were done. Reads will always return the most recent version of the data and when update occurs, then this model will make sure that every other server will reflect on that. Because of these guarantees, this model has limitation in terms of how fast it allows the system to work. 
+    \item Sequentual consistency - all nodes see all operations in the same global order, but that order is not required to be the actual real-time order. Operations happen in sequential, single, unifed order.
+    \item Casual consistency - ensures all nodes see the correct order for operations that are casually related, i.e. one operation is influenced by another 
+    \item Eventual consistency - The most relaxed model, it prioritizes availability and performance. It allows that data between server might be conflicting, but if no updates occur, eventually these conflicts will resolve.
+\end{itemize}
+
+
+\subsection{The CAP theorem and trade-offs}
+
+CAP theorem, formulated by Eric Brewer in [1], says that a networked system that shares-data, can strictly provide only two of three properties:
+
+\begin{itemize}
+    \item \textbf{Consistency (C):} Reads will receive the most recent write or an error. If a system is consistent, then all nodes will see the same data at the same time, just like a single-node database would.
+    \item \textbf{Availability (A):} Request will always receive a non-error response, without the guarantee that it can contain untrue data. The base of availability is that the system remains operational for reads and updates, even if some nodes fail.
+    \item \textbf{Partition Tolerance (P):} The system will work even if a network failure occurs or some nodes crash or there are very big delays. 
+\end{itemize}
+
+In real-world distributed systems, we cannot have Consistent and Available system, because we cannot guarantee that network will not partition. If a hardware failure or network failure occurs, then there is inevitable Network Partition. Hence in real-world systems, we will choose between Consistency and Availability. Most cache systems focus on Availability, because we want to maximize speed, and if we want consistency, we should use database. However, there are cases, where we need Consistency for our cache, for example in banking applications.
+
+So the systems are either:
+
+\begin{enumerate}
+    \item \textbf{CP (Consistency + Partition Tolerance):} When partition occurs, system will shut down all non-consistent nodes or refuse writes if the system cannot support them any longer. This approach proritizes safety over throughput or uptime.
+    \item \textbf{AP (Availability + Partition Tolerance):} When a partition occurs, system will continue to accept write and read requests, with probability that it will return untrue data. This approach proritizes throughput, uptime and user-experience over corectness of the data.
+\end{enumerate}
+
+So my system will be a CP system. 
+
+\subsection{Strong Consistency (Linearizability) vs. Eventual Consistency}
+
+
+\subsubsection{Strong Consistency (Linearizability)}
+Linearizability is the strongest guarantee for consistency for single-object requests. It gives a ilussion that system is in fact a single copy of data and the data is not distributed. It gives us a guarantee that once write operation is completed sucessfully, all subsequent read operations will return that value, or a newer value if any update happened.
+
+Mathematically, when operation $W(x)$ completes at time $t_1$, then for any given operation $R(x)$ starting at time $t_2 > t_1$ must see the effects of $W(x)$.
+
+\subsubsection{Eventual Consistency}
+In eventually consistent systems, if no new updates are made to a given data item, eventually all accesses to that item will return the last updated value. This model allows for temporary inconsistencies where different nodes serve different versions of data.
+This approach enables high availability and low latency because writes can be accepted by a single node without waiting for other nodes to accept and make a consensus. This approach, however, requires to add logic for conflict resolution strategies when merging data from different nodes.
+
+%here finish
+
+\section{Consensus algorithms}
+
+Consensus algorithm is as the name suggest, algorithm that takes care of the state of the data and make sure than all nodes agree on consensus. It is backbone of Consistent systems.
+
+\subsection{Paxos vs. Raft – Comparison of understanding and implementation}
+
+\textbf{Paxos} is an algorithm created by Leslie Lamport and historically the most used algorithm for distributed consensus because of long it has been available. It was mathematically proven to be safe and efficient. However it's also a very complex to understand algorithm and hard to implement. 
+
+\textbf{Raft} is more decent algorithm, from 2014, that was created to be easier to implement than Paxos. It offers the same performance as Paxos, but less safety as not all parts of this algorithm have been formally proven [2], however it's still widely used in many modern distributed systems such as CockroachDB[3], MongoDB[4], Neo4J[5], RabbitMQ[6]. It decomposes the problem of consensus into smaller, independent sub-problems of Leader election and Log replication.
+
+\textbf{Key Differences:}
+\begin{itemize}
+    \item \textbf{Strong Leader:} Raft imposes a stronger leadership model. Log is always send from leaders down to followers. This simplifies the management of the replicated log compared to Paxos, where data can be send in complex peer-to-peer patterns.
+    \item \textbf{Log Continuity:} Raft guarantees that if a follower has an entry at index $N$, it also has all entries from $1$ to $N-1$ identical to the leader. Paxos allows for gaps in the log that must be filled later, increasing implementation complexity.
+\end{itemize}
+
+\section{Detailed analysis of the Raft algorithm}
+
+Raft ensures that a cluster of $N$ servers can tolerate $F$ failures, where $N = 2F + 1$.
+
+\subsubsection{Leader Election}
+Raft uses a heartbeat mechanism to maintain leadership. If no heartbeat is received in some configurable time window, then server can assume the leader is dead and start a new election. 
+The election start by the node incrementing its current \texttt{Term} (a logical clock used to detect stale information), changing its current state to the Candidate state, voting for itself, and broadcasting \texttt{RequestVote} RPCs to all other nodes. A candidate wins if it receives votes from a majority of the cluster. We want to have randomized timeout for election start because we want to minize the probability of multiple nodes starting election at the same and because of that not one receiving a majority, which would cause system stalls.
+
+\subsubsection{Log Replication}
+Once elected, the leader accepts client commands. A command flows through the following lifecycle:
+\begin{enumerate}
+    \item The leader appends the command to its local logs.
+    \item It sends \texttt{AppendEntries} RPCs to all followers.
+    \item Once a majority of followers acknowledge the entry, the leader marks the entry as \textbf{committed}.
+    \item The leader applies the entry to its state machine and returns the result to the client.
+    \item In subsequent heartbeats, the leader notifies followers of the new \texttt{commitIndex}, instructing them to apply the data to their own state machines.
+\end{enumerate}
+
+\subsubsection{Safety}
+Raft ensures safety via the \textbf{Election Restriction}. Candidate for winner won't win election if it's log is not in the most up to date state. A candidate will also not win an election if it's \textbf{Term} is too old, this is, if it's bigger than 1, because nodes increase term by 1 every time a new leader is elected, so if Term difference is bigger than 2, then the node with lower term must have lost access to the cluster, because he skipped at least one leader.\\
+During the voting process, a node will not vote for a candidate if the candidate's log is not at least as up-to-date as its own (comparing the term and index of the last log entry). This guarantees that committed data is never overwritten, preserving the State Machine Safety property.
+
+\section{Cache system architectures}
+Consensus can only take us as long as the coordination of data allows. For the system scalability to handle gigabytes of data and thousands of requests per second we need to use architectural designs.
+
+\subsection{Sharding and Consistent Hashing}
+Because we need a cache so big to use multiple servers, we need a way to split data between them. The process of splitting the data is called sharding [7].
+
+\subsubsection{Traditional Modulo Hashing}
+The most basic approach would just use $server = \text{hash}(key) \pmod N$, where $N$ is the number of servers. This might be fine, if we had stable amount of servers and immediately could calculate how much data at most we will use. However if we don't know how much data we need, or if we don't want to pay for servers to use 5\% of it's resources we would want to scale on the go.\\
+With the basic approach of modulo, if a server is added or removed ($N$ changes), the result of the modulo operation changes for nearly all keys. This will force us to move data between all of the server, forcing a massive rebalancing of data across the entire cluster. This is just inefficient and way too slow.
+
+\subsubsection{Consistent Hashing}
+Consistent hashing maps both data and servers onto a logical ring topology ($0$ to $2^{32}-1$). A key is assigned to the first server encountered moving clockwise on the ring.
+
+When a server is added or removed, only $K/N$ keys need to be remapped (where $K$ is the total keys), which significantly minimizizes data movement.\\
+But this has another problem. What if some part of the ring is used way more often then other? For this case we use \textbf{Virtual Nodes}. Each physical server is placed onto the ring multiple times (e.g., at 100 different positions). This statistical distribution ensures a more uniform load balancing across the cluster.
+
+\subsection{Role of the client: Thin Client vs. Smart Client}
+Of course the system is build for someone, a client. So there also needs to be made a decision on how the client will connect to the system. There are two broad options:
+
+\begin{itemize}
+    \item \textbf{Thin Client (Proxy-based):} The client is unaware of the cluster topology. It sends requests to a load balancer or a random node (acting as a proxy), which then forwards the request to the correct shard.
+    \begin{itemize}
+        \item \textit{Pros:} Simple client implementation; topology changes are transparent to the application.
+        \item \textit{Cons:} Additional network hop (Client $\rightarrow$ Proxy $\rightarrow$ Shard), increasing latency.
+    \end{itemize}
+    
+    \item \textbf{Smart Client:} The client maintains a local map of the cluster topology (slots mapping to node IP addresses). It computes the hash and connects directly to the target node.
+    \begin{itemize}
+        \item \textit{Pros:} Lowest possible latency (single hop); no bottleneck at a central proxy.
+        \item \textit{Cons:} Complex client logic; the client must listen for cluster configuration changes (e.g., failovers or resharding) to update its internal routing table.
+    \end{itemize}
+\end{itemize}
+
+\section{Overview of existing solutions (Redis Cluster, Etcd) – Analysis in terms of consistency}
+
+To contextualize the solution developed in this thesis, it is valuable to analyze how established systems handle these trade-offs.
+
+\subsection{Redis Cluster}
+Redis Cluster is the industry standard for distributed caching. It employs a multi-master architecture with asynchronous replication.
+\begin{itemize}
+    \item \textbf{Architecture:} It uses sharding with 16,384 hash slots. Each master node owns a subset of slots and has one or more replicas.
+    \item \textbf{Consistency:} Redis prioritizes Availability and Performance (AP-leaning). By default, replication to slaves is asynchronous. If a master crashes after accepting a write but before replicating it to a slave, and that slave is promoted to master, the write is lost. Redis does not guarantee strong consistency; it provides eventual consistency and high throughput.
+\end{itemize}
+
+\subsection{Etcd}
+Etcd is a distributed key-value store used primarily for shared configuration and service discovery (e.g., in Kubernetes).
+\begin{itemize}
+    \item \textbf{Architecture:} It is built strictly on the Raft consensus algorithm. Unlike Redis, it does not shard data by default; every node replicates the full state machine.
+    \item \textbf{Consistency:} Etcd is a CP system guaranteeing strict serializability. Every write goes through the Raft leader and must be committed to a quorum before returning success. This ensures data safety at the cost of lower write throughput compared to Redis.
+    \item \textbf{Durability:} Etcd is a system that guarantees durability: Even if a node crash, the data is not lost.
+\end{itemize}
+
+The solution implemented in this thesis (Chapter 4) aligns more closely with the \textbf{Etcd} model regarding consistency (using Raft for strong guarantees) but incorporates architectural elements of \textbf{Redis} (key-value storage focus) to explore the performance implications of strong consistency in a caching scenario. This solution \textbf{does not} guarantee durability, hence if the node crashes, the data needs to be refetch from durable data storage. This is one of the biggest differences between Etcd.
+
+% chapter 3
+
+
+
+
+% chapter 4
+
+\chapter{Implementation of the Raft Consensus Module (pkg/raft)}
+\label{chap:raft_implementation}
+
+The core of the distributed system is the implementation of the Raft consensus algorithm, located in the \texttt{pkg/raft} package. This module is responsible for managing the state of distributed nodes, ensuring data consistency across the cluster, and handling leader election and failure recovery. The implementation relies on the \texttt{Raft} struct defined in \texttt{raft.go} as the central controller, which coordinates sub-components such as the \texttt{Elector}, \texttt{Replicator}, and \texttt{DataSaver}. Communication between nodes is achieved via gRPC, as defined in \texttt{transport.go} and \texttt{grpc.go}, utilizing Protocol Buffers for message serialization.
+
+\section{Raft node state machine}
+\label{sec:raft_state_machine}
+
+The Raft protocol relies on a state machine approach where each node exists in one of three states at any given time. The current state is maintained in the \texttt{Raft} struct within the \texttt{currentRole} field. Thread safety for state transitions is strictly enforced using a \texttt{sync.RWMutex}.
+
+\subsection{Implementation of roles: Follower, Candidate, Leader}
+\label{subsec:roles_implementation}
+
+The roles are defined as typed constants in \texttt{types.go}: \texttt{Follower}, \texttt{Candidate}, and \texttt{Leader}.
+\begin{itemize}
+    \item \textbf{Follower:} The default state upon initialization (in \texttt{NewRaft}). Followers passively respond to RPCs from leaders and candidates.
+    \item \textbf{Candidate:} A node transitions to this state when an election timeout occurs. This logic is encapsulated within the \texttt{startElection} method in \texttt{election.go}.
+    \item \textbf{Leader:} The node that handles all client requests and coordinates log replication. Transition to this role is handled by the \texttt{becomeLeader} function in \texttt{utils.go}, which initializes the \texttt{Replicator} instances for all peers.
+\end{itemize}
+
+\subsection{Leader election mechanism (election.go) and term handling (Terms)}
+\label{subsec:leader_election}
+
+The election logic is decoupled into the \texttt{Elector} struct located in \texttt{election.go}. This component manages the election timer, which is randomized to prevent split votes. The timer duration is calculated in \texttt{nextTimeout} based on a minimum and maximum election timeout range (e.g., 400ms to 800ms).
+
+When the timer fires without receiving a valid heartbeat from a leader, the node increments its \texttt{currentTerm} and transitions to the Candidate state. The election process involves:
+\begin{enumerate}
+    \item Resetting the election timer.
+    \item Voting for itself (\texttt{votedFor} set to \texttt{selfID}).
+    \item Broadcasting \texttt{VoteRequest} RPCs to all peers in parallel.
+\end{enumerate}
+
+The incoming \texttt{VoteRequest} is handled in \texttt{raft.go}. The implementation strictly adheres to the Raft term logic: if a request contains a term higher than the node's \texttt{currentTerm}, the node immediately steps down to Follower status.
+
+\section{Log replication logic (replicator.go, log.go)}
+\label{sec:log_replication}
+
+Once a leader is elected, it must replicate client commands to the cluster. This process is managed by the \texttt{Replicator} struct defined in \texttt{replicator.go}. The leader maintains a separate \texttt{Replicator} instance for every follower, allowing for asynchronous and isolated replication streams.
+
+\subsection{Log entry structure (LogEntry) and handling of LogRequest (AppendEntries)}
+\label{subsec:log_entry}
+
+The log is represented as a slice of \texttt{LogEntry} structs. Each entry contains:
+\begin{itemize}
+    \item \texttt{Term}: The term when the entry was received.
+    \item \texttt{Message}: The actual state machine command (e.g., \texttt{PUT}, \texttt{GET}, \texttt{DELETE}), defined in \texttt{messages.go}.
+\end{itemize}
+
+Replication is triggered via the \texttt{LogRequest} RPC (standard Raft \textit{AppendEntries}). The \texttt{Replicator} runs a continuous loop that monitors a signal channel. When triggered, it calculates the \texttt{prevLogIndex} and \texttt{prevLogTerm} to ensure log consistency. These arguments are packaged into a \texttt{LogRequestArgs} Protocol Buffer message and sent via the \texttt{PeerClient} interface.
+
+\subsection{Committing entries (Commit Index) and applying to the state machine}
+\label{subsec:committing_entries}
+
+The leader tracks the \texttt{matchIndex} (represented as \texttt{ackedLengths}) for each follower. When a majority of nodes acknowledge a log entry, the leader advances its \texttt{commitedLength}. This logic is implemented in the \texttt{commitLogEntries} function in \texttt{raft.go}.
+
+Upon commitment, messages are applied to the local state machine via the \texttt{Application} interface (defined in \texttt{application.go}). The application executes the command (e.g., updating the in-memory cache) and returns the result, which is then sent back to the client via a response channel.
+
+\section{Data persistence management}
+\label{sec:persistence}
+
+To survive crashes and restarts, the Raft module implements strict persistence guarantees using the \texttt{DataSaver} struct located in \texttt{persistance.go}.
+
+\subsection{Writing Raft state to disk (persistance.go)}
+\label{subsec:writing_state}
+
+The persistence layer uses Go's \texttt{encoding/gob} package to serialize data structures to disk. The \texttt{DataSaver} utilizes a worker pool pattern to handle save requests asynchronously, preventing disk I/O from blocking the main Raft consensus loop. 
+
+The state is split into two files:
+\begin{itemize}
+    \item \textbf{Metadata File:} Stores the \texttt{currentTerm}, \texttt{votedFor}, and \texttt{commitedLength}.
+    \item \textbf{Logs File:} Stores the append-only sequence of \texttt{LogEntry} objects.
+\end{itemize}
+
+The \texttt{SaveValues} method is called whenever the node's term, vote, or log changes, ensuring that the critical Raft state is durable before responding to RPCs.
+
+\subsection{Recovering state after node restart}
+\label{subsec:recovering_state}
+
+During initialization in \texttt{NewRaft}, the \texttt{LoadValues} method reads the persisted metadata and logs from the disk. This restores the node's \texttt{currentTerm}, \texttt{votedFor}, and replicates the log into memory. If a snapshot exists, it is also loaded to restore the application state up to the last snapshot index, ensuring the node resumes operation consistent with its previous state.
+
+\section{Log size optimization – Log Compaction}
+\label{sec:log_compaction}
+
+As the system operates, the log grows indefinitely. To manage memory and disk usage, the system implements log compaction via snapshots, handled by the \texttt{Snapshot} struct in \texttt{snapshot.go}.
+
+\subsection{Snapshot creation mechanism (snapshot.go)}
+\label{subsec:snapshot_creation}
+
+The \texttt{decideRunSnapshot} method checks if the current log size exceeds the configured \texttt{snapshotThreshold}. If the threshold is met, the following steps occur:
+\begin{enumerate}
+    \item The state machine (Application) generates a serialized snapshot of its current data (e.g., the key-value map).
+    \item The snapshot is written to a \texttt{.snap} file using \texttt{WriteSnapshotData}.
+    \item The log entries covered by the snapshot (up to \texttt{lastIncludedIndex}) are truncated from the in-memory log to free resources.
+    \item The \texttt{lastIndex} and \texttt{lastTerm} are updated in the \texttt{Snapshot} struct to maintain log continuity.
+\end{enumerate}
+
+\subsection{Snapshot transfer protocol (InstallSnapshot RPC)}
+\label{subsec:snapshot_transfer}
+
+If a follower lags so far behind that the leader has already discarded the log entries needed for replication, the leader switches from sending \texttt{LogRequest} to sending \texttt{InstallSnapshot}. This is implemented in the \texttt{sendInstallSnapshotRPC} method. The snapshot is transmitted in chunks to avoid overwhelming the network. Upon receipt, the follower replaces its current state with the data provided in the snapshot and resets its log, as defined in the \texttt{InstallSnapshot} handler in \texttt{grpc.go}.
+
+
+
 % finished here 
-
-\section{What am i building - cache, what is it purpose}
-
-\subsection{Use cases of such software}
-
-The distributed cache with strong consistency would be perfect solution for any application that doesn't work in centralized architecture and needs to ensure that the data it returns is always correct and can't afford to overload underlying databases for frequent operations. Let's look at some examples.
-\begin{itemize}
-    \item Any financial transaction broker as if the data is incorrect the bank, or anyone making a transaction, might be at loss
-    \item Inventory management systems, such as online shops needs data quickly and the state of the data needs to be consistent
-    \item Games might benefit from this application aswell, for example the leaderboard might change very frequently but still need accurate data for every player on the server 
-    \item Session management on web servers for many cases, for example authentication
-    \item Industrial software might need to check the system health based on some services data, this data cannot be wrong or contradictory to eachother
-
-\end{itemize}
-
-\section{What is consensus}
-
-\section{What type of applications do need a consensus at all times}
-
-\chapter{Reaching consensus}
-
-\section{CAP theorem (ADD CITATION)}
-CAP theorem states, that the system cannot simultaneously satisfy all three following guarantees:
-\begin{itemize}
-    \item Availability - Every request receives a response, without a guarantee that it contains the most recent version of the information. The system remains operational even if some nodes fail.
-    \item Consistency - Every read receives the most recent write or an error. This is a single, up-to-date copy of the data.
-    \item Partition tolerance - The system continues to operate even if there are network failures that cause a "partition" where some nodes cannot communicate with others.
-\end{itemize}
-
-\subsection{Which part of the CAP theorem do I fulfill}
-Raft algorithm will always focus on consistency as it's main goal, hence this part of the system is always guaranteed. Let's look at the remaining guarantees - availability and partition tolerance. \\
-In the worst case scenario where the network partitions and our node splits into some number of subsets of servers that cannot connect to each other in any way the Raft algorithm will not be able to elect a leader if the size of servers subset is smaller than majority. If it cannot elect a leader, then it cannot proceed with any operation. In this case the entire system is unavailable until it "merges" back into the size of the majority. That case shows that the system does not fulfill availability from CAP theorem. It fulfills the partition tolerance, because each subset of servers will continue to operate normally.
-
-\section{What type of algorithms are these - byzantine vs non byzantine}
-
-\subsection{Why do we not want a byzantine algorithm}
-
-\section{How can we reach consensus - about algorithms}
-
-\chapter{Raft}
-% nieformalny opis z odwolaniami do papera oryginalnego
-
-\section{What is Raft}
-
-\section{How does Raft work}
-
-
-
-
 
 
 
@@ -478,8 +682,16 @@ Application \ Database is an actual cache that we keep - this is where all the l
 
 %%%%% BIBLIOGRAFIA
 
-%\begin{thebibliography}{1}
-%\bibitem{example} \ldots
-%\end{thebibliography}
+\begin{thebibliography}{1}
+\bibitem{example} eric brewer on cap theorem
+\bibitem{example} what part of raft was not formally proven
+\bibitem{example} usage of raft in CockroachDB
+\bibitem{example} usage of raft in mongodb
+\bibitem{example} usage of raft in neo4j
+\bibitem{example} usage of raft in rabbitmq
+\bibitem{example} Sharding name where it comes from
+\end{thebibliography}
+
+
 
 \end{document}

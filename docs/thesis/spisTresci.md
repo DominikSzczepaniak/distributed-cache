@@ -77,3 +77,102 @@
 8.2. Napotkane problemy i wyzwania implementacyjne.
 8.3. Kierunki dalszego rozwoju projektu.
 
+
+
+
+This is a translation of a technical table of contents, likely for a thesis or project documentation, focusing on distributed systems and data consistency.
+
+---
+
+###1. Introduction
+1.1. Introduction to distributed systems and the data consistency problem.
+1.2. Aim and scope of the work.
+1.3. Justification for the chosen technologies (Go, gRPC, Protocol Buffers).
+1.4. Structure of the work.
+
+---
+
+###2. Theoretical Foundations and Overview of Solutions
+2.1. Consistency models in distributed systems.
+2.1.1. The CAP theorem and trade-offs.
+2.1.2. Strong Consistency (Linearizability) vs. Eventual Consistency.
+2.2. Consensus algorithms.
+2.2.1. Paxos vs. Raft – Comparison of understanding and implementation.
+2.2.2. Detailed analysis of the Raft algorithm (Election, Replication, Safety).
+2.3. Cache system architectures.
+2.3.1. Sharding and Consistent Hashing.
+2.3.2. Role of the client: Thin Client vs. Smart Client.
+2.4. Overview of existing solutions (Redis Cluster, Etcd) – Analysis in terms of consistency.
+
+---
+
+###3. Requirements Analysis and System Architecture Design
+3.1. Functional and non-functional requirements (including Network Partition Tolerance).
+3.2. High-level architecture.
+3.2.1. Separation of the Control Plane and Data Plane.
+3.2.2. gRPC communication protocol and interface definition (analysis of the `raft.proto` file).
+3.3. Design of the Control Plane module.
+3.3.1. Cluster topology and metadata management.
+3.3.2. Node failure detection mechanism (Failure Detection / Reaper).
+3.4. Smart Client design.
+3.4.1. Query routing strategy and topology caching.
+3.4.2. Handling retries and Failover mechanisms.
+
+---
+
+###4. Implementation of the Raft Consensus Module (`pkg/raft`)
+4.1. Raft node state machine.
+4.1.1. Implementation of roles: Follower, Candidate, Leader.
+4.1.2. Leader election mechanism (`election.go`) and term handling (Terms).
+4.2. Log replication logic (`replicator.go`, `log.go`).
+4.2.1. Log entry structure (`LogEntry`) and handling of `LogRequest` (AppendEntries).
+4.2.2. Committing entries (Commit Index) and applying to the state machine.
+4.3. Data persistence management.
+4.3.1. Writing Raft state to disk (`persistance.go`).
+4.3.2. Recovering state after node restart.
+4.4. Log size optimization – Log Compaction.
+4.4.1. Snapshot creation mechanism (`snapshot.go`).
+4.4.2. Snapshot transfer protocol (`InstallSnapshot` RPC).
+
+---
+
+###5. Implementation of the Control Plane and Data Plane
+5.1. Implementation of the Control Node (Controller).
+5.1.1. Topology state machine (`state_machine.go` in `pkg/controller`).
+5.1.2. Node health monitoring (`reaper.go`).
+5.1.3. Shard rebalancing (`rebalance.go`) – the process of transferring responsibility.
+5.2. Implementation of the Data Node (DataNode).
+5.2.1. Concurrent data store (`ConcurrentMapCache.go`).
+5.2.2. Lease management (`lease.go`) and synchronization.
+5.3. Implementation of the client and access library.
+5.3.1. The `Smart Client` mechanism – calculating the shard on the client side.
+5.3.2. Ensuring "Exactly-once" semantics (Idempotency Token in `raft.proto`).
+
+---
+
+###6. Correctness Verification and Fault Injection Testing
+6.1. Methodology for testing distributed systems.
+6.2. Unit and integration tests for the Raft implementation.
+6.3. Simulation of failures and network partitioning (`tests/fault_injection`).
+6.3.1. Scenario: Leader isolation (Network Partition).
+6.3.2. Scenario: DataNode failure and return.
+6.3.3. Verification of data consistency after failure (`test_strong_consistency.sh`).
+
+---
+
+###7. Performance Analysis and Comparison with Existing Solutions
+7.1. Test environment and measurement methodology (`tests/benchmark`).
+7.2. Throughput study (RPS) depending on the number of clients and shards.
+7.3. Analysis of Raft protocol overhead on response time (Latency).
+7.4. Comparative study.
+7.4.1. Performance comparison with Redis (`benchmark_redis.go`).
+7.4.2. Performance comparison with Etcd (`benchmark_etcd.go`).
+7.4.3. Conclusions from the comparative analysis.
+
+---
+
+###8. Summary8.1. Evaluation of the degree of achievement of the work's objectives.
+8.2. Encountered implementation problems and challenges.
+8.3. Directions for further development of the project.
+
+---
