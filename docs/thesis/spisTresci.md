@@ -171,7 +171,8 @@ This is a translation of a technical table of contents, likely for a thesis or p
 
 ---
 
-###8. Summary8.1. Evaluation of the degree of achievement of the work's objectives.
+###8. Summary
+8.1. Evaluation of the degree of achievement of the work's objectives.
 8.2. Encountered implementation problems and challenges.
 8.3. Directions for further development of the project.
 

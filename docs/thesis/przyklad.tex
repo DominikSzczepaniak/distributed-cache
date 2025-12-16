@@ -64,6 +64,8 @@ When we are collecting data from our system the amount might grow infinitely, ye
 
 The goal of thesis is to build a distributed in-memory cache that assures strong consistency of the data - there exist a linearizable moment in the system, where every single server agrees to data they share. As this is cache, and not database, we do not guarantee data durability. If we data is lost, then the user has to refetch data from database and put it in the cache again. We only guarantee, that whenever user asks for the data and receives a response, this response will be correct. 
 
+%tu nietechnicznie
+
 \section{Technology stack choice}
 
 I choose to go with Go for a programming language. This is a language that is based around concurrency which is the base of this thesis. Both single servers are operating concurrently, and they also talk to each other in concurrent way. Go is also very good for network operations, which there are a lot. Other considered choices were C++ and Java. The first was rejected because of it's complexity and the scale of this project aswell as author's skills in using it, the latter because it's slower than Go and less developer friendly.\\
@@ -226,10 +228,75 @@ Etcd is a distributed key-value store used primarily for shared configuration an
     \item \textbf{Durability:} Etcd is a system that guarantees durability: Even if a node crash, the data is not lost.
 \end{itemize}
 
-The solution implemented in this thesis (Chapter 4) aligns more closely with the \textbf{Etcd} model regarding consistency (using Raft for strong guarantees) but incorporates architectural elements of \textbf{Redis} (key-value storage focus) to explore the performance implications of strong consistency in a caching scenario. This solution \textbf{does not} guarantee durability, hence if the node crashes, the data needs to be refetch from durable data storage. This is one of the biggest differences between Etcd.
+\noindent The solution implemented in this thesis (Chapter 4) aligns more closely with the Etcd model regarding consistency (using Raft for strong guarantees) but incorporates architectural elements of Redis (key-value storage focus) to explore the performance implications of strong consistency in a caching scenario. My solution \textbf{does not} guarantee durability, hence if the node crashes, the data needs to be refetch from durable data storage. This is one of the biggest differences between Etcd.
 
 % chapter 3
 
+\chapter{Requirements analysis and Software Architecutre Design}
+
+\section{Functional and non-functional requirements}
+We define functional requirements as what the system must do, specifying it's behaviours and functions:
+\begin{itemize}
+    \item Support GET, PUT, DELETE operations via HTTP api
+    \item Automatic sharding of key-space across a configurable number of shards 
+    \item Automatic replication of each shard (primary + replicas)
+    \item Dynamic cluster membership - data nodes can be added and removed at runtime 
+    \item Rebalancing when nodes join, leave or fail 
+    \item Smart client that routes requests to correct node and caches topology
+\end{itemize}
+
+\noindent We define non-functional requirements as how the system operates, what it guarantees in perms of performance, security, usability and readability:
+\begin{itemize}
+    \item Strong Consistency - the system must reject requests when quorum cannot be reached, the system guarantees that all responses are correct 
+    \item Partition tolerance - system continues to operate even if some of the nodes fail or disconnect from others 
+    \item Fault tolerance - system detects node failures and triggers automatic fail-over 
+    \item No downtime when adding or removing new nodes and distributing shards between data nodes 
+\end{itemize}
+
+\section{High level architecture}
+The system is split into two logical parts. One of the part is Control Plane, the second one is Data Plane. 
+
+\subsection{Separation of Control Plane and Data Plane}
+Control plane is responsible for:
+\begin{itemize}
+    \item Runs a Raft consensus algorithm that stores cluster metadata - topology, shard mapping, node status, epoch counter.
+    \item Exposes internal HTTP endpoints used by DataNodes for pull based shard migration
+    \item Performs node failure detection (via the `Reaper`) and initiates rebalancing
+\end{itemize}
+
+\noindent Data Plane is responsible for:
+\begin{itemize}
+    \item Stores the actual key-value data 
+    \item Handles client RPC (GET, PUT, DELETE)
+    \item Reports heartbeats to the Control Plane
+\end{itemize}
+
+\subsection{gRPC communication protocol and interface definition}
+gRPC communication protocol is a RPC framework created by Google. It is a binary-encoded version of basic RPC, allowing it to be faster. To define gRPC functions and data types, protocol buffer files are used.
+We define 6 methods and 10 data types. All of these functions are based on Raft Algorithm as only these functions are used in gRPC. There are more details about this functions in Chapter 4.
+
+\section{Design of Control Plane module}
+\subsection{Cluster topology and metadata menagement}
+Topology data contains:
+\begin{itemize}
+    \item Nodes map: node ID mapped to NodeMetadata - address, status, last heartbeat timestamps
+    \item Shards map: shard ID mapped to ShardMetadata - primary ID, replica ID, status 
+    \item Epoch - monotonically increasing identificator used for conflict-free updates 
+\end{itemize}
+
+Controller updates cluster topology using Raft Algorithm. I want to make sure that Control Plane gives me a Strong Consistency, because if it wouldn't, then the system also wouldn't be Strongly Consistent. This is because, if there are conflicts in Control Plane, then the client might send request to wrong datanode, hence creating impossible state, which would not guarantee "correct response on every request".\\
+
+Rebalancing is using Control Plane's active nodes to determine which node should be primary and which should be a replica. Then it writes new config to Raft Log, that is distributed between every other Controller in Control Plane. 
+
+
+\subsection{Node failure detection mechanism}
+I implemented a Reaper mechanism which tracks last heartbeat timestamp of each nodes. In background, Reaper runs a thread that checks if node did heartbeat within configured grace period. If it didn't, then Reaper invokes a callback to Control Plane, triggering a topology rebalance.
+
+\section{Smart Client design}
+\subsection{Query routing strategy and topology caching}
+The client on initialization connects to Control Plane to fetch a topology that it stores in local cache. On each request, the client hashes the key to shard ID and looks up the primary node from cached topology. Then the request is sent.
+\subsection{Handling retries and Failover mechanism}
+On RPC failure the client retries the request against current primary. If this primary is unreachable or the request is rejected, then the client will refetch the cluster topology. 
 
 
 

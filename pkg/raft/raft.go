@@ -137,6 +137,7 @@ func (r *Raft) forwardToLeader(message Message, leader PeerClient) (bool, int, e
 	return resp.Success, int(resp.Value), nil
 }
 
+// This function broadcasts message to all servers, for details -> chapter 4, subsection X
 func (r *Raft) Broadcast(message Message) {
 	isLeader, leaderID := r.getLeaderData()
 
