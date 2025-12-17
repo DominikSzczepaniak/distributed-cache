@@ -303,17 +303,15 @@ On RPC failure the client retries the request against current primary. If this p
 % chapter 4
 
 \chapter{Implementation of the Raft Consensus Module (pkg/raft)}
-\label{chap:raft_implementation}
-
-The core of the distributed system is the implementation of the Raft consensus algorithm, located in the \texttt{pkg/raft} package. This module is responsible for managing the state of distributed nodes, ensuring data consistency across the cluster, and handling leader election and failure recovery. The implementation relies on the \texttt{Raft} struct defined in \texttt{raft.go} as the central controller, which coordinates sub-components such as the \texttt{Elector}, \texttt{Replicator}, and \texttt{DataSaver}. Communication between nodes is achieved via gRPC, as defined in \texttt{transport.go} and \texttt{grpc.go}, utilizing Protocol Buffers for message serialization.
+The core of my distributed system is the Raft consensus algorithm. It is responsible for coordinating controllers, that basically do majority of thing in the application. The only place where Raft is not used is the Data Plane, where nodes just accepts GET/PUT/DELETE and Control Plane makes sure that they do it correctly.
+\noindent My own implementation of this algorithm is located in pkg/raft. The algorithm is decomposed into smaller problem of Leader Election and Log Replication. To limit infinite growth the snapshot mechanism is also implemented. There are multiple supporting functions that I will write in next sections.
+\\
+% The core of the distributed system is the implementation of the Raft consensus algorithm, located in the \texttt{pkg/raft} package. This module is responsible for managing the state of distributed nodes, ensuring data consistency across the cluster, and handling leader election and failure recovery. The implementation relies on the \texttt{Raft} struct defined in \texttt{raft.go} as the central controller, which coordinates sub-components such as the \texttt{Elector}, \texttt{Replicator}, and \texttt{DataSaver}. Communication between nodes is achieved via gRPC, as defined in \texttt{transport.go} and \texttt{grpc.go}, utilizing Protocol Buffers for message serialization.
 
 \section{Raft node state machine}
-\label{sec:raft_state_machine}
-
-The Raft protocol relies on a state machine approach where each node exists in one of three states at any given time. The current state is maintained in the \texttt{Raft} struct within the \texttt{currentRole} field. Thread safety for state transitions is strictly enforced using a \texttt{sync.RWMutex}.
+The basic of Raft algorithm relies on the elected leader. We define leader as a node that won the election, that is, quorum of nodes (more than half) agreed that the node can become a leader. Each node keeps it current state in currentRole field. Node can be in one of three states: Follower, Candidate, Leader.
 
 \subsection{Implementation of roles: Follower, Candidate, Leader}
-\label{subsec:roles_implementation}
 
 The roles are defined as typed constants in \texttt{types.go}: \texttt{Follower}, \texttt{Candidate}, and \texttt{Leader}.
 \begin{itemize}
@@ -323,7 +321,6 @@ The roles are defined as typed constants in \texttt{types.go}: \texttt{Follower}
 \end{itemize}
 
 \subsection{Leader election mechanism (election.go) and term handling (Terms)}
-\label{subsec:leader_election}
 
 The election logic is decoupled into the \texttt{Elector} struct located in \texttt{election.go}. This component manages the election timer, which is randomized to prevent split votes. The timer duration is calculated in \texttt{nextTimeout} based on a minimum and maximum election timeout range (e.g., 400ms to 800ms).
 
@@ -535,10 +532,66 @@ When a Worker receives a SET request, it executes the following atomic flow:
 This architecture ensures that any write acknowledged to the client exists physically on at least two servers, providing durability against single-node failures.
 
 
+%chapter 6
+
+\chapter{Corretness verification and Fault injection testing}
+
+\section{Methodoly for testing distributed systems}
+
+As testing distributed systems requires independent servers I considered two options. First option was to run tests using multiple computers. This option however wasn't developer friendly. Every time I would want to test my system I had to boot multiple computers, synchronize data through version control system, then set it up. This would take too much time and effort just to run some basic testing. Thats where the second option came in - I simulated distributed servers using Docker Containers. As I can control almost everything about Docker Containers - restarts, failures, networks, this was my way of testing.
+
+\section{Unit and integration tests for the Raft implementation}
+
+As noted in chapter 3, Raft is a central thing in Control Plane, and Control Plane is base for everything in the system. Because of that my Raft algorithm implementation had to be throughoutly tested. I implemented unit tests for every major method in the system with edge cases. In particular I have unit tests of:
+\begin{itemize}
+    \item elections - basic check whether it works on 3 and 5 nodes, then tests around replying to various Term value, then Election timeout test 
+    \item messages - creation, conversion between messages struct and grpc definitions 
+    \item persistence - saving logs, loading logs, comparing whether loaded logs are correct, saving empty logs, saving to invalid paths, saving to corrupted file
+    \item snapshot - whether indexes in log are correct after snapshot, whether snapshot is saved correctly - after load to we have correct data, checking whether logs is truncated after snapshot, test for snapshot installation rpc, checking whether snapshot will run if below threshold or log empty, checking whether snapshot creates with any directory problems
+\end{itemize}
+\noindent But as far as unit tests can go, they cannot test how parts of the system behaves in terms of each other. There come integration tests:
+\begin{itemize}
+    \item Full test of election, writing to a log and replication of this log to other nodes
+    \item Test of forwarding to a leader if broadcast is sent to non-leader node 
+    \item Test of Raft recovery - whether node will have correct values after it crashes 
+\end{itemize}
+
+\noindent There was also a benchmark created for Raft only. It tried to run as many requests per second as possible. On Macbook Air M1 2020, 16GB RAM it achieved around 290k requests per second.
+
+\section{Simulation of failures and network partitioning}
+
+While the Raft tests are useful for testing Raft, they are not useful for testing the entire system. System requirement was to be Strongly Consistent and have Partition Tolerance. Hence I wrote two tests:
+\begin{itemize}
+    \item First test checked Partition Tolerance, it ran entire system and waited for it to get to some stable state (wait around 5 seconds). It then found the leader and disconnected it from the other nodes. Then the test waited for new leader election. When the new leader was elected, the new node was added to the cluster. Then the previously disconnected node was reconnected and after 5 seconds there was a check whether the reconnected node sees the newly added node. 
+    \item Second test checked Strong Consistency. It had multiple subtests in it:
+    \begin{itemize}
+        \item First configured some topology of the system to look like it was running for some time to check read-after-write on it. The test run PUT request for some random value to the key and without waiting asked for the value. The expected value of read was the write value.
+        \item Second was to write sequence of values to the same key (change the key value multiple times). Then there was one singular read sent. The expected value was the value of the last write.
+        \item Third part was similar to first, but this time there were multiple keys used.
+        \item Fourth part was about Control Plane consistency, the test tried to register a new node and expected the registration to succeed and be visible in following read 
+        \item Fifth part was to expect all Raft nodes to be available after all of these operations from previous subtests 
+        \item Sixth part was to write a value to some key and restart data-node holding it. The expected outcome was to data-node to have this value in the memory.
+        \item Seventh part was a rerun of second part, to make sure that data-node after restart is still functioning in the intended way.
+        \item Eight, final part was to write a value to data-node and then immediately do a read-after-write check whether replica has this data.
+    \end{itemize}
+\end{itemize}
+
+\noindent All of this tests suceeded, guaranteeing that the system is Strongly Consistent and Partition Tolerant.
+
+
+%chapter 7
+
+\chapter{Performance analysis and Comparison with Existing Solutions}
+
+\section{Benchmarks}
+
+I decided to run benchmarks to calculate how many requests per second the cache can support. Benchmark works for 10 seconds, using 100 workers. It writes as many request as it can to different key each request. After ten seconds, we divide the number of total requests by 10 to get the score of requests per second.//
+
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-
+\chapter{Saved}
 \section{Data partitioning}
 %CHECK FROM HERE
 The design of any distributed system at it's conception solve the problem of partinioning the data. As the application can grow infinitely, physical limits are set. Our computer have limited capacity for memory, CPU and network I/O, problem known by vertical scaling. 
