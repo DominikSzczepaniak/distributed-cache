@@ -584,10 +584,57 @@ While the Raft tests are useful for testing Raft, they are not useful for testin
 \chapter{Performance analysis and Comparison with Existing Solutions}
 
 \section{Benchmarks}
+The main idea about a cache is its speed. If we did not care about speed, then using database would be better. In that case, the performance analysis is crucial. \\
+I decided to run benchmarks to calculate how many requests per second the cache can support. Benchmark works for 10 seconds, using 100 workers. It writes as many request as it can to different key each request. After ten seconds, we divide the number of total requests by 10 to get the score of requests per second. //
 
-I decided to run benchmarks to calculate how many requests per second the cache can support. Benchmark works for 10 seconds, using 100 workers. It writes as many request as it can to different key each request. After ten seconds, we divide the number of total requests by 10 to get the score of requests per second.//
+\noindent For benchmarks I was using Macbook Air M1, 2020 with 16GB of RAM on MacOS Tahoe 26.1. 
 
+\section{Throughput study (RPS) depending on the number of clients and shards}
 
+\section{Analysis of Raft protocol overhead on response time (Latency)}
+
+TU NAPISZ O TYM, ZE JAK NASZ RAFT JEST WOLNIEJSZY O X PROCENT, TO CALY SYSTEM JEST WOLNIEJSZY O X*Y PROCENT, WIEC IMPLEMENTACJA RAFTA JEST WAZNA A JA NIE MIALEM CZASU PISAC WSZYSTKICH OPTYMALIZACJI
+
+\section{Comparative study}
+To verify whether the score is good, we should compare it against something. I identified two open-source system best to compare against. First one is Etcd - also a Raft based implementation of key-value store that guarantees strong consistency. However Etcd is a durable key-value store, meaning that even if nodes do crash, the data is not lost. \\
+The second system is Redis, as it's the most used cache is the world [9]. Redis however, is an AP (Availability + Partition Tolerance) system, meaning that it doesn't guarantee strong consistency. It is eventual consistency system, made to give the best possible performance. Redis is an 15 year old, C written, highly-optimised cache. It is very hard to write something better than Redis, so it's a good comparison in terms of speed. 
+
+\subsection{Performance comparison with Etcd}
+Etcd was ran in Docker. I used official package \textit{go.etcd.io/etcd/client/v3@v3.5.11} for client. \\
+I ran 10x 10 second, 100 workers setup described in chapter 7.1. I saved amount of requests per second for every single of these runs, then averaged it. The score was 26661 Requests Per Second.
+\subsection{Performance comparison with Redis}
+Redis was also ran in Docker. The client used was official \textit{github.com/redis/go-redis/v9}.
+Just like in Etcd, 10x 10 second, 100 workers benchmarks were run. The score was 38776 Requests per second.
+
+\subsection{Conclusions from the comparative analysis}
+I re-run my system 10x 10 second, 100 workers benchmarks alongside Etcd and Redis. It averaged 27715 Request per second, making it 3.95\% faster than Etcd and 30\% slower than Redis. \\
+\noindent This score is expected. My system should be faster than Etcd and slower than Redis. Based on analysis of Raft protocol overhead on response time, the better and more optimised my Raft implementation would be, the faster it should work. My system could be working faster, but it would never reach speed or Redis because of it's low level implementation, lenient consistency guarantee and higher level of optimizations.
+
+%chapter 8
+\chapter{Summary}
+
+\section{Evaluation of the degree of achievement of the work's objectives}
+
+My system functional and nun-functional requirements have all been meet. For each and every one of them there was a test written. 
+
+\subsection{Encountered implementation problems and challenges}
+
+The biggest problem of the project was the implementation.\\
+Firstly I implemented Raft with multiple mutexes. Using multiple mutexes made it harder to reason about. That caused many deadlocks that I had to debug. \\
+My second problem with Raft implementation was that I did not start with snapshot logic instantly. This made me rewrite almost all of the logic to adjust log indexes and terms to include snapshotted terms. \\
+Then, even after implementation of snapshots there were not efficient. My initial strategy was to send snapshot during one request. This made the request block the thread and basically hold the mutex for longer, which made the server (leader) sending snapshot to a follower unresponsible. This created a bug, where the third server, that was not receiving snapshot saw a leader as dead node and started the election. Because of correct values and logic, the server that was receiving snapshot accepted the new leader Vote Request and made the third server a new leader. My solution to this, was to split snapshot into smaller blocks. This removed unresponsibility of leader and made cluster work correctly. 
+
+\section{Directions for further development of the project}
+
+As noted in chapter 7, the Raft speed determines entire application speed. I've found multiple tips and indentified possible directions for better performance of said algorithm. These include:
+\begin{itemize}
+    \item Batching requests. Currently logs are saved every single request. This can be sped up, by batching them - sendings two or three log entires in one requests, instead of three of them. Saving logs opens and closes a file, which is a slow I/O operation. If the system would open only 33\% of the time, it would greatly speed up the entire algorithm. This is however hard to implement, as if we accept a request and return OK response, then to achieve strong consistency we need to have the data in stable storage. If the node crashes before saving it (while waiting for 2/3 log entires for batch) it will completely break strong consistency. 
+    \item Saving logs to file is a slow I/O operation that reopens file multiple times. The idea is to use some heuristic to keep the file open while some variables occur. One possible variable is that, there might be way more requests and logs to save. If we did not have to close and open the file, it would make it work almost as fast as batching, but without the risk of breaking strong consistency. This is also not so easy to implement. We need to make sure that the fsync() calls are often, we also need a very good heuristic for when to close the file. If any bug occurs to the heuristic, then entire algorithm stops working as it's basing everything on log persistance.
+    \item Based on profiler, the encoding/decoding binary writing is taking around 40\% of the entire time of application. There might be introduced custom encoding and decoding that might be more specific and save everything needed in specific bits of integer, hence making the entire encoding shorter.
+    \item The I/O operations are long, the system might benefit from using the fastest threads to handle these operations. 
+\end{itemize} 
+
+%FINISH, BELOW IS OLD STUFF, TO BE DELETED
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -810,6 +857,7 @@ Application \ Database is an actual cache that we keep - this is where all the l
 \bibitem{example} usage of raft in neo4j
 \bibitem{example} usage of raft in rabbitmq
 \bibitem{example} Sharding name where it comes from
+\bibitem{example} Redis usage statistics
 \end{thebibliography}
 
 
