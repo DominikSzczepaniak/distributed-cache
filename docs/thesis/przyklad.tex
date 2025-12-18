@@ -1,3 +1,9 @@
+%to add:
+% CI/CD
+% docker setup 
+% 
+
+
 % Opcje klasy 'iithesis' opisane sa w komentarzach w pliku klasy. Za ich pomoca
 % ustawia sie przede wszystkim jezyk oraz rodzaj (lic/inz/mgr) pracy.
 \documentclass[shortabstract]{iithesis}
@@ -591,9 +597,70 @@ I decided to run benchmarks to calculate how many requests per second the cache 
 
 \section{Throughput study (RPS) depending on the number of clients and shards}
 
+
+\begin{table}[h!]
+\centering
+\caption{Client Scaling (1 Datanode)}
+\label{tab:client_scaling}
+\begin{tabular}{|c|c|}
+\hline
+Workers & RPS \\ \hline
+1 & 5,714 \\ \hline
+10 & 18,855 \\ \hline
+50 & 28,336 \\ \hline
+100 & 29,605 \\ \hline
+200 & 27,661 \\ \hline
+\end{tabular}
+\end{table}
+
+\begin{table}[h!]
+\centering
+\caption{Horizontal Scaling (Multiple Datanodes, No Replication)}
+\label{tab:horizontal_scaling}
+\begin{tabular}{|c|c|c|}
+\hline
+Datanodes & Combined RPS & Scaling \\ \hline
+1 & 28,460 & 1.0x \\ \hline
+2 & 55,001 & 1.93x \\ \hline
+3 & 72,731 & 2.56x \\ \hline
+\end{tabular}
+\end{table}
+
+
+\begin{table}[h!]
+\centering
+\caption{Replication Impact (per-node throughput)}
+\label{tab:replication_impact}
+\begin{tabular}{|l|c|}
+\hline
+Configuration & RPS \\ \hline
+1 datanode (no replication) & 28,909 \\ \hline
+2 datanodes (no replication) & 27,100 \\ \hline
+3 datanodes (no replication) & 27,468 \\ \hline
+2 datanodes (WITH replication) & 26,108 \\ \hline
+3 datanodes (WITH replication) & 27,657 \\ \hline
+\end{tabular}
+\end{table}
+
 \section{Analysis of Raft protocol overhead on response time (Latency)}
 
-TU NAPISZ O TYM, ZE JAK NASZ RAFT JEST WOLNIEJSZY O X PROCENT, TO CALY SYSTEM JEST WOLNIEJSZY O X*Y PROCENT, WIEC IMPLEMENTACJA RAFTA JEST WAZNA A JA NIE MIALEM CZASU PISAC WSZYSTKICH OPTYMALIZACJI
+I created a benchmark for a case where we used Raft for every single operation. In reality we do not do this, because our smart client hashes the topology and doesn't need to use Raft on every request. \\
+However in the benchmark I made the client send every request through Raft. This resulted in around 8K requests per second. Then I implemented an artificial sleep for Broadcast and LogRequest RPC operation. It accepts how many miliseconds it should sleep for before doing the part. This can showcase how important is Raft for the application. After running the benchmark scores were:
+\begin{table}[h!]
+\centering
+\caption{Analysis of Raft protocol overhead on response time}
+\label{tab:raft_overhead}
+\begin{tabular}{|c|c|c|}
+\hline
+Artificial Delay & Consensus RPS & Impact \\ \hline
+0ms & 8002 & Baseline \\ \hline
+10ms & 274 & 29x slower \\ \hline
+25ms & 100 & 80x slower \\ \hline
+50ms & 59 & 135x slower \\ \hline
+\end{tabular}
+\end{table}
+
+\noindent This shows how big of a difference can Raft speed make for the system. 
 
 \section{Comparative study}
 To verify whether the score is good, we should compare it against something. I identified two open-source system best to compare against. First one is Etcd - also a Raft based implementation of key-value store that guarantees strong consistency. However Etcd is a durable key-value store, meaning that even if nodes do crash, the data is not lost. \\
@@ -602,6 +669,7 @@ The second system is Redis, as it's the most used cache is the world [9]. Redis 
 \subsection{Performance comparison with Etcd}
 Etcd was ran in Docker. I used official package \textit{go.etcd.io/etcd/client/v3@v3.5.11} for client. \\
 I ran 10x 10 second, 100 workers setup described in chapter 7.1. I saved amount of requests per second for every single of these runs, then averaged it. The score was 26661 Requests Per Second.
+
 \subsection{Performance comparison with Redis}
 Redis was also ran in Docker. The client used was official \textit{github.com/redis/go-redis/v9}.
 Just like in Etcd, 10x 10 second, 100 workers benchmarks were run. The score was 38776 Requests per second.

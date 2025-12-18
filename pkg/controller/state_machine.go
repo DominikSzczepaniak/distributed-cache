@@ -13,6 +13,7 @@ type CommandType string
 const (
 	CmdRegisterNode   CommandType = "RegisterNode"
 	CmdUpdateTopology CommandType = "UpdateTopology"
+	CmdNoOp           CommandType = "NoOp"
 )
 
 type Command struct {
@@ -72,6 +73,9 @@ func (a *ControllerApp) AppendMessage(msg raft.Message) (bool, int) {
 			return false, 0
 		}
 		a.controller.applyUpdateTopology(&payload.Config)
+		return true, 0
+
+	case CmdNoOp:
 		return true, 0
 
 	default:

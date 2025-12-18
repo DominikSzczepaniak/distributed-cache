@@ -36,6 +36,7 @@ type Config struct {
 	connectionTimeout     time.Duration
 	healthCheckInterval   time.Duration
 	startupMode           StartupMode
+	artificialDelay       time.Duration
 }
 
 func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
@@ -126,6 +127,7 @@ func LoadConfig() *Config {
 		connectionTimeout:   getEnvDuration("RAFT_CONN_TIMEOUT", 5*time.Second),
 		healthCheckInterval: getEnvDuration("RAFT_HEALTH_CHECK_INTERVAL", 10*time.Second),
 		startupMode:         StartAlways,
+		artificialDelay:     getEnvDuration("RAFT_ARTIFICIAL_DELAY", 0),
 	}
 
 	return cfg

@@ -360,3 +360,25 @@ func (c *Controller) BroadcastTopologyUpdate(config *metadata.ClusterConfig) err
 	}
 	return nil
 }
+
+func (c *Controller) NoOp() error {
+	cmd := Command{
+		Type:    CmdNoOp,
+		Payload: nil,
+	}
+	cmdBytes, _ := json.Marshal(cmd)
+
+	msg := raft.Message{
+		MsgType: raft.CommandMsg,
+		Data:    cmdBytes,
+	}
+
+	success, _, err := c.raft.BroadcastSync(msg, 5*time.Second)
+	if err != nil {
+		return err
+	}
+	if !success {
+		return fmt.Errorf("consensus not reached")
+	}
+	return nil
+}
