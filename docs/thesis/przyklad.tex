@@ -136,13 +136,21 @@ So my system will be a CP system.
 \subsubsection{Strong Consistency (Linearizability)}
 Linearizability is the strongest guarantee for consistency for single-object requests. It gives a ilussion that system is in fact a single copy of data and the data is not distributed. It gives us a guarantee that once write operation is completed sucessfully, all subsequent read operations will return that value, or a newer value if any update happened.
 
+Linearizability (the formal definition of Strong Consistency) says:
+\begin{itemize}
+    \item If operation A completes (client gets OK), then every operation B that starts after A finishes must see the effect of A.
+    \item If an operation A is in-flight or timed out, it is allowed to either "have happened" or "not have happened," as long as the system is consistent about that choice from then on.
+\end{itemize}
+
 Mathematically, when operation $W(x)$ completes at time $t_1$, then for any given operation $R(x)$ starting at time $t_2 > t_1$ must see the effects of $W(x)$.
 
 \subsubsection{Eventual Consistency}
 In eventually consistent systems, if no new updates are made to a given data item, eventually all accesses to that item will return the last updated value. This model allows for temporary inconsistencies where different nodes serve different versions of data.
 This approach enables high availability and low latency because writes can be accepted by a single node without waiting for other nodes to accept and make a consensus. This approach, however, requires to add logic for conflict resolution strategies when merging data from different nodes.
 
-%here finish
+\section{Split brain problem}
+
+Split-brain is a problem in distributed system where a network partition itself into two or more disconnected graph of nodes. This makes the groups unable to communicate with each other and each group may incorrenctly conclude that the other nodes from different groups have failed. This in consequence may start tasks for each groups to find it's leader or primary node. There are multiple ideas to manage this problem. Raft algorithm for example only allows the node to become a leader if more than half of total nodes agrees. The other possibility is to use technique called fencing. This technique is a mechanism where a node physically disables its peer to ensure that it cannot write to shared storage. 
 
 \section{Consensus algorithms}
 
@@ -536,6 +544,140 @@ When a Worker receives a SET request, it executes the following atomic flow:
 \end{enumerate}
 
 This architecture ensures that any write acknowledged to the client exists physically on at least two servers, providing durability against single-node failures.
+
+%chapter 5
+
+\chapter{Implementation of Control Plane and Data Plane}
+
+\section{Implementation of Control Plane}
+
+Control Node is the central orchestrator of the entire application. It is responsible for maintaining the state of the application and ensuring that all nodes are in sync.
+
+\subsection{Topology state machine}
+
+The core of the Controller is a Replicated State Machine that is responsible for managing the cluster metadata. This ensures that in a multi-node setup all instances of Controllers are in sync about which Data Node holds which shard.\\
+The State represents:
+\begin{itemize}
+    \item Epoch - a monotonically increasing number representing the version of the topology. This works similarly to Raft term.
+    \item Nodes - a map of all registered Data Nodes with information about their addresses and statuses.
+    \item Shards - a map of all shard IDs to their Primary and Replica data node IDs.
+\end{itemize}
+
+The Controller implements the Raft application interface. It processes commands like node registration and topology updates. Changes to the topology are not applied until they are committed by the Raft algorithm to ensure strong consistency. When a command is sent to the Controller, it updates its local config and, if the Controller is the leader, it may trigger a rebalance. To prevent the Raft log from growing infinitely, the system supports snapshots, saving the current cluster configuration to durable storage.
+
+\subsection{Node health monitoring}
+
+A dedicated component called the Reaper is responsible for monitoring the system for failures. Data nodes are designed to periodically send heartbeats to the Control Plane, which updates the timestamp of the last received heartbeat for each node. The Reaper runs a background goroutine that wakes up every second to check the liveliness of all data nodes. If a node has not sent a heartbeat within the configured grace period, it is marked as DEAD. In this case, the Reaper triggers a callback that signals the Controller to take action. If the failed node was a Primary, one of its replicas is promoted to the primary role. Subsequently, the rebalancing logic will attempt to find a new node to act as a replica to restore the desired redundancy level.
+
+\subsection{Shard rebalancing}
+Rebalancing is responsible to ensure that data availability and even distribution of data is preserved. \\
+
+\noindent When a node failure is detected, the system performs an emergency promotion:
+\begin{itemize}
+    \item [1.] The controller identifies all shards where the failed node was the primary.
+    \item [2.] For each such shard, the first available replica is promoted to become the new primary. Since the original primary is dead, no data can be copied; the promoted replica relies on the data it already has.
+    \item [3.] The dead node is removed from the active node collection.
+\end{itemize}
+
+\noindent \textbf{Note: } When both primary node and replica dies, then the data in the shards is lost. This is a direct consequence of not providing a durable cache as noted previously. It is possible to increase number of replicas to two, but it will slow the cache, as we need to ensure that the primary data node sends data to every replica before it returns OK to the client. However, it's very unlikely to both nodes die at the same time if they are on different physical servers. \\
+
+\noindent Rebalancing is triggered automatically when a new node registers or a failure occurs. It use a greedy strategy:
+\begin{itemize}
+    \item [1.] It identifies all shards that lack a primary node and assigns them to ACTIVE nodes using a round-robin approach.
+    \item [2.] It ensures that every shard has the required number of replicas, selecting new nodes to act as replicas if needed. 
+    \item [3.] For initializing these new replicas or during planned load balancing, a synchronization protocol is used to ensure data consistency. 
+\end{itemize}
+
+\noindent For initializing new replicas, the controller implements a 4-phase synchronization protocol:
+\begin{itemize}
+    \item [1.] The target node is instructed to perform a bulk copy of all data from the current primary node.
+    \item [2.] The shard is marked as LOCKED in the cluster topology. This temporarily stops writes to this specific shard to ensure a consistent state.
+    \item [3.] A final incremental catch-up is performed to transfer any data that was added during the initial bulk copy in phase 1.
+    \item [4.] The target data node is officially added to the replica set and the shard is set back to ACTIVE. 
+\end{itemize}
+
+\section{Data Plane}
+
+\subsection{Concurrent Data Store}
+
+The data storage provides a simple but thread-safe in-memory key-value store. It uses a standard Go map structure wrapped with a mutex. The data store supports data migration. In particular it supports two functions:
+\begin{itemize}
+    \item [1.] ExportShard(shardID, totalShards) - a crucial function for rebalacing, as it iterates through the entire map and hashes each key to determine its shard and returns only those keys that belongs to given shardID 
+    \item [2.] Import(data) - it bulks load into the map. The function is used during shard migration or recovery.
+\end{itemize}
+
+\subsection{Lease management and fencing}
+
+Lease management is the primary system defense against split-brain problem. The data nodes are implemented to send a heartbeat to the Control Plane to inform that they are alive. If the controller acknowledges the heartbeat then the data node extends it validity timestamp. Lease is a configurable value that says how long a data node is alive. We use fencing to check the lease by comparing current time to last validity timestamp. If the difference is bigger than lease time, then the data node immediately stop serving requests. To ensure that we always check this condition, every PUT, GET, DELETE operations check the lease. If the lease has expired, then the data node will return a 503 Service Unavailable HGTTP response, effectively fencing the node out of the cluster.
+
+\subsection{Synchronization and Consistency}
+
+Data Plane maintains consistency by coordination with the Control Plane. \\
+
+Data Plane makes sure that the topology is always synchronized. The heartbeat responses contains the latest Epoch. If the Epoch is higher than the node's local Epoch value then lease manager will immediately fetch the latest topology from the Control Plane and update the local one. This ensures that the data node is always aware of its current role that the Control Plane assigned it to - whether it's a primary node or a replica.\\
+
+Data Plane uses epoch based fencing. If a node has an active lease, every write request includes an Epoch. The data node compares the client's Epoch to its own. If the requests Epoch is smaller than the local one, then the request is rejected with 412 Precondition Failed, preventing stale writes from delayed clients that have to refetch the current topology.\\
+
+The last synchronization mechanism is the Primary-Backup replication. If the data node is a primary node, then its responsibility is to replicate writes to all Replica nodes. This replication is \textbf{synchronous}. This causes the system to be Strong Consistent, because we only accept the request if all replicas has saved it and the primary nodes had saved it aswell. This also provides a form of durability, as the system will keep the data as long as at least one replica is alive.\\
+
+\textbf{Note: } The strong consistency definition is chapter 2 says that:
+
+\begin{itemize}
+    \item If operation A completes (client gets OK), then every operation B that starts after A finishes must see the effect of A.
+    \item If an operation A is in-flight or timed out, it is allowed to either "have happened" or "not have happened," as long as the system is consistent about that choice from then on.
+\end{itemize}
+So if a all replicas received the write request and then the primary node died, we have uncertainity - the second case. But since all replicas said OK - then the client will see the request as accepted from now on. In the other case if some replicas received the write and the other did not and the primary node crashed, then we have a problem of some replicas having the data and others not. This is where the client solves this problem by client-side idempotency. This will be talked in more detail in client section.  
+
+
+\subsection{Data transfer protocol}
+
+Shard synchronization is a crucial part of the system. There are two data nodes that need to synchronize their data. Let's call them source and target node. The source node is the one that exports its data, while the target node is the one that imports it. Data Plane uses a pull model where:
+\begin{itemize}
+    \item [1.] The controller sends a pull request to target node 
+    \item [2.] The target node sends a GET request to source node export endpoint that returns the result of ExportShard() function. % TODO add some hyperlink?
+    \item [3.] The target node calls Import() function with the data it received from source node. %TODO also add hyperlink
+\end{itemize}
+
+
+\section{Client and access library}
+
+While the Control Node handles the cluster high-level orchestration and Data Node handles lower-level data logic, the Client and Access Library is reponsible for efficient operations and ensuring reliable communication. 
+
+\subsection{Smart client mechanism}
+
+The smart client is a implementation that eliminates the need for centrally implemented load balancer or proxy of the system that can increase latency or break the data consistency - talked in more details in chapter 3. \\%TODO hyperlink
+
+The client maintains a local copy of the cluster topology that is fetched from the Control Plane. The client will query the one of the controllers at the start of the session to get the latest topology. The client has to hold its own Epoch to send in every request and also compare whether the state of topology is the latest. The client also holds the list of active data nodes and shard to node mapping to connect hash to the node.\\
+
+\noindent Every GET, PUT, DELETE operation has a key associated with it. The client needs to calculate the hash of the key to send the request to correct node. The client will perform operations:
+\begin{itemize}
+    \item [1.] Hash the key using FNV-1a algorithm. %TODO describe this algorithm in chapter 2?
+    \item [2.] Determine shard id by taking the hash modulo number of shards.
+    \item [3.] Look up the primary data node id for that shard in local cache 
+    \item [4.] Send the request to the primary data node id.
+\end{itemize}
+
+
+\noindent The client is lazy but reactive. It keeps using its local cache as long as its valid. The validity of a cache is determined by a datanode response: 
+\begin{itemize}
+    \item [1.] Status 412 Precondition Failed - the Epoch of the client is too old, the data node has newer Epoch in its local values
+    \item [2.] Status 400 Not Primary - the shard has migrated or failover occured
+\end{itemize}
+\noindent In both cases the client has to refetch the topology and all of the other data from Control Plane and update its local cache. %TODO add hyperlink to what "other data is" - written above "EVERY GET, PUT, DELETE"
+
+\subsection{Client-side idempotency}
+
+To prevent duplicate operations during retries (especially when a primary node has died) the client uses idempotency token and client id fields in each request. This makes every single write and delete operation to use a unique UUID token that is used in every request. It is used to check the state of the operation. Each log in Raft algorithm is implemented to hold the idempotency token and client id. Because of this token if the client is unsure whether the operation suceeded, he can always resend the request - if the operations suceeded, nothing will happen, as the system will just find the previous request with the same token. If the operation failed, the system will retry it.\\
+
+This ensures that in the Data Plane, the primary node acts as the coordinator for the token. When the writes are replicated to replicas, then the token is also passed with them. If the primary node fails after replicating but ACK-ing the client, the promoted backup already have the request with token. Then if the client is unsure whether his request has failed or not, then the replica that has become a primary node will have the request with the same token and reply OK. This solves previously talked problem where only some of the replicas receive the write and others do not because primary data node crashes. %TODO add hyper link to "previously talked problem"
+Lets imagine a situation where we have a cluster with primary node $P$ and two replicas $R_1$ and $R_2$. The client sends a request PUT(key, value) with some token $T$. The primary node $P$ replicates to $R_1$, which saves the request. Then $P$ crashes. The client request times out and the client is not in the state of uncertainity, so it will resend the request. We have two possibilities:
+\begin{itemize}
+    \item [1.] $R_1$ becomes the new Primary node - it will see that it has the request with the token and say OK. Because of how the Shard Synchronization works, then $R_2$ will also have this request in it's memory, so the state is correct. %TODO add hyperlink to Shard synchronization
+    \item [2.] $R_2$ becomes the new Primary node - this Replica didn't receive the request, so it will not have it in it's memory. So on the resend request it will write the request to it's memory and replicate it to $R_1$ which will overwrite the currently held request. The state is correct
+\end{itemize}
+It can be easily increased to any number of Replicas, as the argument is the same. 
+
+
 
 
 %chapter 6

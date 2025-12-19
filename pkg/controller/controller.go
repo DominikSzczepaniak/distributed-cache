@@ -221,6 +221,13 @@ func (c *Controller) RegisterNode(nodeID, address string) error {
 	return nil
 }
 
+// replicaSyncTask represents a pending data synchronization from primary to replica
+type replicaSyncTask struct {
+	shardID   int
+	primaryID string
+	replicaID string
+}
+
 func (c *Controller) Rebalance() {
 	c.mu.RLock()
 	config := c.config
@@ -263,6 +270,9 @@ func (c *Controller) Rebalance() {
 		slog.Info("Rebalance: No changes needed")
 		return
 	}
+
+	// Track new replicas that need data synchronization
+	var syncTasks []replicaSyncTask
 
 	c.mu.Lock()
 	newConfig := *c.config
@@ -308,6 +318,13 @@ func (c *Controller) Rebalance() {
 				}
 				newReplicas = append(newReplicas, nodeID)
 				slog.Info("Rebalance: Added replica", "shard", shardID, "replica", nodeID)
+
+				// Schedule data sync for new replica
+				syncTasks = append(syncTasks, replicaSyncTask{
+					shardID:   shardID,
+					primaryID: shard.PrimaryID,
+					replicaID: nodeID,
+				})
 			}
 			shard.ReplicaIDs = newReplicas
 		}
@@ -325,6 +342,31 @@ func (c *Controller) Rebalance() {
 		slog.Error("Rebalance: Failed to broadcast topology update", "err", err)
 	} else {
 		slog.Info("Rebalance: Topology broadcasted via Raft", "epoch", newConfig.Epoch)
+	}
+
+	// Trigger data synchronization for new replicas (async)
+	if len(syncTasks) > 0 {
+		go c.syncNewReplicas(syncTasks, &newConfig)
+	}
+}
+
+// syncNewReplicas triggers data pull from primary to each new replica
+func (c *Controller) syncNewReplicas(tasks []replicaSyncTask, config *metadata.ClusterConfig) {
+	for _, task := range tasks {
+		primaryNode, ok1 := config.Nodes[task.primaryID]
+		replicaNode, ok2 := config.Nodes[task.replicaID]
+		if !ok1 || !ok2 {
+			slog.Warn("Sync: Node not found", "primary", task.primaryID, "replica", task.replicaID)
+			continue
+		}
+
+		slog.Info("Sync: Starting data pull", "shard", task.shardID, "from", task.primaryID, "to", task.replicaID)
+
+		if err := c.triggerPull(replicaNode.Address, primaryNode.Address, task.shardID); err != nil {
+			slog.Error("Sync: Failed to pull data to replica", "shard", task.shardID, "replica", task.replicaID, "err", err)
+		} else {
+			slog.Info("Sync: Data pull complete", "shard", task.shardID, "replica", task.replicaID)
+		}
 	}
 }
 
