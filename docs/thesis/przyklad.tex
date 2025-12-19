@@ -133,7 +133,7 @@ So my system will be a CP system.
 \subsection{Strong Consistency (Linearizability) vs. Eventual Consistency}
 
 
-\subsubsection{Strong Consistency (Linearizability)}
+\subsubsection{Strong Consistency (Linearizability)} \label{subsubsec:strong_consistency}
 Linearizability is the strongest guarantee for consistency for single-object requests. It gives a ilussion that system is in fact a single copy of data and the data is not distributed. It gives us a guarantee that once write operation is completed sucessfully, all subsequent read operations will return that value, or a newer value if any update happened.
 
 Linearizability (the formal definition of Strong Consistency) says:
@@ -246,7 +246,7 @@ Etcd is a distributed key-value store used primarily for shared configuration an
 
 % chapter 3
 
-\chapter{Requirements analysis and Software Architecutre Design}
+\chapter{Requirements analysis and Software Architecutre Design} \label{chap:requirements}
 
 \section{Functional and non-functional requirements}
 We define functional requirements as what the system must do, specifying it's behaviours and functions:
@@ -307,7 +307,7 @@ Rebalancing is using Control Plane's active nodes to determine which node should
 I implemented a Reaper mechanism which tracks last heartbeat timestamp of each nodes. In background, Reaper runs a thread that checks if node did heartbeat within configured grace period. If it didn't, then Reaper invokes a callback to Control Plane, triggering a topology rebalance.
 
 \section{Smart Client design}
-\subsection{Query routing strategy and topology caching}
+\subsection{Query routing strategy and topology caching} \label{subsec:query_routing}
 The client on initialization connects to Control Plane to fetch a topology that it stores in local cache. On each request, the client hashes the key to shard ID and looks up the primary node from cached topology. Then the request is sent.
 \subsection{Handling retries and Failover mechanism}
 On RPC failure the client retries the request against current primary. If this primary is unreachable or the request is rejected, then the client will refetch the cluster topology. 
@@ -602,8 +602,8 @@ Rebalancing is responsible to ensure that data availability and even distributio
 
 The data storage provides a simple but thread-safe in-memory key-value store. It uses a standard Go map structure wrapped with a mutex. The data store supports data migration. In particular it supports two functions:
 \begin{itemize}
-    \item [1.] ExportShard(shardID, totalShards) - a crucial function for rebalacing, as it iterates through the entire map and hashes each key to determine its shard and returns only those keys that belongs to given shardID 
-    \item [2.] Import(data) - it bulks load into the map. The function is used during shard migration or recovery.
+    \item [1.] ExportShard(shardID, totalShards) \label{func:exportshard} - a crucial function for rebalacing, as it iterates through the entire map and hashes each key to determine its shard and returns only those keys that belongs to given shardID 
+    \item [2.] Import(data) \label{func:import} - it bulks load into the map. The function is used during shard migration or recovery.
 \end{itemize}
 
 \subsection{Lease management and fencing}
@@ -620,7 +620,7 @@ Data Plane uses epoch based fencing. If a node has an active lease, every write 
 
 The last synchronization mechanism is the Primary-Backup replication. If the data node is a primary node, then its responsibility is to replicate writes to all Replica nodes. This replication is \textbf{synchronous}. This causes the system to be Strong Consistent, because we only accept the request if all replicas has saved it and the primary nodes had saved it aswell. This also provides a form of durability, as the system will keep the data as long as at least one replica is alive.\\
 
-\textbf{Note: } The strong consistency definition is chapter 2 says that:
+\textbf{Note: } \label{subsec:consistency_note} The strong consistency definition in Chapter \ref{subsubsec:strong_consistency} says that:
 
 \begin{itemize}
     \item If operation A completes (client gets OK), then every operation B that starts after A finishes must see the effect of A.
@@ -629,13 +629,13 @@ The last synchronization mechanism is the Primary-Backup replication. If the dat
 So if a all replicas received the write request and then the primary node died, we have uncertainity - the second case. But since all replicas said OK - then the client will see the request as accepted from now on. In the other case if some replicas received the write and the other did not and the primary node crashed, then we have a problem of some replicas having the data and others not. This is where the client solves this problem by client-side idempotency. This will be talked in more detail in client section.  
 
 
-\subsection{Data transfer protocol}
+\subsection{Data transfer protocol} \label{subsec:data_transfer}
 
 Shard synchronization is a crucial part of the system. There are two data nodes that need to synchronize their data. Let's call them source and target node. The source node is the one that exports its data, while the target node is the one that imports it. Data Plane uses a pull model where:
 \begin{itemize}
     \item [1.] The controller sends a pull request to target node 
-    \item [2.] The target node sends a GET request to source node export endpoint that returns the result of ExportShard() function. % TODO add some hyperlink?
-    \item [3.] The target node calls Import() function with the data it received from source node. %TODO also add hyperlink
+    \item [2.] The target node sends a GET request to source node export endpoint that returns the result of \texttt{ExportShard()} function (see Section \ref{func:exportshard}).
+    \item [3.] The target node calls \texttt{Import()} function (see Section \ref{func:import}) with the data it received from source node.
 \end{itemize}
 
 
@@ -645,7 +645,7 @@ While the Control Node handles the cluster high-level orchestration and Data Nod
 
 \subsection{Smart client mechanism}
 
-The smart client is a implementation that eliminates the need for centrally implemented load balancer or proxy of the system that can increase latency or break the data consistency - talked in more details in chapter 3. \\%TODO hyperlink
+The smart client is a implementation that eliminates the need for centrally implemented load balancer or proxy of the system that can increase latency or break the data consistency - talked in more details in Chapter \ref{chap:requirements}. \\
 
 The client maintains a local copy of the cluster topology that is fetched from the Control Plane. The client will query the one of the controllers at the start of the session to get the latest topology. The client has to hold its own Epoch to send in every request and also compare whether the state of topology is the latest. The client also holds the list of active data nodes and shard to node mapping to connect hash to the node.\\
 
@@ -663,16 +663,17 @@ The client maintains a local copy of the cluster topology that is fetched from t
     \item [1.] Status 412 Precondition Failed - the Epoch of the client is too old, the data node has newer Epoch in its local values
     \item [2.] Status 400 Not Primary - the shard has migrated or failover occured
 \end{itemize}
-\noindent In both cases the client has to refetch the topology and all of the other data from Control Plane and update its local cache. %TODO add hyperlink to what "other data is" - written above "EVERY GET, PUT, DELETE"
+\noindent In both cases the client has to refetch the topology and all of the other data from Control Plane (described in Section \ref{subsec:query_routing}) and update its local cache. 
 
 \subsection{Client-side idempotency}
 
 To prevent duplicate operations during retries (especially when a primary node has died) the client uses idempotency token and client id fields in each request. This makes every single write and delete operation to use a unique UUID token that is used in every request. It is used to check the state of the operation. Each log in Raft algorithm is implemented to hold the idempotency token and client id. Because of this token if the client is unsure whether the operation suceeded, he can always resend the request - if the operations suceeded, nothing will happen, as the system will just find the previous request with the same token. If the operation failed, the system will retry it.\\
 
-This ensures that in the Data Plane, the primary node acts as the coordinator for the token. When the writes are replicated to replicas, then the token is also passed with them. If the primary node fails after replicating but ACK-ing the client, the promoted backup already have the request with token. Then if the client is unsure whether his request has failed or not, then the replica that has become a primary node will have the request with the same token and reply OK. This solves previously talked problem where only some of the replicas receive the write and others do not because primary data node crashes. %TODO add hyper link to "previously talked problem"
+This ensures that in the Data Plane, the primary node acts as the coordinator for the token. When the writes are replicated to replicas, then the token is also passed with them. If the primary node fails after replicating but ACK-ing the client, the promoted backup already have the request with token. Then if the client is unsure whether his request has failed or not, then the replica that has become a primary node will have the request with the same token and reply OK. This solves the previously discussed problem where only some replicas receive the write and others do not because the primary data node crashes (see Section \ref{subsec:consistency_note}).\\
+
 Lets imagine a situation where we have a cluster with primary node $P$ and two replicas $R_1$ and $R_2$. The client sends a request PUT(key, value) with some token $T$. The primary node $P$ replicates to $R_1$, which saves the request. Then $P$ crashes. The client request times out and the client is not in the state of uncertainity, so it will resend the request. We have two possibilities:
 \begin{itemize}
-    \item [1.] $R_1$ becomes the new Primary node - it will see that it has the request with the token and say OK. Because of how the Shard Synchronization works, then $R_2$ will also have this request in it's memory, so the state is correct. %TODO add hyperlink to Shard synchronization
+    \item [1.] $R_1$ becomes the new Primary node - it will see that it has the request with the token and say OK. Because of how the Shard Synchronization works (see Section \ref{subsec:data_transfer}), then $R_2$ will also have this request in it's memory, so the state is correct. 
     \item [2.] $R_2$ becomes the new Primary node - this Replica didn't receive the request, so it will not have it in it's memory. So on the resend request it will write the request to it's memory and replicate it to $R_1$ which will overwrite the currently held request. The state is correct
 \end{itemize}
 It can be easily increased to any number of Replicas, as the argument is the same. 
