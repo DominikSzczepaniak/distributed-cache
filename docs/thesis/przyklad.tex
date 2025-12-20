@@ -1,7 +1,8 @@
 %to add:
-% CI/CD
-% docker setup 
-% 
+% section about CI/CD
+% section about docker setup and instructions
+% section about architectures analysis - its mostly in notes. write about hazelcast, redis, google spanner, amazon, types of hashing etc. THIS IN 2.4
+
 
 
 % Opcje klasy 'iithesis' opisane sa w komentarzach w pliku klasy. Za ich pomoca
@@ -243,6 +244,176 @@ Etcd is a distributed key-value store used primarily for shared configuration an
 \end{itemize}
 
 \noindent The solution implemented in this thesis (Chapter 4) aligns more closely with the Etcd model regarding consistency (using Raft for strong guarantees) but incorporates architectural elements of Redis (key-value storage focus) to explore the performance implications of strong consistency in a caching scenario. My solution \textbf{does not} guarantee durability, hence if the node crashes, the data needs to be refetch from durable data storage. This is one of the biggest differences between Etcd.
+
+\subsection{Analysis of hashing approaches}
+
+
+\subsubsection{Karger's Consistent Hashing}
+
+Proposed by Karger et al. at MIT in 1997, consistent hashing solves the ``reshuffling'' problem inherent in modular hashing. In a standard modulo setup ($\text{hash}(k) \pmod n$), changing $n$ (adding/removing a node) results in nearly all keys being remapped to different nodes.
+Karger's approach maps both the \textbf{Nodes} and the \textbf{Keys} onto the same identifier space, typically treated as a circle or ``ring'' (e.g., integers $0$ to $2^{32}-1$).
+\begin{itemize}
+    \item \textbf{Placement:} A node is assigned a position on the ring by hashing its ID (e.g., IP address). A key is assigned a position by hashing the key itself.
+    \item \textbf{Lookup:} To find the node responsible for a key, we move clockwise around the ring from the key's position until we encounter a node. That node is the ``coordinator'' or owner of the key.
+    \item \textbf{Scaling:} When a new node is added to the ring, it only ``steals'' keys from the node immediately following it in the clockwise direction. The rest of the keys in the cluster remain unaffected.
+\end{itemize}
+
+Mathematically, this ensures that when the $n$-th node is added, only $1/n$ of the keys need to be moved, which is the theoretical minimum amount of data movement required to maintain a balanced load.
+
+\textbf{Virtual Nodes:} A pure implementation of Karger's ring often results in uneven data distribution due to the random placement of nodes. To solve this, modern implementations (like Cassandra and Dynamo) use ``Virtual Nodes'' (vnodes). A single physical machine acts as multiple nodes on the ring (e.g., 256 positions), ensuring a more uniform statistical distribution of keys.
+
+\subsubsection{Lamping And Veach's Jump Consistent Hash}
+In 2014, Google engineers Lamping and Veach introduced "Jump Consistent Hash," an algorithm that achieves the same stability properties as Karger's ring but with significantly higher performance and zero memory overhead.
+
+Unlike Karger's approach, which requires storing the ring structure in memory (typically a binary search tree or sorted map) to look up a node, Jump Hash computes the bucket assignment algorithmically using a Pseudo-Random Number Generator (PRNG).
+
+The logic is probability-based:
+\begin{itemize}
+    \item When a cluster scales from $n$ to $n+1$ buckets, the algorithm ensures that any specific key has exactly a $\frac{1}{n+1}$ probability of moving to the new bucket $n+1$.
+    \item The algorithm uses the key to seed the PRNG and "jumps" forward through the sequence of bucket sizes to find the final destination.
+\end{itemize}
+
+While extremely fast (executing in nanoseconds), Jump Consistent Hash has a strict constraint: it only supports scaling at the tail. You cannot arbitrarily remove "Node 2" from a 5-node cluster; you can only scale down from 5 to 4. This makes it ideal for data storage systems where buckets are logical shards, but less flexible for direct mapping to dynamic physical servers.
+
+\subsubsection{The sorted monolithic map}
+
+This approach, also known as \textbf{Range Partitioning}, rejects the randomization of hashing entirely. Instead, it treats the entire key-space as a single, sorted monolithic map.
+
+The data is ordered lexicographically (by byte comparison) and divided into contiguous ranges (often called ``Tablets,'' ``Regions,'' or ``Ranges'').
+\begin{itemize}
+    \item \textbf{Routing:} The system maintains a global index (like a B-Tree) that maps ranges to nodes. For example, keys $[A, K)$ might map to Node 1, while keys $[K, Z)$ map to Node 2.
+    \item \textbf{Range Scans:} Unlike hash partitioning, this model allows for efficient range queries (e.g., \texttt{SCAN user:100:log:*}). Since the keys are physically stored together, the system can fetch them in a single disk seek or network call.
+\end{itemize}
+
+However, this design suffers from the \textbf{``Sequential Write'' problem}. If an application generates keys with a monotonically increasing prefix (e.g., timestamps or auto-incrementing IDs), all write traffic will target the single node responsible for the end of the range, creating a massive hot spot while other nodes sit idle. This necessitates complex splitting and rebalancing logic, as seen in systems like TiKV and CockroachDB.
+
+\subsection{Analysis of industry solutions}
+
+
+\subsubsection{Redis cluster: Pre-sharded "Hash slots"} %add more about gossip protocol
+The key-space is pre-sharded into a fixed, static number of 16,384 "hash slots". This number is constant regardless of the number of nodes in the cluster.
+A key is mapped to a slot using the formula: $$\text{hash\_slot} = \text{CRC16}(\text{key}) \pmod{16384}$$.
+Each primary node in the cluster is responsible for a subset of these 16,384 slots. A 3-node cluster, for example, might be configured as:
+\begin{itemize}
+    \item Node A: Hash slots 0 - 5500
+    \item Node B: Hash slots 5501 - 11000
+    \item Node C: Hash slots 11001 - 16383
+\end{itemize}
+
+Load balancing is an explicit, administrator-driven process called "resharding". An administrator uses the redis-cli tool to specify how many slots to move from a source node to a target node. This operation can be performed with "no downtime".
+
+Request Routing (Client-Side Intelligence): This is the most complex component of the Redis Cluster design. Cluster nodes do not proxy requests. If a client sends a request to a node that does not own the key's hash slot, the node replies with a redirection error. There are two types of redirection:  
+\begin{itemize}
+    \item MOVED: This is a permanent redirection. It informs the client that the hash slot is now permanently owned by a different node. The client must update its local cluster map and retry the request at the new node.   
+    %https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/
+
+    \item ASK: This is a temporary redirection used during a resharding operation. When a slot is being migrated, it is in a MIGRATING state on the source and IMPORTING state on the target. A -ASK redirect tells the client, "The key might be on the new node, but only for this one request. Do not update your map.". The client must then send an ASKING command to the target node before sending the redirected query. This ASKING command authenticates the client to access a key in an IMPORTING slot.  
+\end{itemize}
+
+Key Colocation: Redis provides a "hash tags" feature to manually force keys into the same slot. If a key contains a {...} substring, only the content inside the brackets is hashed. For example, user:{123}:profile and user:{123}:account are guaranteed to be in the same hash slot, enabling multi-key operations on them.  
+%https://redis.io/docs/latest/operate/oss_and_stack/management/scaling/
+
+Redis's "hash slot" model represents a pragmatic compromise. It sacrifices the automatic, self-healing nature of consistent hashing for simplicity, predictability, and explicit control. The cluster state is simply a 16,384-element array mapping slots to nodes. This is far simpler to manage, gossip, and reason about than the mathematics of a continuous ring. The trade-off is twofold: load balancing is a manual operation, and the server logic is simplified at the cost of massively complicating the client, which must implement the sophisticated -MOVED/-ASK redirection protocol.   
+
+\subsubsection{Amazon Dynamo}
+Amazon's Dynamo, as documented in the 2007 SOSP paper, is the archetypal highly available, ``always-on'' key-value store.
+
+\textbf{Model:} It uses the classic Karger-style consistent hashing, enhanced with virtual nodes to address load balancing and heterogeneity.
+
+\textbf{Replication \& Partitioning:} Dynamo's ``preference list'' is a key concept. For a given key $k$ with a replication factor of $N$, its preference list is composed of the first $N$ distinct physical nodes encountered by walking the ring clockwise from $k$'s position. The first node on this list acts as the ``coordinator'' for writes.%
+\footnote{\url{https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf}}
+
+\textbf{Load Balancing:} Balancing is inherent to the virtual node model. When a new node is added, it assumes responsibility for numerous small virtual ranges from all other nodes on the ring, thus automatically distributing the load.
+
+\textbf{Request Routing:} ``Any storage node'' in Dynamo is eligible to receive a client request. That node then acts as the coordinator, enforcing a quorum-like technique (e.g., $R+W>N$) among the nodes in the key's preference list.
+
+While Dynamo's partitioning model is foundational, its overall architecture is philosophically opposed to a Raft-based system. Dynamo is the canonical ``AP'' (Available, Partition-Tolerant) system, designed to ``sacrifice consistency under certain failure scenarios'' to achieve its ``always-on'' goal. Its entire design---built on eventual consistency, object versioning with vector clocks, and application-assisted conflict resolution---is intended to manage and resolve data conflicts.
+
+Raft, by contrast, is a consensus algorithm designed to build ``CP'' (Consistent, Partition-Tolerant) systems. Its entire purpose is to prevent conflicts and enforce strong, linearizable consistency. Therefore, while Dynamo's partitioning model is relevant, its overall goals and consistency mechanisms are a poor fit for a Raft-based project.
+
+\subsubsection{Hazelcast IMDG} %Virtual Bucket pattern (used by couchbase)
+
+Hazelcast is an in-memory data grid (IMDG) that, like Redis, uses a hash-partitioned model.
+
+\textbf{Model:} The key-space is divided into a fixed, configurable number of partitions. The default is 271.
+
+\textbf{Hashing Algorithm:} Hazelcast uses MurmurHash3, a high-quality, non-cryptographic hash function. The mapping is $\text{partition\_id} = \text{MurmurHash3}(\text{key\_bytes}) \mod 271$. The default of 271 is chosen because it is a prime number, which helps to further ensure an even distribution of hash results.
+%https://en.wikipedia.org/wiki/MurmurHash
+%https://hazelcast.com/blog/where-are-my-keys/
+%https://hazelcast.github.io/hazelcast-python-client/3.12.2/hazelcast.hash.html
+
+\textbf{Load Balancing:} This is the most subtle and insightful aspect of Hazelcast's design. The documentation states: ``Thanks to the consistent hashing algorithm, only the minimum amount of partitions are moved'' when a member joins or leaves. This appears contradictory; a modulo-based system is precisely what consistent hashing was designed to replace.
+
+This contradiction is resolved by a ``Two-Level Hashing'' hybrid architecture. Hazelcast uses two different hashing mechanisms for two different purposes:
+\begin{itemize}
+    \item \textbf{Level 1 (Key $\rightarrow$ Partition):} This mapping is static, using $\text{MurmurHash3}(\text{key}) \mod 271$. A given key always maps to the same partition ID, regardless of cluster size.
+    \item \textbf{Level 2 (Partition $\rightarrow$ Member):} This mapping is dynamic. A consistent hashing algorithm (or a similar structure) is used to map the 271 partitions (e.g., p-0 through p-270) onto the $N$ available physical cluster members.
+\end{itemize}
+
+This two-level design provides the best of both worlds. When a new member joins, the Level 1 mapping is unchanged. The Level 2 partition-to-member consistent hash map is updated, determining that a minimal set of partitions (not keys) should be migrated to the new member. This architecture achieves the simplicity and fine-grained ``virtual'' units of Redis's hash slots, but adds the automatic, self-healing load balancing of Dynamo's consistent hashing.
+
+\textbf{Raft Integration (CP Subsystem):} This provides a direct, practical blueprint for a Raft-based cache. By default, Hazelcast IMDG is an ``AP'' system, using ``lazy replication'' and ``best-effort consistency''. However, it includes an optional ``CP Subsystem'' that is Raft-based.
+
+When the CP Subsystem is disabled (``unsafe mode''), CP data structures (like IAtomicLong or FencedLock) ``operate in unsafe mode'' and use the standard, fast, lazy-replicated partitioning. In this mode, a write ``can be lost'' on a crash.
+
+When the CP Subsystem is enabled, these specific structures are linearizable, ``prefer consistency over availability,'' and are managed by the Raft consensus mechanism.
+
+This ``bifurcated consensus model'' is a critical architectural pattern. It separates the system into: 1) a high-speed, AP, partitioned data plane for the cache data itself, and 2) a separate, high-consistency, CP (Raft) control plane for coordination and metadata (e.g., locks, leader election, semaphores). This strongly suggests that using Raft for every SET operation in a cache is likely the wrong design, but using Raft to manage the cluster's state is an excellent one.
+
+
+\subsubsection{TiKV}
+TiKV is a distributed, transactional key-value store that serves as the storage layer for the TiDB database.
+
+\textbf{Model:} Data is partitioned by key range.
+
+\textbf{Partitioning Unit:} The basic unit of data movement and consensus is called a ``Region''. A Region represents a contiguous range of keys in the sorted map.
+
+\textbf{Consensus Integration:} This is the core of the design. Each Region is an independent Raft group. Each Region has multiple replicas (called ``Peers''), typically 3, one of which is the Raft leader that services all reads and writes for that key-range.
+
+\textbf{Load Balancing:} Balancing is automatic, dynamic, and centralized, managed by the ``Placement Driver (PD)''.
+\begin{itemize}
+    \item The PD is the ``brain'' of the cluster, storing the metadata for all Regions.
+    \item It balances storage size by instructing Regions to split when they grow too large (e.g., $>$96--144MB) and to merge with adjacent Regions when they become too small.
+    \item It balances load by automatically migrating Regions (Raft groups) between different nodes.
+    \item It balances hot spots by actively transferring the Raft leadership of a hot Region to a peer on a less-loaded node.
+\end{itemize}
+
+\textbf{Request Routing:} A client asks the PD to identify which Region (and its leader) is responsible for a given key.   
+
+\subsubsection{CockroachDB}
+CockroachDB is a distributed SQL database that employs an architecture very similar to TiKV's.
+
+\textbf{Model:} It uses a ``monolithic sorted map'' of key-value pairs.
+
+\textbf{Partitioning Unit:} The partitioning unit is called a ``Range'' (conceptually identical to TiKV's Region).
+
+\textbf{Consensus Integration:} Identical to TiKV. The ``replication layer'' ensures that each Range is a Raft group.
+
+\textbf{Load Balancing:} Automatic and size-driven. Ranges automatically split when they grow too large and merge when they become too small. The cluster automatically rebalances these ranges across all available nodes, for example, when a new node joins or an old one fails.
+
+\textbf{Request Routing (Decentralized Index):} This is CockroachDB's primary architectural divergence from TiKV. It does not have a centralized PD for routing. Instead, it embeds the routing information within the key-space itself in a special index called ``meta ranges''.
+\begin{itemize}
+    \item This index is a two-level tree: the root (meta1) points to second-level ranges (meta2), and the meta2 ranges point to the ``user data'' ranges.
+    \item To find a key, a node performs a ``bottom-up'' lookup in this tree (which is itself composed of standard, Raft-replicated ranges), caching the results for future use.
+\end{itemize}
+
+This design represents a clear trade-off in metadata management. TiKV uses an external, centralized (though highly-available) component, the PD, which simplifies routing logic. CockroachDB uses a decentralized, self-referential model where the metadata is ``just data'' stored in special ranges.   
+
+\subsubsection{Google Spanner}
+Google's Spanner is the conceptual and technical ancestor to systems like TiKV and CockroachDB. It is a globally-distributed, synchronously-replicated database.
+
+\textbf{Model:} Spanner partitions data into ``tablets'' (similar to Bigtable) and uses ``directories'' as the unit of data placement and migration.
+
+\textbf{Consensus Integration:} It ``shards data across many sets of Paxos state machines''. (Raft is a modern, more understandable successor to the Paxos consensus algorithm; the architectural model is the same).
+
+\textbf{Load Balancing:} The system is automated and managed by a hierarchy of components: a ``placement driver'' handles data movement across zones, while ``zonemasters'' assign data to ``spanservers''.
+
+\textbf{Request Routing:} Clients use ``per-zone location proxies'' to find the correct spanserver serving their data.
+
+The fact that Google (Spanner), TiKV, and CockroachDB all independently converged on the same fundamental architecture---a sorted key-space, partitioned into ranges, with each range managed by its own consensus group (Paxos/Raft)---is one of the most powerful trends in modern distributed systems. TiKV's design, for instance, is explicitly ``based on the design of Google Spanner''. This ``Raft-per-Shard'' (or ``Paxos-per-Shard'') model is the state-of-the-art for building strongly-consistent, scalable databases.   
+
+
+
 
 % chapter 3
 
@@ -596,6 +767,26 @@ Rebalancing is responsible to ensure that data availability and even distributio
     \item [4.] The target data node is officially added to the replica set and the shard is set back to ACTIVE. 
 \end{itemize}
 
+\subsection{Dynamic Node Membership and Capacity Scaling}
+While the emergency promotion handles sudden failures, the system also manages the lifecycle of nodes entering and leaving the cluster gracefully.
+
+\subsubsection{Scaling Up: The Lazy Assignment Strategy}
+When a new Data Node registers, the \texttt{Rebalance()} function is invoked. In the current implementation, this follows a \textbf{Lazy Assignment} strategy:
+\begin{itemize}
+    \item New nodes are primarily used to fill "gaps" in the cluster— that is shards that do not have required number of replicas or shards that have no assigned primary data node.
+    \item To prevent unnecessary data movement (which can saturate the network), the system does not automatically "steal" shards from existing healthy primary nodes. 
+    \item For active load balancing (manual redistribution), an administrator can trigger the \texttt{MoveShard} command, which utilizes the 4-phase synchronization protocol to migrate a primary role to the new node with zero data and minimum downtime.
+\end{itemize}
+
+
+\subsubsection{Scaling Down and Replica Recovery}
+The system treats a deliberate node removal similarly to a failure. If a node is decommissioned:
+\begin{itemize}
+    \item \textbf{Redundancy Restoration:} If the removed node was a replica, the \texttt{Rebalance} logic detects that the shard's replication factor has decreased. It automatically identifies another healthy node in the cluster and triggers a data pull to restore the backup.
+    \item \textbf{Safe Promotion:} If the node was a primary, the promotion happens first, followed by the replica restoration on a different node.
+\end{itemize}
+This ensures that the cluster is \textbf{self-healing} regarding its durability guarantees; as long as there is spare capacity in the cluster, the system will always try to maintain the configured number of replicas for every shard.
+
 \section{Data Plane}
 
 \subsection{Concurrent Data Store}
@@ -845,218 +1036,7 @@ As noted in chapter 7, the Raft speed determines entire application speed. I've 
     \item The I/O operations are long, the system might benefit from using the fastest threads to handle these operations. 
 \end{itemize} 
 
-%FINISH, BELOW IS OLD STUFF, TO BE DELETED
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-\chapter{Saved}
-\section{Data partitioning}
-%CHECK FROM HERE
-The design of any distributed system at it's conception solve the problem of partinioning the data. As the application can grow infinitely, physical limits are set. Our computer have limited capacity for memory, CPU and network I/O, problem known by vertical scaling. 
-The solution is horizontal scaling, which is \textbf{distributing} the work on many machines and "sharding" the data.
-
-This however introduces new challanges that are complex. We must answer some questions in design of our application:
-\begin{itemize}
-    \item How will the data be divided? We must have a function f, that will map a key k to a specific node n from the set of N nodes in the cluster.
-    \item How does client determine on which node is his data?
-    \item What does the system do when a new node is added? What does it do when the node is removed?
-\end{itemize}
-
-\subsection{Karger's Consistent Hashing}
-
-Proposed by Karger et al. at MIT in 1997, consistent hashing solves the ``reshuffling'' problem inherent in modular hashing. In a standard modulo setup ($\text{hash}(k) \pmod n$), changing $n$ (adding/removing a node) results in nearly all keys being remapped to different nodes.
-Karger's approach maps both the \textbf{Nodes} and the \textbf{Keys} onto the same identifier space, typically treated as a circle or ``ring'' (e.g., integers $0$ to $2^{32}-1$).
-\begin{itemize}
-    \item \textbf{Placement:} A node is assigned a position on the ring by hashing its ID (e.g., IP address). A key is assigned a position by hashing the key itself.
-    \item \textbf{Lookup:} To find the node responsible for a key, we move clockwise around the ring from the key's position until we encounter a node. That node is the ``coordinator'' or owner of the key.
-    \item \textbf{Scaling:} When a new node is added to the ring, it only ``steals'' keys from the node immediately following it in the clockwise direction. The rest of the keys in the cluster remain unaffected.
-\end{itemize}
-
-Mathematically, this ensures that when the $n$-th node is added, only $1/n$ of the keys need to be moved, which is the theoretical minimum amount of data movement required to maintain a balanced load.
-
-\textbf{Virtual Nodes:} A pure implementation of Karger's ring often results in uneven data distribution due to the random placement of nodes. To solve this, modern implementations (like Cassandra and Dynamo) use ``Virtual Nodes'' (vnodes). A single physical machine acts as multiple nodes on the ring (e.g., 256 positions), ensuring a more uniform statistical distribution of keys.
-
-\subsection{Lamping And Veach's Jump Consistent Hash}
-In 2014, Google engineers Lamping and Veach introduced "Jump Consistent Hash," an algorithm that achieves the same stability properties as Karger's ring but with significantly higher performance and zero memory overhead.
-
-Unlike Karger's approach, which requires storing the ring structure in memory (typically a binary search tree or sorted map) to look up a node, Jump Hash computes the bucket assignment algorithmically using a Pseudo-Random Number Generator (PRNG).
-
-The logic is probability-based:
-\begin{itemize}
-    \item When a cluster scales from $n$ to $n+1$ buckets, the algorithm ensures that any specific key has exactly a $\frac{1}{n+1}$ probability of moving to the new bucket $n+1$.
-    \item The algorithm uses the key to seed the PRNG and "jumps" forward through the sequence of bucket sizes to find the final destination.
-\end{itemize}
-
-While extremely fast (executing in nanoseconds), Jump Consistent Hash has a strict constraint: it only supports scaling at the tail. You cannot arbitrarily remove "Node 2" from a 5-node cluster; you can only scale down from 5 to 4. This makes it ideal for data storage systems where buckets are logical shards, but less flexible for direct mapping to dynamic physical servers.
-
-\subsection{The sorted monolithic map}
-
-This approach, also known as \textbf{Range Partitioning}, rejects the randomization of hashing entirely. Instead, it treats the entire key-space as a single, sorted monolithic map.
-
-The data is ordered lexicographically (by byte comparison) and divided into contiguous ranges (often called ``Tablets,'' ``Regions,'' or ``Ranges'').
-\begin{itemize}
-    \item \textbf{Routing:} The system maintains a global index (like a B-Tree) that maps ranges to nodes. For example, keys $[A, K)$ might map to Node 1, while keys $[K, Z)$ map to Node 2.
-    \item \textbf{Range Scans:} Unlike hash partitioning, this model allows for efficient range queries (e.g., \texttt{SCAN user:100:log:*}). Since the keys are physically stored together, the system can fetch them in a single disk seek or network call.
-\end{itemize}
-
-However, this design suffers from the \textbf{``Sequential Write'' problem}. If an application generates keys with a monotonically increasing prefix (e.g., timestamps or auto-incrementing IDs), all write traffic will target the single node responsible for the end of the range, creating a massive hot spot while other nodes sit idle. This necessitates complex splitting and rebalancing logic, as seen in systems like TiKV and CockroachDB.
-
-
-\section{Analysis of standing systems}
-
-\subsection{Redis cluster: Pre-sharded "Hash slots"} %add more about gossip protocol
-The key-space is pre-sharded into a fixed, static number of 16,384 "hash slots". This number is constant regardless of the number of nodes in the cluster.
-A key is mapped to a slot using the formula: $$\text{hash\_slot} = \text{CRC16}(\text{key}) \pmod{16384}$$.
-Each primary node in the cluster is responsible for a subset of these 16,384 slots. A 3-node cluster, for example, might be configured as:
-\begin{itemize}
-    \item Node A: Hash slots 0 - 5500
-    \item Node B: Hash slots 5501 - 11000
-    \item Node C: Hash slots 11001 - 16383
-\end{itemize}
-
-Load balancing is an explicit, administrator-driven process called "resharding". An administrator uses the redis-cli tool to specify how many slots to move from a source node to a target node. This operation can be performed with "no downtime".
-
-Request Routing (Client-Side Intelligence): This is the most complex component of the Redis Cluster design. Cluster nodes do not proxy requests. If a client sends a request to a node that does not own the key's hash slot, the node replies with a redirection error. There are two types of redirection:  
-\begin{itemize}
-    \item MOVED: This is a permanent redirection. It informs the client that the hash slot is now permanently owned by a different node. The client must update its local cluster map and retry the request at the new node.   
-    %https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/
-
-    \item ASK: This is a temporary redirection used during a resharding operation. When a slot is being migrated, it is in a MIGRATING state on the source and IMPORTING state on the target. A -ASK redirect tells the client, "The key might be on the new node, but only for this one request. Do not update your map.". The client must then send an ASKING command to the target node before sending the redirected query. This ASKING command authenticates the client to access a key in an IMPORTING slot.  
-\end{itemize}
-
-Key Colocation: Redis provides a "hash tags" feature to manually force keys into the same slot. If a key contains a {...} substring, only the content inside the brackets is hashed. For example, user:{123}:profile and user:{123}:account are guaranteed to be in the same hash slot, enabling multi-key operations on them.  
-%https://redis.io/docs/latest/operate/oss_and_stack/management/scaling/
-
-Redis's "hash slot" model represents a pragmatic compromise. It sacrifices the automatic, self-healing nature of consistent hashing for simplicity, predictability, and explicit control. The cluster state is simply a 16,384-element array mapping slots to nodes. This is far simpler to manage, gossip, and reason about than the mathematics of a continuous ring. The trade-off is twofold: load balancing is a manual operation, and the server logic is simplified at the cost of massively complicating the client, which must implement the sophisticated -MOVED/-ASK redirection protocol.   
-
-\subsection{Amazon Dynamo}
-Amazon's Dynamo, as documented in the 2007 SOSP paper, is the archetypal highly available, ``always-on'' key-value store.
-
-\textbf{Model:} It uses the classic Karger-style consistent hashing, enhanced with virtual nodes to address load balancing and heterogeneity.
-
-\textbf{Replication \& Partitioning:} Dynamo's ``preference list'' is a key concept. For a given key $k$ with a replication factor of $N$, its preference list is composed of the first $N$ distinct physical nodes encountered by walking the ring clockwise from $k$'s position. The first node on this list acts as the ``coordinator'' for writes.%
-\footnote{\url{https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf}}
-
-\textbf{Load Balancing:} Balancing is inherent to the virtual node model. When a new node is added, it assumes responsibility for numerous small virtual ranges from all other nodes on the ring, thus automatically distributing the load.
-
-\textbf{Request Routing:} ``Any storage node'' in Dynamo is eligible to receive a client request. That node then acts as the coordinator, enforcing a quorum-like technique (e.g., $R+W>N$) among the nodes in the key's preference list.
-
-While Dynamo's partitioning model is foundational, its overall architecture is philosophically opposed to a Raft-based system. Dynamo is the canonical ``AP'' (Available, Partition-Tolerant) system, designed to ``sacrifice consistency under certain failure scenarios'' to achieve its ``always-on'' goal. Its entire design---built on eventual consistency, object versioning with vector clocks, and application-assisted conflict resolution---is intended to manage and resolve data conflicts.
-
-Raft, by contrast, is a consensus algorithm designed to build ``CP'' (Consistent, Partition-Tolerant) systems. Its entire purpose is to prevent conflicts and enforce strong, linearizable consistency. Therefore, while Dynamo's partitioning model is relevant, its overall goals and consistency mechanisms are a poor fit for a Raft-based project.
-
-\subsection{Hazelcast IMDG} %Virtual Bucket pattern (used by couchbase)
-
-Hazelcast is an in-memory data grid (IMDG) that, like Redis, uses a hash-partitioned model.
-
-\textbf{Model:} The key-space is divided into a fixed, configurable number of partitions. The default is 271.
-
-\textbf{Hashing Algorithm:} Hazelcast uses MurmurHash3, a high-quality, non-cryptographic hash function. The mapping is $\text{partition\_id} = \text{MurmurHash3}(\text{key\_bytes}) \mod 271$. The default of 271 is chosen because it is a prime number, which helps to further ensure an even distribution of hash results.
-%https://en.wikipedia.org/wiki/MurmurHash
-%https://hazelcast.com/blog/where-are-my-keys/
-%https://hazelcast.github.io/hazelcast-python-client/3.12.2/hazelcast.hash.html
-
-\textbf{Load Balancing:} This is the most subtle and insightful aspect of Hazelcast's design. The documentation states: ``Thanks to the consistent hashing algorithm, only the minimum amount of partitions are moved'' when a member joins or leaves. This appears contradictory; a modulo-based system is precisely what consistent hashing was designed to replace.
-
-This contradiction is resolved by a ``Two-Level Hashing'' hybrid architecture. Hazelcast uses two different hashing mechanisms for two different purposes:
-\begin{itemize}
-    \item \textbf{Level 1 (Key $\rightarrow$ Partition):} This mapping is static, using $\text{MurmurHash3}(\text{key}) \mod 271$. A given key always maps to the same partition ID, regardless of cluster size.
-    \item \textbf{Level 2 (Partition $\rightarrow$ Member):} This mapping is dynamic. A consistent hashing algorithm (or a similar structure) is used to map the 271 partitions (e.g., p-0 through p-270) onto the $N$ available physical cluster members.
-\end{itemize}
-
-This two-level design provides the best of both worlds. When a new member joins, the Level 1 mapping is unchanged. The Level 2 partition-to-member consistent hash map is updated, determining that a minimal set of partitions (not keys) should be migrated to the new member. This architecture achieves the simplicity and fine-grained ``virtual'' units of Redis's hash slots, but adds the automatic, self-healing load balancing of Dynamo's consistent hashing.
-
-\textbf{Raft Integration (CP Subsystem):} This provides a direct, practical blueprint for a Raft-based cache. By default, Hazelcast IMDG is an ``AP'' system, using ``lazy replication'' and ``best-effort consistency''. However, it includes an optional ``CP Subsystem'' that is Raft-based.
-
-When the CP Subsystem is disabled (``unsafe mode''), CP data structures (like IAtomicLong or FencedLock) ``operate in unsafe mode'' and use the standard, fast, lazy-replicated partitioning. In this mode, a write ``can be lost'' on a crash.
-
-When the CP Subsystem is enabled, these specific structures are linearizable, ``prefer consistency over availability,'' and are managed by the Raft consensus mechanism.
-
-This ``bifurcated consensus model'' is a critical architectural pattern. It separates the system into: 1) a high-speed, AP, partitioned data plane for the cache data itself, and 2) a separate, high-consistency, CP (Raft) control plane for coordination and metadata (e.g., locks, leader election, semaphores). This strongly suggests that using Raft for every SET operation in a cache is likely the wrong design, but using Raft to manage the cluster's state is an excellent one.
-
-
-\subsection{TiKV}
-TiKV is a distributed, transactional key-value store that serves as the storage layer for the TiDB database.
-
-\textbf{Model:} Data is partitioned by key range.
-
-\textbf{Partitioning Unit:} The basic unit of data movement and consensus is called a ``Region''. A Region represents a contiguous range of keys in the sorted map.
-
-\textbf{Consensus Integration:} This is the core of the design. Each Region is an independent Raft group. Each Region has multiple replicas (called ``Peers''), typically 3, one of which is the Raft leader that services all reads and writes for that key-range.
-
-\textbf{Load Balancing:} Balancing is automatic, dynamic, and centralized, managed by the ``Placement Driver (PD)''.
-\begin{itemize}
-    \item The PD is the ``brain'' of the cluster, storing the metadata for all Regions.
-    \item It balances storage size by instructing Regions to split when they grow too large (e.g., $>$96--144MB) and to merge with adjacent Regions when they become too small.
-    \item It balances load by automatically migrating Regions (Raft groups) between different nodes.
-    \item It balances hot spots by actively transferring the Raft leadership of a hot Region to a peer on a less-loaded node.
-\end{itemize}
-
-\textbf{Request Routing:} A client asks the PD to identify which Region (and its leader) is responsible for a given key.   
-
-\subsection{CockroachDB}
-CockroachDB is a distributed SQL database that employs an architecture very similar to TiKV's.
-
-\textbf{Model:} It uses a ``monolithic sorted map'' of key-value pairs.
-
-\textbf{Partitioning Unit:} The partitioning unit is called a ``Range'' (conceptually identical to TiKV's Region).
-
-\textbf{Consensus Integration:} Identical to TiKV. The ``replication layer'' ensures that each Range is a Raft group.
-
-\textbf{Load Balancing:} Automatic and size-driven. Ranges automatically split when they grow too large and merge when they become too small. The cluster automatically rebalances these ranges across all available nodes, for example, when a new node joins or an old one fails.
-
-\textbf{Request Routing (Decentralized Index):} This is CockroachDB's primary architectural divergence from TiKV. It does not have a centralized PD for routing. Instead, it embeds the routing information within the key-space itself in a special index called ``meta ranges''.
-\begin{itemize}
-    \item This index is a two-level tree: the root (meta1) points to second-level ranges (meta2), and the meta2 ranges point to the ``user data'' ranges.
-    \item To find a key, a node performs a ``bottom-up'' lookup in this tree (which is itself composed of standard, Raft-replicated ranges), caching the results for future use.
-\end{itemize}
-
-This design represents a clear trade-off in metadata management. TiKV uses an external, centralized (though highly-available) component, the PD, which simplifies routing logic. CockroachDB uses a decentralized, self-referential model where the metadata is ``just data'' stored in special ranges.   
-
-\subsection{Google Spanner}
-Google's Spanner is the conceptual and technical ancestor to systems like TiKV and CockroachDB. It is a globally-distributed, synchronously-replicated database.
-
-\textbf{Model:} Spanner partitions data into ``tablets'' (similar to Bigtable) and uses ``directories'' as the unit of data placement and migration.
-
-\textbf{Consensus Integration:} It ``shards data across many sets of Paxos state machines''. (Raft is a modern, more understandable successor to the Paxos consensus algorithm; the architectural model is the same).
-
-\textbf{Load Balancing:} The system is automated and managed by a hierarchy of components: a ``placement driver'' handles data movement across zones, while ``zonemasters'' assign data to ``spanservers''.
-
-\textbf{Request Routing:} Clients use ``per-zone location proxies'' to find the correct spanserver serving their data.
-
-The fact that Google (Spanner), TiKV, and CockroachDB all independently converged on the same fundamental architecture---a sorted key-space, partitioned into ranges, with each range managed by its own consensus group (Paxos/Raft)---is one of the most powerful trends in modern distributed systems. TiKV's design, for instance, is explicitly ``based on the design of Google Spanner''. This ``Raft-per-Shard'' (or ``Paxos-per-Shard'') model is the state-of-the-art for building strongly-consistent, scalable databases.   
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-\section{Node}
-
-Node is a set of Raft servers running and reaching a consensus at the same time at all times.
-
-\section{Server}
-
-Server is a single machine running a Raft algorithm.
-
-\section{Application \ Database}
-
-Application \ Database is an actual cache that we keep - this is where all the logic around saving, getting and deleting data is being done. We can access this layer if, and only if, the Raft node reached a consensus and majority of the servers have agreed upon it.
-
-\chapter{Implementation}
-
-1. Why many threads, how synchronization works between them 
-
-
-\chapter{Testing}
-
-
-
-\chapter{Deployment}
-1. Dockery
-2. Use in other languages - API, installation
-3. Kubernetes?
-
-\chapter{Benchmarks}
-
-\chapter{Summary and ?Future work?}
 
 %%%%% BIBLIOGRAFIA
 
