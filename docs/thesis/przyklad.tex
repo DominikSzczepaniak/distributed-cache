@@ -1,9 +1,3 @@
-%to add:
-% section about CI/CD
-% section about docker setup and instructions
-% section about architectures analysis - its mostly in notes. write about hazelcast, redis, google spanner, amazon, types of hashing etc. THIS IN 2.4
-
-
 
 % Opcje klasy 'iithesis' opisane sa w komentarzach w pliku klasy. Za ich pomoca
 % ustawia sie przede wszystkim jezyk oraz rodzaj (lic/inz/mgr) pracy.
@@ -247,170 +241,51 @@ Etcd is a distributed key-value store used primarily for shared configuration an
 
 \subsection{Analysis of hashing approaches}
 
-
 \subsubsection{Karger's Consistent Hashing}
+Proposed by Karger et al. at MIT in 1997, consistent hashing solves the reshuffling problem inherent in modular hashing. In a standard modulo setup ($\text{hash}(k) \pmod n$), changing $n$ (adding/removing a node) results in nearly all keys being remapped.
+Karger's approach maps both the \textbf{Nodes} and the \textbf{Keys} onto the same identifier space (a ring).
 
-Proposed by Karger et al. at MIT in 1997, consistent hashing solves the ``reshuffling'' problem inherent in modular hashing. In a standard modulo setup ($\text{hash}(k) \pmod n$), changing $n$ (adding/removing a node) results in nearly all keys being remapped to different nodes.
-Karger's approach maps both the \textbf{Nodes} and the \textbf{Keys} onto the same identifier space, typically treated as a circle or ``ring'' (e.g., integers $0$ to $2^{32}-1$).
+\noindent \textbf{Why it was not used:} While industrially popular (consistent hashing is used in Cassandra and Dynamo), it introduces complexity in the Controller's metadata management. Maintaining a sorted ring and handling "virtual nodes" requires more complex logic than a fixed partition map. For this thesis, I opted for a \textbf{Fixed Slot} approach (similar to Redis) because it allows for deterministic shard-to-node mappings that are easier to synchronize via Raft.
+
+\subsubsection{Range Partitioning (Sorted Monolithic Map)}
+This approach treats the entire key-space as a single, sorted monolithic map. The data is divided into contiguous ranges (e.g., keys $[A, K)$ on Node 1, $[K, Z)$ on Node 2).
 \begin{itemize}
-    \item \textbf{Placement:} A node is assigned a position on the ring by hashing its ID (e.g., IP address). A key is assigned a position by hashing the key itself.
-    \item \textbf{Lookup:} To find the node responsible for a key, we move clockwise around the ring from the key's position until we encounter a node. That node is the ``coordinator'' or owner of the key.
-    \item \textbf{Scaling:} When a new node is added to the ring, it only ``steals'' keys from the node immediately following it in the clockwise direction. The rest of the keys in the cluster remain unaffected.
+    \item \textbf{Pros:} Allows for efficient range queries (e.g., \texttt{SCAN user:100:*}).
+    \item \textbf{Cons:} Suffers from the \textbf{``Sequential Write'' problem}. If keys are generated with a monotonically increasing prefix (like timestamps), all traffic targets a single node, creating a hot spot.
 \end{itemize}
 
-Mathematically, this ensures that when the $n$-th node is added, only $1/n$ of the keys need to be moved, which is the theoretical minimum amount of data movement required to maintain a balanced load.
+\noindent \textbf{Why it was not used:} A cache's primary goal is often uniform load distribution for point Lookups (GET/PUT). Range partitioning is better suited for analytical databases (like HBase or CockroachDB). Given the use of Raft for the Control Plane, a hash-based distribution ensures even load across Data Nodes without the need for complex range-splitting logic.
 
-\textbf{Virtual Nodes:} A pure implementation of Karger's ring often results in uneven data distribution due to the random placement of nodes. To solve this, modern implementations (like Cassandra and Dynamo) use ``Virtual Nodes'' (vnodes). A single physical machine acts as multiple nodes on the ring (e.g., 256 positions), ensuring a more uniform statistical distribution of keys.
-
-\subsubsection{Lamping And Veach's Jump Consistent Hash}
-In 2014, Google engineers Lamping and Veach introduced "Jump Consistent Hash," an algorithm that achieves the same stability properties as Karger's ring but with significantly higher performance and zero memory overhead.
-
-Unlike Karger's approach, which requires storing the ring structure in memory (typically a binary search tree or sorted map) to look up a node, Jump Hash computes the bucket assignment algorithmically using a Pseudo-Random Number Generator (PRNG).
-
-The logic is probability-based:
+\subsubsection{FNV-1a Hashing Algorithm} \label{subsec:fnv1a}
+The Fowler-Noll-Vo (FNV) hash 1a is a non-cryptographic hash function known for its extreme speed and ease of implementation. It works by multiplying the hash by a large prime and XORing it with each byte of the input data.
 \begin{itemize}
-    \item When a cluster scales from $n$ to $n+1$ buckets, the algorithm ensures that any specific key has exactly a $\frac{1}{n+1}$ probability of moving to the new bucket $n+1$.
-    \item The algorithm uses the key to seed the PRNG and "jumps" forward through the sequence of bucket sizes to find the final destination.
+    \item \textbf{Pros:} High throughput, low collision rates for short strings (ideal for cache keys), and minimal memory overhead.
+    \item \textbf{Suitability:} Since this project requires mapping keys to a fixed set of shards during every client request, a low-latency hash function like FNV-1a is preferable over more complex cryptographic hashes like SHA-256 or MD5, which would introduce unnecessary CPU overhead.
 \end{itemize}
 
-While extremely fast (executing in nanoseconds), Jump Consistent Hash has a strict constraint: it only supports scaling at the tail. You cannot arbitrarily remove "Node 2" from a 5-node cluster; you can only scale down from 5 to 4. This makes it ideal for data storage systems where buckets are logical shards, but less flexible for direct mapping to dynamic physical servers.
+\subsection{Analysis of industry inspirations}
 
-\subsubsection{The sorted monolithic map}
-
-This approach, also known as \textbf{Range Partitioning}, rejects the randomization of hashing entirely. Instead, it treats the entire key-space as a single, sorted monolithic map.
-
-The data is ordered lexicographically (by byte comparison) and divided into contiguous ranges (often called ``Tablets,'' ``Regions,'' or ``Ranges'').
+\subsubsection{Redis Cluster: The "Fixed Shards" Inspiration}
+Redis Cluster pre-shards the key-space into 16,384 "hash slots". A key is mapped to a slot using: $\text{slot} = \text{CRC16}(\text{key}) \pmod{16384}$.
 \begin{itemize}
-    \item \textbf{Routing:} The system maintains a global index (like a B-Tree) that maps ranges to nodes. For example, keys $[A, K)$ might map to Node 1, while keys $[K, Z)$ map to Node 2.
-    \item \textbf{Range Scans:} Unlike hash partitioning, this model allows for efficient range queries (e.g., \texttt{SCAN user:100:log:*}). Since the keys are physically stored together, the system can fetch them in a single disk seek or network call.
+    \item \textbf{Inspiration:} My implementation adopts this "Fixed Shard" model. By mapping keys to a constant number of shards (e.g., 10 or 1024), we decouple the data distribution from the number of physical nodes. 
+    \item \textbf{The Difference:} Redis uses asynchronous replication by default to maximize performance, which can lead to data loss. My system uses \textbf{Synchronous Replication} to ensure Strong Consistency, sacrificing a degree of write latency for the safety guarantees required by the thesis.
 \end{itemize}
 
-However, this design suffers from the \textbf{``Sequential Write'' problem}. If an application generates keys with a monotonically increasing prefix (e.g., timestamps or auto-incrementing IDs), all write traffic will target the single node responsible for the end of the range, creating a massive hot spot while other nodes sit idle. This necessitates complex splitting and rebalancing logic, as seen in systems like TiKV and CockroachDB.
-
-\subsection{Analysis of industry solutions}
-
-
-\subsubsection{Redis cluster: Pre-sharded "Hash slots"} %add more about gossip protocol
-The key-space is pre-sharded into a fixed, static number of 16,384 "hash slots". This number is constant regardless of the number of nodes in the cluster.
-A key is mapped to a slot using the formula: $$\text{hash\_slot} = \text{CRC16}(\text{key}) \pmod{16384}$$.
-Each primary node in the cluster is responsible for a subset of these 16,384 slots. A 3-node cluster, for example, might be configured as:
+\subsubsection{Amazon Dynamo: Availability vs. Consistency}
+Dynamo is the archetypal "AP" (Available, Partition-Tolerant) system. It uses consistent hashing and eventual consistency (Vector Clocks, Gossip protocol) to ensure it is "always on."
 \begin{itemize}
-    \item Node A: Hash slots 0 - 5500
-    \item Node B: Hash slots 5501 - 11000
-    \item Node C: Hash slots 11001 - 16383
+    \item \textbf{Inspiration:} Dynamo's concept of a "Preference List" for replication was an inspiration for how the Controller manages shard assignments.
+    \item \textbf{The Difference:} Dynamo's philosophy is "eventual consistency." It allows conflicting writes and resolves them later. My project purposefully takes the opposite path: identifying as a "CP" system that uses Raft and fencing to prevent conflicts from ever occurring, matching the strict requirements of linearizability.
 \end{itemize}
 
-Load balancing is an explicit, administrator-driven process called "resharding". An administrator uses the redis-cli tool to specify how many slots to move from a source node to a target node. This operation can be performed with "no downtime".
-
-Request Routing (Client-Side Intelligence): This is the most complex component of the Redis Cluster design. Cluster nodes do not proxy requests. If a client sends a request to a node that does not own the key's hash slot, the node replies with a redirection error. There are two types of redirection:  
+\subsubsection{TiKV: Raft-per-Shard vs. Centralized Control}
+TiKV is a modern distributed KV store where every "Region" (shard) is its own independent Raft group.
 \begin{itemize}
-    \item MOVED: This is a permanent redirection. It informs the client that the hash slot is now permanently owned by a different node. The client must update its local cluster map and retry the request at the new node.   
-    %https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/
-
-    \item ASK: This is a temporary redirection used during a resharding operation. When a slot is being migrated, it is in a MIGRATING state on the source and IMPORTING state on the target. A -ASK redirect tells the client, "The key might be on the new node, but only for this one request. Do not update your map.". The client must then send an ASKING command to the target node before sending the redirected query. This ASKING command authenticates the client to access a key in an IMPORTING slot.  
+    \item \textbf{Comparison:} TiKV's approach is the gold standard for massive scalability. However, running 1000 shards would mean running 1000 independent Raft state machines per node, which is computationally expensive.
+    \item \textbf{My Approach:} To balance performance with safety, I separated the system into a \textbf{CP Control Plane} (Raft) and a \textbf{Synchronous Data Plane}. This significantly reduces the overhead; only the cluster metadata (topology) requires the full weight of the Raft algorithm, while data replication is handled by a simpler, faster synchronous Primary-Backup protocol.
 \end{itemize}
 
-Key Colocation: Redis provides a "hash tags" feature to manually force keys into the same slot. If a key contains a {...} substring, only the content inside the brackets is hashed. For example, user:{123}:profile and user:{123}:account are guaranteed to be in the same hash slot, enabling multi-key operations on them.  
-%https://redis.io/docs/latest/operate/oss_and_stack/management/scaling/
-
-Redis's "hash slot" model represents a pragmatic compromise. It sacrifices the automatic, self-healing nature of consistent hashing for simplicity, predictability, and explicit control. The cluster state is simply a 16,384-element array mapping slots to nodes. This is far simpler to manage, gossip, and reason about than the mathematics of a continuous ring. The trade-off is twofold: load balancing is a manual operation, and the server logic is simplified at the cost of massively complicating the client, which must implement the sophisticated -MOVED/-ASK redirection protocol.   
-
-\subsubsection{Amazon Dynamo}
-Amazon's Dynamo, as documented in the 2007 SOSP paper, is the archetypal highly available, ``always-on'' key-value store.
-
-\textbf{Model:} It uses the classic Karger-style consistent hashing, enhanced with virtual nodes to address load balancing and heterogeneity.
-
-\textbf{Replication \& Partitioning:} Dynamo's ``preference list'' is a key concept. For a given key $k$ with a replication factor of $N$, its preference list is composed of the first $N$ distinct physical nodes encountered by walking the ring clockwise from $k$'s position. The first node on this list acts as the ``coordinator'' for writes.%
-\footnote{\url{https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf}}
-
-\textbf{Load Balancing:} Balancing is inherent to the virtual node model. When a new node is added, it assumes responsibility for numerous small virtual ranges from all other nodes on the ring, thus automatically distributing the load.
-
-\textbf{Request Routing:} ``Any storage node'' in Dynamo is eligible to receive a client request. That node then acts as the coordinator, enforcing a quorum-like technique (e.g., $R+W>N$) among the nodes in the key's preference list.
-
-While Dynamo's partitioning model is foundational, its overall architecture is philosophically opposed to a Raft-based system. Dynamo is the canonical ``AP'' (Available, Partition-Tolerant) system, designed to ``sacrifice consistency under certain failure scenarios'' to achieve its ``always-on'' goal. Its entire design---built on eventual consistency, object versioning with vector clocks, and application-assisted conflict resolution---is intended to manage and resolve data conflicts.
-
-Raft, by contrast, is a consensus algorithm designed to build ``CP'' (Consistent, Partition-Tolerant) systems. Its entire purpose is to prevent conflicts and enforce strong, linearizable consistency. Therefore, while Dynamo's partitioning model is relevant, its overall goals and consistency mechanisms are a poor fit for a Raft-based project.
-
-\subsubsection{Hazelcast IMDG} %Virtual Bucket pattern (used by couchbase)
-
-Hazelcast is an in-memory data grid (IMDG) that, like Redis, uses a hash-partitioned model.
-
-\textbf{Model:} The key-space is divided into a fixed, configurable number of partitions. The default is 271.
-
-\textbf{Hashing Algorithm:} Hazelcast uses MurmurHash3, a high-quality, non-cryptographic hash function. The mapping is $\text{partition\_id} = \text{MurmurHash3}(\text{key\_bytes}) \mod 271$. The default of 271 is chosen because it is a prime number, which helps to further ensure an even distribution of hash results.
-%https://en.wikipedia.org/wiki/MurmurHash
-%https://hazelcast.com/blog/where-are-my-keys/
-%https://hazelcast.github.io/hazelcast-python-client/3.12.2/hazelcast.hash.html
-
-\textbf{Load Balancing:} This is the most subtle and insightful aspect of Hazelcast's design. The documentation states: ``Thanks to the consistent hashing algorithm, only the minimum amount of partitions are moved'' when a member joins or leaves. This appears contradictory; a modulo-based system is precisely what consistent hashing was designed to replace.
-
-This contradiction is resolved by a ``Two-Level Hashing'' hybrid architecture. Hazelcast uses two different hashing mechanisms for two different purposes:
-\begin{itemize}
-    \item \textbf{Level 1 (Key $\rightarrow$ Partition):} This mapping is static, using $\text{MurmurHash3}(\text{key}) \mod 271$. A given key always maps to the same partition ID, regardless of cluster size.
-    \item \textbf{Level 2 (Partition $\rightarrow$ Member):} This mapping is dynamic. A consistent hashing algorithm (or a similar structure) is used to map the 271 partitions (e.g., p-0 through p-270) onto the $N$ available physical cluster members.
-\end{itemize}
-
-This two-level design provides the best of both worlds. When a new member joins, the Level 1 mapping is unchanged. The Level 2 partition-to-member consistent hash map is updated, determining that a minimal set of partitions (not keys) should be migrated to the new member. This architecture achieves the simplicity and fine-grained ``virtual'' units of Redis's hash slots, but adds the automatic, self-healing load balancing of Dynamo's consistent hashing.
-
-\textbf{Raft Integration (CP Subsystem):} This provides a direct, practical blueprint for a Raft-based cache. By default, Hazelcast IMDG is an ``AP'' system, using ``lazy replication'' and ``best-effort consistency''. However, it includes an optional ``CP Subsystem'' that is Raft-based.
-
-When the CP Subsystem is disabled (``unsafe mode''), CP data structures (like IAtomicLong or FencedLock) ``operate in unsafe mode'' and use the standard, fast, lazy-replicated partitioning. In this mode, a write ``can be lost'' on a crash.
-
-When the CP Subsystem is enabled, these specific structures are linearizable, ``prefer consistency over availability,'' and are managed by the Raft consensus mechanism.
-
-This ``bifurcated consensus model'' is a critical architectural pattern. It separates the system into: 1) a high-speed, AP, partitioned data plane for the cache data itself, and 2) a separate, high-consistency, CP (Raft) control plane for coordination and metadata (e.g., locks, leader election, semaphores). This strongly suggests that using Raft for every SET operation in a cache is likely the wrong design, but using Raft to manage the cluster's state is an excellent one.
-
-
-\subsubsection{TiKV}
-TiKV is a distributed, transactional key-value store that serves as the storage layer for the TiDB database.
-
-\textbf{Model:} Data is partitioned by key range.
-
-\textbf{Partitioning Unit:} The basic unit of data movement and consensus is called a ``Region''. A Region represents a contiguous range of keys in the sorted map.
-
-\textbf{Consensus Integration:} This is the core of the design. Each Region is an independent Raft group. Each Region has multiple replicas (called ``Peers''), typically 3, one of which is the Raft leader that services all reads and writes for that key-range.
-
-\textbf{Load Balancing:} Balancing is automatic, dynamic, and centralized, managed by the ``Placement Driver (PD)''.
-\begin{itemize}
-    \item The PD is the ``brain'' of the cluster, storing the metadata for all Regions.
-    \item It balances storage size by instructing Regions to split when they grow too large (e.g., $>$96--144MB) and to merge with adjacent Regions when they become too small.
-    \item It balances load by automatically migrating Regions (Raft groups) between different nodes.
-    \item It balances hot spots by actively transferring the Raft leadership of a hot Region to a peer on a less-loaded node.
-\end{itemize}
-
-\textbf{Request Routing:} A client asks the PD to identify which Region (and its leader) is responsible for a given key.   
-
-\subsubsection{CockroachDB}
-CockroachDB is a distributed SQL database that employs an architecture very similar to TiKV's.
-
-\textbf{Model:} It uses a ``monolithic sorted map'' of key-value pairs.
-
-\textbf{Partitioning Unit:} The partitioning unit is called a ``Range'' (conceptually identical to TiKV's Region).
-
-\textbf{Consensus Integration:} Identical to TiKV. The ``replication layer'' ensures that each Range is a Raft group.
-
-\textbf{Load Balancing:} Automatic and size-driven. Ranges automatically split when they grow too large and merge when they become too small. The cluster automatically rebalances these ranges across all available nodes, for example, when a new node joins or an old one fails.
-
-\textbf{Request Routing (Decentralized Index):} This is CockroachDB's primary architectural divergence from TiKV. It does not have a centralized PD for routing. Instead, it embeds the routing information within the key-space itself in a special index called ``meta ranges''.
-\begin{itemize}
-    \item This index is a two-level tree: the root (meta1) points to second-level ranges (meta2), and the meta2 ranges point to the ``user data'' ranges.
-    \item To find a key, a node performs a ``bottom-up'' lookup in this tree (which is itself composed of standard, Raft-replicated ranges), caching the results for future use.
-\end{itemize}
-
-This design represents a clear trade-off in metadata management. TiKV uses an external, centralized (though highly-available) component, the PD, which simplifies routing logic. CockroachDB uses a decentralized, self-referential model where the metadata is ``just data'' stored in special ranges.   
-
-\subsubsection{Google Spanner}
-Google's Spanner is the conceptual and technical ancestor to systems like TiKV and CockroachDB. It is a globally-distributed, synchronously-replicated database.
-
-\textbf{Model:} Spanner partitions data into ``tablets'' (similar to Bigtable) and uses ``directories'' as the unit of data placement and migration.
-
-\textbf{Consensus Integration:} It ``shards data across many sets of Paxos state machines''. (Raft is a modern, more understandable successor to the Paxos consensus algorithm; the architectural model is the same).
-
-\textbf{Load Balancing:} The system is automated and managed by a hierarchy of components: a ``placement driver'' handles data movement across zones, while ``zonemasters'' assign data to ``spanservers''.
-
-\textbf{Request Routing:} Clients use ``per-zone location proxies'' to find the correct spanserver serving their data.
-
-The fact that Google (Spanner), TiKV, and CockroachDB all independently converged on the same fundamental architecture---a sorted key-space, partitioned into ranges, with each range managed by its own consensus group (Paxos/Raft)---is one of the most powerful trends in modern distributed systems. TiKV's design, for instance, is explicitly ``based on the design of Google Spanner''. This ``Raft-per-Shard'' (or ``Paxos-per-Shard'') model is the state-of-the-art for building strongly-consistent, scalable databases.   
 
 
 
@@ -456,9 +331,28 @@ Control plane is responsible for:
     \item Reports heartbeats to the Control Plane
 \end{itemize}
 
-\subsection{gRPC communication protocol and interface definition}
-gRPC communication protocol is a RPC framework created by Google. It is a binary-encoded version of basic RPC, allowing it to be faster. To define gRPC functions and data types, protocol buffer files are used.
-We define 6 methods and 10 data types. All of these functions are based on Raft Algorithm as only these functions are used in gRPC. There are more details about this functions in Chapter 4.
+\subsection{gRPC communication protocol and interface definition} \label{subsec:grpc_protocol}
+gRPC is a high-performance Remote Procedure Call (RPC) framework developed by Google. It uses Protocol Buffers as its interface definition language and message serialization format, providing a binary-encoded alternative to traditional JSON-over-HTTP, which results in smaller payloads and faster processing.
+
+The system utilizes a dedicated gRPC service for the Control Plane's Raft operations. We define 6 core methods and 10 data types in the \texttt{raft.proto} file:
+
+\begin{table}[h!]
+\centering
+\caption{gRPC Service Methods for Raft Consensus}
+\label{tab:grpc_methods}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Method} & \textbf{Responder} & \textbf{Purpose} \\ \hline
+\texttt{Forward} & Leader & Forwards a client write request to the Raft leader. \\ \hline
+\texttt{ForwardGet} & Leader & Forwards a client read request to the Raft leader. \\ \hline
+\texttt{LogRequest} & Follower & Standard Raft \textit{AppendEntries} for log replication. \\ \hline
+\texttt{VoteRequest} & All & Standard Raft \textit{RequestVote} for leader election. \\ \hline
+\texttt{Heartbeat} & All & Basic reachability check used in health monitoring. \\ \hline
+\texttt{InstallSnapshot} & Follower & Transfers chunked state machine data to lagging nodes. \\ \hline
+\end{tabular}
+\end{table}
+
+These functions form the backbone of the Control Plane's consistency. Detailed implementation of how these RPCs interact with the Raft state machine is discussed in Chapter 4.
 
 \section{Design of Control Plane module}
 \subsection{Cluster topology and metadata menagement}
@@ -488,13 +382,12 @@ On RPC failure the client retries the request against current primary. If this p
 % chapter 4
 
 \chapter{Implementation of the Raft Consensus Module (pkg/raft)}
-The core of my distributed system is the Raft consensus algorithm. It is responsible for coordinating controllers, that basically do majority of thing in the application. The only place where Raft is not used is the Data Plane, where nodes just accepts GET/PUT/DELETE and Control Plane makes sure that they do it correctly.
-\noindent My own implementation of this algorithm is located in pkg/raft. The algorithm is decomposed into smaller problem of Leader Election and Log Replication. To limit infinite growth the snapshot mechanism is also implemented. There are multiple supporting functions that I will write in next sections.
-\\
-% The core of the distributed system is the implementation of the Raft consensus algorithm, located in the \texttt{pkg/raft} package. This module is responsible for managing the state of distributed nodes, ensuring data consistency across the cluster, and handling leader election and failure recovery. The implementation relies on the \texttt{Raft} struct defined in \texttt{raft.go} as the central controller, which coordinates sub-components such as the \texttt{Elector}, \texttt{Replicator}, and \texttt{DataSaver}. Communication between nodes is achieved via gRPC, as defined in \texttt{transport.go} and \texttt{grpc.go}, utilizing Protocol Buffers for message serialization.
+The core of the distributed system is the Raft consensus algorithm, located in the \texttt{pkg/raft} package. This module is responsible for managing the state of distributed nodes, ensuring data consistency across the cluster, and handling leader election and failure recovery. While the Data Plane uses synchronous replication for performance, the Control Plane requires the formal correctness and safety guarantees of Raft to manage the cluster's critical metadata.
+
+The implementation is highly modular, decomposing the Raft protocol into several distinct components: \texttt{Elector}, \texttt{Replicator}, \texttt{DataSaver}, and \texttt{Snapshotter}. This separation of concerns allows for a clean concurrency model where each component operates on its own set of goroutines, communicating via channels to minimize lock contention.
 
 \section{Raft node state machine}
-The basic of Raft algorithm relies on the elected leader. We define leader as a node that won the election, that is, quorum of nodes (more than half) agreed that the node can become a leader. Each node keeps it current state in currentRole field. Node can be in one of three states: Follower, Candidate, Leader.
+The system defines the node's lifecycle through three primary roles: \texttt{Follower}, \texttt{Candidate}, and \texttt{Leader}. The transition between these roles is strictly controlled by the term logic and majority voting rules.
 
 \subsection{Implementation of roles: Follower, Candidate, Leader}
 
@@ -505,34 +398,39 @@ The roles are defined as typed constants in \texttt{types.go}: \texttt{Follower}
     \item \textbf{Leader:} The node that handles all client requests and coordinates log replication. Transition to this role is handled by the \texttt{becomeLeader} function in \texttt{utils.go}, which initializes the \texttt{Replicator} instances for all peers.
 \end{itemize}
 
-\subsection{Leader election mechanism (election.go) and term handling (Terms)}
+\subsection{Concurrency and Locking Model}
+Unlike simple implementations that wrap the entire state in a single mutex, this module uses a \texttt{sync.RWMutex} for the core Raft state, while sub-components often use their own internal synchronization. A critical design choice was the delivery of committed logs to the \texttt{Application} interface; to prevent deadlocks and blocking the consensus loop, the mutex is explicitly unlocked during the \texttt{deliverToApplication} phase, allowing the application to process data without stalling incoming RPCs.
 
-The election logic is decoupled into the \texttt{Elector} struct located in \texttt{election.go}. This component manages the election timer, which is randomized to prevent split votes. The timer duration is calculated in \texttt{nextTimeout} based on a minimum and maximum election timeout range (e.g., 400ms to 800ms).
-
-When the timer fires without receiving a valid heartbeat from a leader, the node increments its \texttt{currentTerm} and transitions to the Candidate state. The election process involves:
+\subsection{Leader election mechanism (election.go)}
+The \texttt{Elector} manages the node's election timer using a randomized timeout strategy (400ms -- 800ms) to reduce the probability of split votes in large clusters.
 \begin{enumerate}
-    \item Resetting the election timer.
-    \item Voting for itself (\texttt{votedFor} set to \texttt{selfID}).
-    \item Broadcasting \texttt{VoteRequest} RPCs to all peers in parallel.
+    \item \textbf{Timer Loop:} A dedicated goroutine runs \texttt{electionTimerLoop}, which listens on a \texttt{resetTimerCh}. This channel allows other components (like heartbeats or valid AppendEntries RPCs) to reset the timer efficiently.
+    \item \textbf{Safety Checks:} Before starting an election, the node verifies it is not currently the leader and not in the middle of installing a snapshot, as snapshot installation is a heavy I/O operation that might temporarily delay heartbeat processing.
+    \item \textbf{Parallel Requests:} When a node becomes a Candidate, it broadcasts \texttt{VoteRequest} RPCs to all peers in parallel using individual goroutines, ensuring the election process is as fast as the fastest majority of the network.
 \end{enumerate}
 
-The incoming \texttt{VoteRequest} is handled in \texttt{raft.go}. The implementation strictly adheres to the Raft term logic: if a request contains a term higher than the node's \texttt{currentTerm}, the node immediately steps down to Follower status.
-
-\section{Log replication logic (replicator.go, log.go)}
+\section{Log replication logic (replicator.go)}
 \label{sec:log_replication}
 
-Once a leader is elected, it must replicate client commands to the cluster. This process is managed by the \texttt{Replicator} struct defined in \texttt{replicator.go}. The leader maintains a separate \texttt{Replicator} instance for every follower, allowing for asynchronous and isolated replication streams.
+The replication logic is implemented using an isolated "per-peer" model. For every follower in the cluster, the leader spawns a dedicated \texttt{Replicator} goroutine.
 
-\subsection{Log entry structure (LogEntry) and handling of LogRequest (AppendEntries)}
-\label{subsec:log_entry}
-
-The log is represented as a slice of \texttt{LogEntry} structs. Each entry contains:
+\subsection{Isolated Replicators and The Pulse Protocol}
+Each \texttt{Replicator} maintains its own state for a specific peer, including \texttt{nextIndex} and \texttt{matchIndex}. This provides several advantages:
 \begin{itemize}
-    \item \texttt{Term}: The term when the entry was received.
-    \item \texttt{Message}: The actual state machine command (e.g., \texttt{PUT}, \texttt{GET}, \texttt{DELETE}), defined in \texttt{messages.go}.
+    \item \textbf{Fault Isolation:} A slow or disconnected follower does not block replication to other healthy nodes.
+    \item \textbf{Instant vs. Periodic Replication:} The replicator waits on a \texttt{signalCh}. When the leader receives a new client request, it "pulses" this channel to trigger immediate replication. If no writes occur, a 50ms ticker ensures periodic heartbeats are sent to maintain leadership.
+    \item \textbf{Self-Healing Quorum:} If a replicator detects too many consecutive failures (defined in \texttt{maxConsecutiveFailures}), it triggers a \texttt{checkQuorumHealth()} call, which can cause a leader to step down if it realizes it no longer has a healthy majority.
 \end{itemize}
 
 Replication is triggered via the \texttt{LogRequest} RPC (standard Raft \textit{AppendEntries}). The \texttt{Replicator} runs a continuous loop that monitors a signal channel. When triggered, it calculates the \texttt{prevLogIndex} and \texttt{prevLogTerm} to ensure log consistency. These arguments are packaged into a \texttt{LogRequestArgs} Protocol Buffer message and sent via the \texttt{PeerClient} interface.
+
+\subsection{gRPC Connection Management}
+Maintaining stable gRPC connections in a dynamic cluster is handled by the \texttt{ConnectionManager}.
+\begin{itemize}
+    \item \textbf{Lazy Initialization:} Connections to peers are only established when needed (e.g., during the first replication attempt or vote request).
+    \item \textbf{Exponential Backoff with Jitter:} If a connection fails, the manager uses a backoff strategy (starting at 100ms up to 5s) with added randomization (jitter). This prevents the "Thundering Herd" problem where all nodes try to reconnect to a recovering leader simultaneously, potentially overwhelming its network stack.
+    \item \textbf{Health Monitoring:} The manager periodically verifies the state of idle connections, closing and reopening them if they become stale or if a underlying network partition is detected.
+\end{itemize}
 
 \subsection{Committing entries (Commit Index) and applying to the state machine}
 \label{subsec:committing_entries}
@@ -541,7 +439,10 @@ The leader tracks the \texttt{matchIndex} (represented as \texttt{ackedLengths})
 
 Upon commitment, messages are applied to the local state machine via the \texttt{Application} interface (defined in \texttt{application.go}). The application executes the command (e.g., updating the in-memory cache) and returns the result, which is then sent back to the client via a response channel.
 
-\section{Data persistence management}
+\subsection{The Log Request (AppendEntries)}
+The protocol uses a sophisticated \texttt{prepareLogRequestArgs} method to calculate the exact suffix of the log that needs to be sent. It handles the transition between sending incremental log entries and triggering a full snapshot installation if the follower's lag exceeds the available logs in memory.
+
+\section{Asynchronous Persistence Management}
 \label{sec:persistence}
 
 To survive crashes and restarts, the Raft module implements strict persistence guarantees using the \texttt{DataSaver} struct located in \texttt{persistance.go}.
@@ -557,164 +458,47 @@ The state is split into two files:
     \item \textbf{Logs File:} Stores the append-only sequence of \texttt{LogEntry} objects.
 \end{itemize}
 
-The \texttt{SaveValues} method is called whenever the node's term, vote, or log changes, ensuring that the critical Raft state is durable before responding to RPCs.
+\subsection{State Recovery}
+Upon restart, the \texttt{LoadValues} method performs a sequential scan of the log file, reconstructing the in-memory log slice. Because logs are appended, the system handles partial writes by ignoring corrupted gOB entries at the end of the file during recovery.
 
-\subsection{Recovering state after node restart}
-\label{subsec:recovering_state}
-
-During initialization in \texttt{NewRaft}, the \texttt{LoadValues} method reads the persisted metadata and logs from the disk. This restores the node's \texttt{currentTerm}, \texttt{votedFor}, and replicates the log into memory. If a snapshot exists, it is also loaded to restore the application state up to the last snapshot index, ensuring the node resumes operation consistent with its previous state.
-
-\section{Log size optimization – Log Compaction}
+\section{Log Compaction and Snapshotting}
 \label{sec:log_compaction}
 
-As the system operates, the log grows indefinitely. To manage memory and disk usage, the system implements log compaction via snapshots, handled by the \texttt{Snapshot} struct in \texttt{snapshot.go}.
+To prevent the log file from growing infinitely, the system implements a managed snapshotting mechanism.
 
-\subsection{Snapshot creation mechanism (snapshot.go)}
-\label{subsec:snapshot_creation}
+\subsection{Snapshot Trigger and Creation}
+When the log length exceeds the \texttt{snapshotThreshold} (configured in \texttt{Config}), the leader initiates a snapshot. It requests a serialized state from the \texttt{Application}, writes it to a \texttt{.snap} file, and then truncates the in-memory log.
 
-The \texttt{decideRunSnapshot} method checks if the current log size exceeds the configured \texttt{snapshotThreshold}. If the threshold is met, the following steps occur:
-\begin{enumerate}
-    \item The state machine (Application) generates a serialized snapshot of its current data (e.g., the key-value map).
-    \item The snapshot is written to a \texttt{.snap} file using \texttt{WriteSnapshotData}.
-    \item The log entries covered by the snapshot (up to \texttt{lastIncludedIndex}) are truncated from the in-memory log to free resources.
-    \item The \texttt{lastIndex} and \texttt{lastTerm} are updated in the \texttt{Snapshot} struct to maintain log continuity.
-\end{enumerate}
-
-\subsection{Snapshot transfer protocol (InstallSnapshot RPC)}
-\label{subsec:snapshot_transfer}
-
-If a follower lags so far behind that the leader has already discarded the log entries needed for replication, the leader switches from sending \texttt{LogRequest} to sending \texttt{InstallSnapshot}. This is implemented in the \texttt{sendInstallSnapshotRPC} method. The snapshot is transmitted in chunks to avoid overwhelming the network. Upon receipt, the follower replaces its current state with the data provided in the snapshot and resets its log, as defined in the \texttt{InstallSnapshot} handler in \texttt{grpc.go}.
-
-
-
-% finished here 
-
-
-
-\chapter{System architecture}
-
-The design of the system's routing, partitioning, and consistency logic evolved through distinct iterations to balance the conflicting requirements of sub-millisecond latency (Cache) and strong data safety (Consistency). The final architecture leverages a Hybrid Control/Data Plane model, using Raft for topology management and Synchronous Replication for data propagation.
-
-\subsection{Initial Concept: The Gateway Model} The initial design proposed a classic "Proxy" architecture to abstract the cluster topology from the client.
-
-\textbf{Design:} 
-\begin{itemize} 
-    \item A centralized \textbf{Gateway Service} acts as the entry point for all client requests. 
-    \item The Gateway maintains the list of active storage nodes (N). 
-    \item Routing is determined by Dynamic Modular Hashing: target=hash(k)(modN). 
+\subsection{Chunked Snapshot Transfer (InstallSnapshot)}
+Transferring a large snapshot over gRPC can be problematic as it might exceed the maximum message size or cause network timeouts. I implemented a **Chunked Transfer Protocol** in \texttt{sendInstallSnapshotRPC}:
+\begin{itemize}
+    \item The snapshot file is read in 128 KB blocks.
+    \item Each block is sent as a separate \texttt{InstallSnapshotRequest} containing an \texttt{offset} and a \texttt{Done} flag.
+    \item The follower reconstructs the file using \texttt{WriteAt}, ensuring that the snapshot is durable on the follower's disk even if the transfer is interrupted and resumed.
 \end{itemize}
+This mechanism allows the system to synchronize new nodes even when the dataset is significantly larger than available network buffers.
 
-\textbf{Critique \& Rejection:} While simple, this model was rejected due to two critical flaws: 
-\begin{enumerate} 
-    \item \textbf{The "Double-Hop" Latency Penalty:} Every operation requires two network traversals (Client → Gateway → Node). For an in-memory cache, this overhead is prohibitive. 
-    \item \textbf{The "Thundering Herd" Problem:} The formula is tightly coupled to node count (N). If N changes, roughly 75\% of keys are remapped, rendering the cache unusable during scaling. 
-\end{enumerate}
+\section{System Configuration and Environment Parameters}
+The Raft module is highly configurable through environment variables, allowing it to be tuned for different network conditions or testing scenarios.
 
-\subsection{Structural Optimization: Fixed Partitioning} To solve the "Thundering Herd" problem, the system adopts the Fixed Partition model. Keys are mapped to logical buckets rather than physical nodes.
-PartitionID=CRC16(key)(mod1024)
-
-The constant 1024 ensures that adding a node results in minimal, deterministic data movement.
-
-\subsection{The Consistency Model: Defining "Strong Cache Consistency"} A core thesis requirement is "Strong Consistency." To achieve this without becoming a slow, disk-bound database, the architecture makes a precise distinction between Consistency and Durability.
-
-\begin{itemize} \item \textbf{Durability (Database Domain):} Guaranteeing data survives a total power failure (requires disk fsync). This is \textit{out of scope} for this in-memory cache. \item \textbf{Consistency (Thesis Scope):} Guaranteeing that once a write is acknowledged, it is visible to all subsequent reads and survives individual node failures. \end{itemize}
-
-To achieve this, the system rejects "Async Replication" (Redis-style, where data loss is possible) and "Full Consensus" (CockroachDB-style, where latency is too high). Instead, it implements Synchronous Primary-Backup Replication.
-
-\subsection{Final Architecture: The Supervisor-Worker Model} The system is bifurcated into two distinct layers:
-
-\subsubsection{1. The Control Plane ("The Supervisor")} This layer consists of a small cluster (typically 3 nodes) running the Raft Consensus Algorithm. \begin{itemize} \item \textbf{Responsibility:} It manages the \textbf{Partition Table} (The Map). \item \textbf{State:} It stores the mapping: Partition P→{Primary: Worker A, Backup: Worker B}. \item \textbf{Role:} It acts as the "Judge." It does not store cache data. It only prevents Split-Brain scenarios by enforcing that only one valid Primary exists for any partition at any time. \end{itemize}
-
-\subsubsection{2. The Data Plane ("The Workers")} This layer consists of N worker nodes that store the actual Key-Value pairs in memory. Crucially, \textbf{Worker Nodes do not run Raft}. \begin{itemize} \item \textbf{Responsibility:} High-throughput memory storage and replication. \item \textbf{Replication Factor:} The system uses N=2 (1 Primary + 1 Backup). This creates a trade-off where the system is resilient to single-node failures while minimizing network latency (compared to N=3 or higher). \end{itemize}
-
-\subsubsection{3. The Write Flow (Synchronous Replication)} To guarantee Strong Consistency, the Client communicates directly with Workers using a "Smart Client" approach, enforcing a strict replication chain.
-
-\textbf{The Execution Chain:} 
-\begin{enumerate} 
-    \item \textbf{Lookup:} The Client checks its cached Partition Table to find the Primary Worker for the key. 
-    \item \textbf{Direct Send:} The Client sends \texttt{SET key=val} to the \textbf{Primary}. 
-    \item \textbf{Lock \& Forward:} The Primary locks the key locally and immediately sends a \texttt{REPLICATE} command to the assigned \textbf{Backup Worker}. 
-    \item \textbf{Wait for ACK:} The Primary \textbf{pauses} execution. It does not reply to the client. 
-    \item \textbf{Backup Confirm:} The Backup writes to memory and sends an \texttt{ACK} to the Primary. 
-    \item \textbf{Completion:} Only upon receiving the Backup's \texttt{ACK} does the Primary return \texttt{OK} to the Client. 
-\end{enumerate}
-
-\textbf{Failure Analysis:} If the Primary crashes \textit{before} sending the final \texttt{OK}, the client treats the request as failed. If the Primary crashes \textit{after} sending \texttt{OK}, the data is guaranteed to be on the Backup. The Raft Supervisor then detects the failure and promotes the Backup to Primary, preserving the data and maintaining Strong Consistency.
+\begin{table}[h!]
+\centering
+\caption{System Configuration Parameters}
+\label{tab:raft_config}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Variable} & \textbf{Default} & \textbf{Description} \\ \hline
+\texttt{RAFT\_ID} & \textit{required} & Unique integer ID for the Raft node. \\ \hline
+\texttt{TOTAL\_NODES} & \textit{required} & The total number of nodes in the cluster. \\ \hline
+\texttt{RAFT\_ADDRS} & \textit{required} & Comma-separated list of all node addresses. \\ \hline
+\texttt{SNAPSHOT\_THRESHOLD} & \textit{required} & Number of log entries before a snapshot is triggered. \\ \hline
+\texttt{RAFT\_INITIAL\_BACKOFF} & 1s & Initial delay for gRPC reconnection attempts. \\ \hline
+\texttt{RAFT\_MAX\_BACKOFF} & 30s & Maximum delay for reconnection attempts. \\ \hline
+\texttt{RAFT\_ARTIFICIAL\_DELAY} & 0ms & Simulates network/CPU lag for performance testing. \\ \hline
+\end{tabular}
+\end{table}
 
 
-\section{Entry point}
-
-The entry point defines how external applications interact with the distributed cache. To ensure the system meets the requirements of low latency and high availability, I analyzed two distinct approaches: the Reverse Proxy model and the Smart Client model.
-
-\subsection{Rejected Approach: The Reverse Proxy} 
-In a traditional architecture, a load balancer or reverse proxy sits between the client and the cluster. 
-\begin{itemize} 
-    \item \textbf{Mechanism:} The client sends a request to a generic address (e.g., cache.api). The proxy looks up the internal topology and forwards the request to the correct node. 
-    \item \textbf{Flaw (The Consensus Paradox):} You noted a critical flaw: \textit{"Do proxies need consensus?"} If proxies cache the topology state to be fast, they risk having stale routes (routing to a dead node). If they don't cache state, they become a performance bottleneck. Furthermore, the proxy adds an extra network hop (Client → Proxy → Node), effectively doubling the network latency for every operation. 
-\end{itemize}
-
-For these reasons, the Proxy model was rejected.
-
-\subsection{Selected Approach: The Smart Client} The system implements a "Smart Client" library (Driver) that is embedded directly into the user's application.
-
-\textbf{Responsibility:} The Smart Client is not merely a TCP connector; it is a fully topology-aware participant in the protocol. 
-\begin{enumerate} 
-    \item \textbf{Topology Caching:} On startup, the client connects to \textit{any} active Worker or Supervisor and downloads the \textbf{Partition Table}. 
-    \item \textbf{Local Routing Decision:} For a command SET key value, the client performs the partitioning logic locally:
-$$target_node=PartitionTable[CRC16(key)(mod1024)].Primary$$
-
-\item \textbf{Direct Connection:} The client opens a persistent TCP connection directly to the target Worker Node. \end{enumerate}
-
-\textbf{Failure Correction:} If the client's Partition Table is stale (e.g., a node moved recently), the Worker will reject the request with a WRONG\_NODE error. The client catches this error, queries the Supervisor for a new Partition Table, and retries the operation. This guarantees that after one network round-trip, the client's view of the cluster is eventually consistent with the Raft state.
-
-
-\section{Component 2: Data Partitioning Strategy}
-
-\subsection{The Algorithm: Fixed Slot Partitioning} To achieve predictable scaling, the system eschews dynamic modular hashing (hash(modN)) in favor of a Pre-Sharded model.
-
-The key-space is divided into a static number of logical units called Partitions (or Slots). \begin{itemize} \item \textbf{Total Partitions (P):} Fixed at 1024. \item \textbf{Mapping Function:} PartitionID=CRC16(key)(mod1024). \end{itemize}
-
-\subsection{Assignment Logic} Physical nodes do not own keys directly; they own Partitions. \begin{itemize} \item \textbf{Worker A} might own Partitions [0,340]. \item \textbf{Worker B} might own Partitions [341,680]. \end{itemize} When a new node (Worker C) joins the cluster, the system does not re-hash keys. Instead, the Supervisor simply reassigns ownership of specific partitions (e.g., taking [0,50] from A and [341,390] from B) to Worker C. This minimizes data movement and eliminates the "Thundering Herd" problem.
-
-\section{Component 3: The Control Plane (The Supervisor)}
-
-\textit{(Note: This replaces your "Node" section. "Supervisor" is more precise than "Node" for the Raft part.)}
-
-The Supervisor is a dedicated server (or set of 3 servers) responsible for the cluster's metadata. It acts as the "Brain" of the system.
-
-\subsection{The Raft Consensus Role} 
-
-The Supervisor runs the Raft Consensus Algorithm. Its Finite State Machine (FSM) manages exactly one data structure: the Partition Table.
-State=Map⟨PartitionID→{PrimaryIP,BackupIP}⟩
-
-\subsection{Responsibilities} 
-\begin{enumerate} 
-    \item \textbf{Membership Management:} Tracks which Worker nodes are alive via heartbeat monitoring. 
-    \item \textbf{Topology Enforcement:} If a Worker dies, the Supervisor detects the failure, updates the Partition Table (promoting a Backup to Primary), and commits this change via Raft. 
-    \item \textbf{Source of Truth:} It serves the current Partition Table to Clients and Workers upon request. 
-\end{enumerate} 
-\textbf{Crucially, the Supervisor never stores or processes cache data (GET/SET).} This isolation ensures that heavy cache traffic cannot destabilize the consensus mechanism.
-
-\section{Component 4: The Data Plane (The Worker)}
-
-\textit{(Note: This replaces your "Server" and "Application" sections. This is the core implementation.)}
-
-The Worker is a high-throughput server responsible for storing data and handling client requests. Workers do \textbf{not} run the Raft algorithm.
-
-\subsection{Storage Engine} Each Worker maintains an in-memory hash map (e.g., Go Map or C++ Unordered Map) storing the Key-Value pairs for the partitions it currently owns.
-
-\subsection{Consistency Enforcement (Synchronous Replication)} To satisfy the thesis requirement of "Strong Consistency" without the overhead of Raft-per-key, Workers implement a Synchronous Primary-Backup protocol.
-
-When a Worker receives a SET request, it executes the following atomic flow: 
-\begin{enumerate} 
-    \item \textbf{Guard Check:} The Worker verifies against its local Partition Table that it is indeed the \textbf{Primary} for the requested key. If not, it returns WRONG\_NODE. 
-    \item \textbf{Lock \& Local Write:} It locks the key and writes the value to local memory. 
-    \item \textbf{Replication:} It identifies the \textbf{Backup Worker} for this partition and sends a REPLICATE command. 
-    \item \textbf{Barrier:} The Worker \textbf{blocks} and waits. It does not send a response to the client. 
-    \item \textbf{Acknowledgement:} Once the Backup Worker confirms the write (ACK), the Primary unlocks the key and returns OK to the client. 
-\end{enumerate}
-
-This architecture ensures that any write acknowledged to the client exists physically on at least two servers, providing durability against single-node failures.
 
 %chapter 5
 
@@ -767,7 +551,25 @@ Rebalancing is responsible to ensure that data availability and even distributio
     \item [4.] The target data node is officially added to the replica set and the shard is set back to ACTIVE. 
 \end{itemize}
 
-\subsection{Dynamic Node Membership and Capacity Scaling}
+\subsection{The NoOp Command}
+The \texttt{NoOp} command is a special administrative command in the Raft state machine that performs no data modification. Its primary purpose is to refresh the leader's knowledge of the current state and verify that it still holds a valid quorum. In this implementation, the Controller uses \texttt{NoOp} to clear any potential uncertainty after an election and to ensure that topology updates are only issued by a leader that is fully synchronized with the cluster.
+
+\subsection{Controller HTTP API Reference}
+The Control Plane exposes several internal and external HTTP endpoints. These are used by Data Nodes for registration and by the Smart Client for topology discovery.
+
+\begin{table}[h!]
+\centering
+\caption{Controller HTTP API Endpoints}
+\label{tab:controller_endpoints}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Endpoint} & \textbf{Method} & \textbf{Description} \\ \hline
+\texttt{/register} & POST & Registers a new Data Node with its address. \\ \hline
+\texttt{/heartbeat} & POST & Receives health updates and returns current Epoch. \\ \hline
+\texttt{/topology} & GET & Returns the full JSON description of the cluster state. \\ \hline
+\texttt{/pull} & POST & Triggers a shard migration from source to target node. \\ \hline
+\end{tabular}
+\end{table}
 While the emergency promotion handles sudden failures, the system also manages the lifecycle of nodes entering and leaving the cluster gracefully.
 
 \subsubsection{Scaling Up: The Lazy Assignment Strategy}
@@ -830,7 +632,27 @@ Shard synchronization is a crucial part of the system. There are two data nodes 
 \end{itemize}
 
 
-\section{Client and access library}
+\subsection{Data Node HTTP API Reference}
+The Data Plane nodes expose endpoints for client CRUD operations and internal synchronization.
+
+\begin{table}[h!]
+\centering
+\caption{Data Node HTTP API Endpoints}
+\label{tab:datanode_endpoints}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Endpoint} & \textbf{Method} & \textbf{Description} \\ \hline
+\texttt{/data} & GET & Retrieves a value by key if the node is the primary. \\ \hline
+\texttt{/data} & POST/PUT & Stores a key-value pair and replicates to backups. \\ \hline
+\texttt{/data} & DELETE & Removes a key and replicates the deletion. \\ \hline
+\texttt{/replicate} & POST & Internal: Replica receives a data write from primary. \\ \hline
+\texttt{/delete-replicate} & POST & Internal: Replica receives a delete command from primary. \\ \hline
+\texttt{/export} & GET & Internal: Exports shard data for migration. \\ \hline
+\texttt{/import} & POST & Internal: Imports shard data from a source node. \\ \hline
+\end{tabular}
+\end{table}
+
+\noindent \textbf{Shard Locking:} During migration (Phase 2 of the 4-phase protocol), the shard is set to \texttt{StatusLocked}. Any client request to a locked shard is rejected with an HTTP \texttt{423 Locked} status, signaling the Smart Client to wait and retry.
 
 While the Control Node handles the cluster high-level orchestration and Data Node handles lower-level data logic, the Client and Access Library is reponsible for efficient operations and ensuring reliable communication. 
 
@@ -842,7 +664,7 @@ The client maintains a local copy of the cluster topology that is fetched from t
 
 \noindent Every GET, PUT, DELETE operation has a key associated with it. The client needs to calculate the hash of the key to send the request to correct node. The client will perform operations:
 \begin{itemize}
-    \item [1.] Hash the key using FNV-1a algorithm. %TODO describe this algorithm in chapter 2?
+    \item [1.] Hash the key using FNV-1a algorithm (see Section \ref{subsec:fnv1a}).
     \item [2.] Determine shard id by taking the hash modulo number of shards.
     \item [3.] Look up the primary data node id for that shard in local cache 
     \item [4.] Send the request to the primary data node id.
@@ -855,6 +677,16 @@ The client maintains a local copy of the cluster topology that is fetched from t
     \item [2.] Status 400 Not Primary - the shard has migrated or failover occured
 \end{itemize}
 \noindent In both cases the client has to refetch the topology and all of the other data from Control Plane (described in Section \ref{subsec:query_routing}) and update its local cache. 
+
+\subsection{Adaptive Retry and Backoff Strategy}
+To ensure resilience against transient failures, the Smart Client implements an adaptive retry loop:
+\begin{itemize}
+    \item \textbf{Retry Limit:} Each operation is attempted up to \texttt{maxRetries} (default: 5) times.
+    \item \textbf{Role Miss Retry:} If a node returns \texttt{400 Not Primary}, the client immediately refetches the topology and retries the request on the new primary.
+    \item \textbf{Migration Wait:} If a shard is locked (\texttt{423 Locked}), the client waits for 100ms before retrying, giving the migration protocol time to complete Phase 2.
+    \item \textbf{Failover Wait:} If a node is fenced or unreachable (\texttt{503 Service Unavailable}), the client waits for 200ms to allow the Control Plane's Reaper to detect the failure and trigger an emergency promotion.
+\end{itemize}
+This tiered wait strategy balances system responsiveness with the need to avoid overwhelming a cluster that is currently undergoing a reconfiguration.
 
 \subsection{Client-side idempotency}
 
@@ -869,16 +701,62 @@ Lets imagine a situation where we have a cluster with primary node $P$ and two r
 \end{itemize}
 It can be easily increased to any number of Replicas, as the argument is the same. 
 
+\section{Control Plane API Layer (pkg/api)}
+The \texttt{pkg/api} package provides the external interface for the Control Plane. While internal cluster coordination uses gRPC, administrative tasks and Control Plane state queries are exposed via a traditional HTTP/JSON API.
+
+\subsection{Bridging Raft and HTTP}
+The \texttt{api.Server} acts as a wrapper around the Raft node. When an HTTP request arrives (e.g., to update a configuration), the server must ensure the request is handled by the current leader.
+
+\begin{itemize}
+    \item \textbf{Leader Caching:} To avoid the latency of checking leadership status on every request, the API server maintains a \texttt{LeaderCache}. It caches the address of the known leader for a short period (1s), refreshing it only if a request to that leader fails.
+    \item \textbf{Command Forwarding:} If a client hits a follower node with a write request, the follower uses the gRPC \texttt{Forward} method to send the command to the leader. The leader then proposes the command to the Raft log.
+\end{itemize}
+
+\subsection{Idempotency and Resilience}
+Distributed consistency requires handling retries safely. The API layer implements two critical sub-components:
+\begin{enumerate}
+    \item \textbf{Idempotency Cache:} To prevent the same administrative command from being executed twice (for example, registering the same data node multiple times due to a network timeout during the first attempt), the server tracks request IDs in an \texttt{IdempotencyCache}. It discards duplicate requests before they reach the Raft log.
+    \item \textbf{Auto-Retrier:} Transient failures are handled by a \texttt{Retrier} component. It automatically retries idempotent operations if the connection to the leader is interrupted during consensus, ensuring high availability of the Control Plane operations.
+\end{enumerate}
+
+\subsection{Control Plane Client API Reference}
+The following table lists the endpoints exposed by the API server for external interaction:
+
+\begin{table}[h!]
+\centering
+\caption{Control Plane Client HTTP API}
+\label{tab:cp_client_api}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Endpoint} & \textbf{Method} & \textbf{Description} \\ \hline
+\texttt{/kv} & POST & Proposes a generic KV update to the Raft state machine. \\ \hline
+\texttt{/kv/\{key\}} & GET & Reads a value from the replicated state machine. \\ \hline
+\texttt{/kv/\{key\}} & DELETE & Deletes a value from the state machine. \\ \hline
+\texttt{/health} & GET & Returns the liveness status of the controller node. \\ \hline
+\texttt{/status} & GET & Returns technical Raft details (Term, CommitIndex, Role). \\ \hline
+\texttt{/leader} & GET & Returns the address of the current cluster leader. \\ \hline
+\end{tabular}
+\end{table}
+
 
 
 
 %chapter 6
 
-\chapter{Corretness verification and Fault injection testing}
+\chapter{Correctness verification and Fault injection testing}
 
-\section{Methodoly for testing distributed systems}
+\section{Methodology for testing distributed systems}
 
 As testing distributed systems requires independent servers I considered two options. First option was to run tests using multiple computers. This option however wasn't developer friendly. Every time I would want to test my system I had to boot multiple computers, synchronize data through version control system, then set it up. This would take too much time and effort just to run some basic testing. Thats where the second option came in - I simulated distributed servers using Docker Containers. As I can control almost everything about Docker Containers - restarts, failures, networks, this was my way of testing.
+
+\subsection{Docker-based Simulation Environment}
+To facilitate consistent and repeatable testing, the entire system is orchestrated using \texttt{docker-compose}. The current setup simulates a cluster composed of 3 Controllers and 5 Data Nodes. This configuration is defined in the \texttt{docker-compose.yml} file, which manages:
+\begin{itemize}
+    \item \textbf{Network Isolation:} It defines two distinct bridge networks: \texttt{raft-cluster} for internal gRPC communication between Raft nodes, and \texttt{client-access} for external API requests.
+    \item \textbf{Persistence:} Volumes are mapped for each controller to ensure that Raft logs and snapshots survive container restarts, allowing for testing of recovery mechanisms.
+    \item \textbf{Service Dependencies:} Data nodes are configured to depend on controllers, mirroring the real-world startup sequence where nodes must register with a functional control plane.
+\end{itemize}
+This containerized approach allows for complex failure scenarios (like killing a node or partitioning the network via \texttt{docker network disconnect}) to be automated in scripts.
 
 \section{Unit and integration tests for the Raft implementation}
 
@@ -900,10 +778,20 @@ As noted in chapter 3, Raft is a central thing in Control Plane, and Control Pla
 
 \section{Simulation of failures and network partitioning}
 
-While the Raft tests are useful for testing Raft, they are not useful for testing the entire system. System requirement was to be Strongly Consistent and have Partition Tolerance. Hence I wrote two tests:
-\begin{itemize}
-    \item First test checked Partition Tolerance, it ran entire system and waited for it to get to some stable state (wait around 5 seconds). It then found the leader and disconnected it from the other nodes. Then the test waited for new leader election. When the new leader was elected, the new node was added to the cluster. Then the previously disconnected node was reconnected and after 5 seconds there was a check whether the reconnected node sees the newly added node. 
-    \item Second test checked Strong Consistency. It had multiple subtests in it:
+While the Raft tests are useful for testing Raft, they are not useful for testing the entire system. System requirement was to be Strongly Consistent and have Partition Tolerance. To verify these properties, I developed a suite of automated shell scripts located in \texttt{tests/fault\_injection/} and \texttt{tests/e2e/}.
+
+\subsection{Fault Injection and End-to-End Test Suite}
+The two primary verification scripts are:
+\begin{enumerate}
+    \item \texttt{test\_network\_partition.sh}: This script verifies Partition Tolerance by executing the following sequence:
+    \begin{itemize}
+        \item Start the system and wait for it to reach a stable state.
+        \item Identifies the current Raft leader and disconnects it from the network.
+        \item Waits for the remaining nodes to detect the failure and elect a new leader.
+        \item Modifies the cluster topology (e.g., adding a node) via the new leader.
+        \item Reconnects the original leader and verifies that it successfully synchronizes with the new majority and reflects the changes.
+    \end{itemize}
+    \item \texttt{test\_strong\_consistency.sh}: This script verifies the system's linearizability by performing multiple sub-tests:
     \begin{itemize}
         \item First configured some topology of the system to look like it was running for some time to check read-after-write on it. The test run PUT request for some random value to the key and without waiting asked for the value. The expected value of read was the write value.
         \item Second was to write sequence of values to the same key (change the key value multiple times). Then there was one singular read sent. The expected value was the value of the last write.
@@ -914,9 +802,19 @@ While the Raft tests are useful for testing Raft, they are not useful for testin
         \item Seventh part was a rerun of second part, to make sure that data-node after restart is still functioning in the intended way.
         \item Eight, final part was to write a value to data-node and then immediately do a read-after-write check whether replica has this data.
     \end{itemize}
-\end{itemize}
+    \item \texttt{basic\_e2e\_test.sh}: Located in the \texttt{tests/e2e/} directory, this script performs a full lifecycle test: starting the cluster, registering nodes, storing a large set of keys, and verifying they can be retrieved after a series of controlled node restarts.
+\end{enumerate}
 
-\noindent All of this tests suceeded, guaranteeing that the system is Strongly Consistent and Partition Tolerant.
+\noindent All of these tests succeeded, guaranteeing that the system is Strongly Consistent and Partition Tolerant.
+
+\section{Continuous Integration (CI/CD)}
+To maintain code quality and prevent regressions during development, I implemented a Continuous Integration pipeline using \textbf{GitHub Actions}. The workflow is defined in \texttt{.github/workflows/go.yml} and performs the following steps on every pull request or push to the main branch:
+\begin{itemize}
+    \item \textbf{Environment Provisioning:} It sets up a Linux environment with the required Go version (currently 1.24).
+    \item \textbf{Dependency Caching:} To optimize execution time, the pipeline caches Go modules and build artifacts, typically reducing the build stage duration by over 50\%.
+    \item \textbf{Automated Testing:} It executes the command \texttt{go test ./... --short}. The \texttt{--short} flag is used in the CI environment to skip long-running benchmarks or extremely heavy integration tests while still verifying the correctness of all core logic, including Raft state transitions and data node CRUD operations.
+\end{itemize}
+This automated feedback loop was essential for the rapid development of complex consensus logic, where a small change in term handling could otherwise have catastrophic effects on cluster stability.
 
 
 %chapter 7
@@ -928,6 +826,15 @@ The main idea about a cache is its speed. If we did not care about speed, then u
 I decided to run benchmarks to calculate how many requests per second the cache can support. Benchmark works for 10 seconds, using 100 workers. It writes as many request as it can to different key each request. After ten seconds, we divide the number of total requests by 10 to get the score of requests per second. //
 
 \noindent For benchmarks I was using Macbook Air M1, 2020 with 16GB of RAM on MacOS Tahoe 26.1. 
+
+\subsection{Benchmark Toolset}
+To ensure objective and reproducible results, I developed a suite of benchmarking tools located in the \texttt{tests/benchmark/} directory:
+\begin{itemize}
+    \item \texttt{benchmark\_rps.go}: A high-performance Go-based benchmark that measures maximum RPS using goroutines and connection pooling.
+    \item \texttt{benchmark\_scaling.sh}: Orchestrates tests across multiple cluster configurations to measure horizontal scaling efficiency.
+    \item \texttt{benchmark\_raft\_delay.sh}: Evaluates the impact of consensus latency on Control Plane performance by injecting artificial Raft processing delays.
+    \item \texttt{benchmark\_comparison.sh}: Automates the deployment of both this system and competitor systems (Etcd, Redis) to provide direct side-by-side performance comparisons.
+\end{itemize}
 
 \section{Throughput study (RPS) depending on the number of clients and shards}
 
@@ -1021,7 +928,7 @@ My system functional and nun-functional requirements have all been meet. For eac
 
 \subsection{Encountered implementation problems and challenges}
 
-The biggest problem of the project was the implementation.\\
+The biggest problem of the project was the implementation. As the original paper didn't have any implementation deatils, only broad look of the algorithm. All operation implementation and handling concurrency was done by me. \\
 Firstly I implemented Raft with multiple mutexes. Using multiple mutexes made it harder to reason about. That caused many deadlocks that I had to debug. \\
 My second problem with Raft implementation was that I did not start with snapshot logic instantly. This made me rewrite almost all of the logic to adjust log indexes and terms to include snapshotted terms. \\
 Then, even after implementation of snapshots there were not efficient. My initial strategy was to send snapshot during one request. This made the request block the thread and basically hold the mutex for longer, which made the server (leader) sending snapshot to a follower unresponsible. This created a bug, where the third server, that was not receiving snapshot saw a leader as dead node and started the election. Because of correct values and logic, the server that was receiving snapshot accepted the new leader Vote Request and made the third server a new leader. My solution to this, was to split snapshot into smaller blocks. This removed unresponsibility of leader and made cluster work correctly. 
@@ -1040,15 +947,15 @@ As noted in chapter 7, the Raft speed determines entire application speed. I've 
 
 %%%%% BIBLIOGRAFIA
 
-\begin{thebibliography}{1}
-\bibitem{example} eric brewer on cap theorem
-\bibitem{example} what part of raft was not formally proven
-\bibitem{example} usage of raft in CockroachDB
-\bibitem{example} usage of raft in mongodb
-\bibitem{example} usage of raft in neo4j
-\bibitem{example} usage of raft in rabbitmq
-\bibitem{example} Sharding name where it comes from
-\bibitem{example} Redis usage statistics
+\begin{thebibliography}{9} %TODO fix
+\bibitem{brewer} E. Brewer, "CAP twelve years later: How the "rules" have changed," in \textit{Computer}, vol. 45, no. 2, pp. 23-29, Feb. 2012.
+\bibitem{raft} D. Ongaro and J. Ousterhout, "In Search of an Understandable Consensus Algorithm," in \textit{2014 USENIX Annual Technical Conference (USENIX ATC 14)}, Philadelphia, PA, 2014, pp. 305-319.
+\bibitem{cockroach} T. J. Edwards et al., "CockroachDB: The Resilient Geo-Distributed SQL Database," in \textit{Proceedings of the 2020 ACM SIGMOD International Conference on Management of Data}, 2020, pp. 1493-1509.
+\bibitem{mongodb} MongoDB, "Replica Set Protocol Versions," [Online]. Available: https://www.mongodb.com/docs/manual/core/replica-set-protocol-versions/. [Accessed: 20-Dec-2024].
+\bibitem{neo4j} Neo4j, "Causal Clustering Architecture," [Online]. Available: https://neo4j.com/docs/operations-manual/current/clustering/. [Accessed: 20-Dec-2024].
+\bibitem{rabbitmq} RabbitMQ, "Quorum Queues," [Online]. Available: https://www.rabbitmq.com/docs/quorum-queues. [Accessed: 20-Dec-2024].
+\bibitem{sharding} Ultima Online, "The Origin of Sharding," [Online]. Available: https://en.wikipedia.org/wiki/Database\_sharding. [Accessed: 20-Dec-2024].
+\bibitem{dbengines} DB-Engines, "Ranking of Key-Value Stores," [Online]. Available: https://db-engines.com/en/ranking/key-value+store. [Accessed: 20-Dec-2024].
 \end{thebibliography}
 
 
