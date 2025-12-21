@@ -271,7 +271,6 @@ func (c *Controller) Rebalance() {
 		return
 	}
 
-	// Track new replicas that need data synchronization
 	var syncTasks []replicaSyncTask
 
 	c.mu.Lock()
@@ -319,7 +318,6 @@ func (c *Controller) Rebalance() {
 				newReplicas = append(newReplicas, nodeID)
 				slog.Info("Rebalance: Added replica", "shard", shardID, "replica", nodeID)
 
-				// Schedule data sync for new replica
 				syncTasks = append(syncTasks, replicaSyncTask{
 					shardID:   shardID,
 					primaryID: shard.PrimaryID,
@@ -344,13 +342,11 @@ func (c *Controller) Rebalance() {
 		slog.Info("Rebalance: Topology broadcasted via Raft", "epoch", newConfig.Epoch)
 	}
 
-	// Trigger data synchronization for new replicas (async)
 	if len(syncTasks) > 0 {
 		go c.syncNewReplicas(syncTasks, &newConfig)
 	}
 }
 
-// syncNewReplicas triggers data pull from primary to each new replica
 func (c *Controller) syncNewReplicas(tasks []replicaSyncTask, config *metadata.ClusterConfig) {
 	for _, task := range tasks {
 		primaryNode, ok1 := config.Nodes[task.primaryID]

@@ -25,7 +25,6 @@ type writeRequest struct {
 }
 
 func main() {
-	// Get datanode URLs from args or default
 	datanodeURLs := []string{"http://localhost:9010"}
 	if len(datanodeURLs) == 0 {
 		fmt.Println("No datanodes specified")
@@ -43,7 +42,6 @@ func main() {
 		Timeout: 5 * time.Second,
 	}
 
-	// Wait for datanodes
 	fmt.Println("Checking datanodes...")
 	for _, url := range datanodeURLs {
 		for i := 0; i < 30; i++ {
@@ -57,7 +55,6 @@ func main() {
 		}
 	}
 
-	// Warmup
 	fmt.Println("Warmup...")
 	for i := 0; i < 100; i++ {
 		doPut(client, datanodeURLs[0], fmt.Sprintf("warmup-%d", i), "val")

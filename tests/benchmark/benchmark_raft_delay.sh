@@ -47,9 +47,8 @@ for DELAY in "${DELAYS[@]}"; do
         fi
         sleep 1
     done
-    sleep 15  # Extra time for leader election and peer connections
+    sleep 15
     
-    # Run the Raft NoOp benchmark
     RPS_OUTPUT=$(go run "$SCRIPT_DIR/benchmark_raft_noop.go" 2>&1)
     echo "$RPS_OUTPUT"
     RPS=$(echo "$RPS_OUTPUT" | grep "RPS:" | awk '{print $2}')

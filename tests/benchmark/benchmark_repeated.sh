@@ -27,12 +27,8 @@ for ((i=1; i<=ITERATIONS; i++)); do
     echo "  RUN $i of $ITERATIONS"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
-    # Run the comparison script and capture output
-    # We pipe to 'tee' to show output and capture it
     OUTPUT=$(bash "$COMPARISON_SCRIPT" 2>&1)
     
-    # Extract RPS values
-    # We look for the comparison result lines and extract the 3rd or 4th column
     YOUR_RPS=$(echo "$OUTPUT" | grep "My Distributed Cache:" | sed 's/.*: *\([0-9]*\).*/\1/')
     REDIS_RPS=$(echo "$OUTPUT" | grep "Redis (in-memory):" | sed 's/.*: *\([0-9]*\).*/\1/')
     ETCD_RPS=$(echo "$OUTPUT" | grep "etcd (durable KV):" | sed 's/.*: *\([0-9]*\).*/\1/')

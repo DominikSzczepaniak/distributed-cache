@@ -42,7 +42,6 @@ func main() {
 		Timeout: 5 * time.Second,
 	}
 
-	// Wait for datanode
 	fmt.Println("Waiting for datanode...")
 	for i := 0; i < 30; i++ {
 		resp, err := client.Get(datanodeURL + "/health")
@@ -54,7 +53,6 @@ func main() {
 		time.Sleep(time.Second)
 	}
 
-	// Warmup
 	fmt.Println("Warmup...")
 	for i := 0; i < 100; i++ {
 		doPut(client, fmt.Sprintf("warmup-%d", i), "val")

@@ -23,7 +23,6 @@ echo "║         Multi-Datanode Scaling Benchmark                      ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 echo ""
 
-# Store results
 RESULTS_NO_REPL=""
 RESULTS_WITH_REPL=""
 
@@ -45,7 +44,6 @@ run_benchmark() {
     rm -rf data/node0 data/node1 data/node2 2>/dev/null || true
     mkdir -p data/node0 data/node1 data/node2
     
-    # Start services
     SERVICES="controller-0 controller-1 controller-2"
     for i in $(seq 1 $NUM_DATANODES); do
         SERVICES="$SERVICES datanode-$i"
@@ -65,7 +63,6 @@ run_benchmark() {
     done
     sleep 5
     
-    # Build topology JSON
     NODES_JSON=""
     for i in $(seq 1 $NUM_DATANODES); do
         NODE_ID="datanode-$i:9000"
@@ -73,13 +70,11 @@ run_benchmark() {
         NODES_JSON="$NODES_JSON\"$NODE_ID\":{\"ID\":\"$NODE_ID\",\"Address\":\"$NODE_ID\",\"Status\":\"Active\"}"
     done
     
-    # Build shards - distribute 10 shards across datanodes
     SHARDS_JSON=""
     for s in $(seq 0 9); do
         NODE_IDX=$(( (s % NUM_DATANODES) + 1 ))
         NODE_ID="datanode-$NODE_IDX:9000"
         
-        # Build replica list if replication is enabled
         REPLICAS="[]"
         if [ "$WITH_REPLICATION" = "true" ] && [ $NUM_DATANODES -gt 1 ]; then
             REPLICA_LIST=""
@@ -102,7 +97,6 @@ run_benchmark() {
     curl -s -X POST -H "Content-Type: application/json" -d "$CONFIG" "$CONTROLLER_URL/debug/config" >/dev/null 2>&1
     sleep 3
     
-    # Run benchmark
     echo "Running benchmark..."
     RPS_OUT=$(go run "$SCRIPT_DIR/benchmark_rps.go" 2>&1 | grep "RPS:" | awk '{print $2}')
     
@@ -115,13 +109,11 @@ run_benchmark() {
     fi
 }
 
-# Test WITHOUT replication
 echo "========== PHASE 1: NO REPLICATION =========="
 RPS_1_NO=$(run_benchmark 1 "false" | tail -1)
 RPS_2_NO=$(run_benchmark 2 "false" | tail -1)
 RPS_3_NO=$(run_benchmark 3 "false" | tail -1)
 
-# Test WITH replication
 echo ""
 echo "========== PHASE 2: WITH REPLICATION =========="
 RPS_2_WITH=$(run_benchmark 2 "true" | tail -1)

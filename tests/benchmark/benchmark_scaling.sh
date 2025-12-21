@@ -24,7 +24,6 @@ echo "║            Client Scaling Benchmark                           ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 echo ""
 
-# Start cluster
 echo "Starting cluster..."
 docker-compose down -v 2>/dev/null || true
 rm -rf data/node0 data/node1 data/node2 2>/dev/null || true

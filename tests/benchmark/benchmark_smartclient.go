@@ -39,7 +39,6 @@ func main() {
 		fmt.Printf("  - %s\n", nodeID)
 	}
 
-	// Warmup
 	fmt.Println("\nWarmup...")
 	for i := 0; i < 100; i++ {
 		sc.Put(fmt.Sprintf("warmup-%d", i), "val")
