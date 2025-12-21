@@ -253,10 +253,10 @@ Etcd is a distributed key-value store used primarily for shared configuration an
 \subsection{Analysis of hashing and partition approaches}
 
 \subsubsection{Karger's Consistent Hashing}
-Proposed by Karger et al. at MIT in 1997, consistent hashing solves the reshuffling problem inherent in modular hashing. In a standard modulo setup ($\text{hash}(k) \pmod n$), changing $n$ (adding/removing a node) results in nearly all keys being remapped.
+Proposed by Karger et al. at MIT in 1997 \cite{karger}, consistent hashing solves the reshuffling problem inherent in modular hashing. In a standard modulo setup ($\text{hash}(k) \pmod n$), changing $n$ (adding/removing a node) results in nearly all keys being remapped.
 Karger's approach maps both the \textbf{Nodes} and the \textbf{Keys} onto the same identifier space (a ring).
 
-\noindent \textbf{Why it was not used:} While industrially popular (consistent hashing is used in Cassandra and Dynamo), it introduces complexity in the Controller's metadata management. Maintaining a sorted ring and handling "virtual nodes" requires more complex logic than a fixed partition map. For this thesis, I opted for a \textbf{Fixed Slot} approach (similar to Redis) because it allows for deterministic shard-to-node mappings that are easier to synchronize via Raft.
+\noindent \textbf{Why it was not used:} While industrially popular (consistent hashing is used in Cassandra \cite{cassandra} and Dynamo \cite{dynamo}), it introduces complexity in the Controller's metadata management. Maintaining a sorted ring and handling "virtual nodes" requires more complex logic than a fixed partition map. For this thesis, I opted for a \textbf{Fixed Slot} approach (similar to Redis) because it allows for deterministic shard-to-node mappings that are easier to synchronize via Raft.
 
 \subsubsection{Range Partitioning (Sorted Monolithic Map)}
 This approach treats the entire key-space as a single, sorted monolithic map. The data is divided into contiguous ranges (e.g., keys $[A, K)$ on Node 1, $[K, Z)$ on Node 2).
@@ -265,10 +265,10 @@ This approach treats the entire key-space as a single, sorted monolithic map. Th
     \item \textbf{Cons:} Suffers from the \textbf{Sequential Write problem}. If keys are generated with a monotonically increasing prefix (like timestamps), all traffic targets a single node, creating a hot spot.
 \end{itemize}
 
-\noindent \textbf{Why it was not used:} A cache's primary goal is often uniform load distribution for point Lookups (GET/PUT). Range partitioning is better suited for analytical databases (like HBase or CockroachDB). Given the use of Raft for the Control Plane, a hash-based distribution ensures even load across Data Nodes without the need for complex range-splitting logic.
+\noindent \textbf{Why it was not used:} A cache's primary goal is often uniform load distribution for point Lookups (GET/PUT). Range partitioning is better suited for analytical databases (like CockroachDB \cite{cockroach}). Given the use of Raft for the Control Plane, a hash-based distribution ensures even load across Data Nodes without the need for complex range-splitting logic.
 
 \subsubsection{FNV-1a Hashing Algorithm} \label{subsec:fnv1a}
-The Fowler-Noll-Vo (FNV) hash 1a is a non-cryptographic hash function known for its extreme speed and ease of implementation. It works by multiplying the hash by a large prime and XORing it with each byte of the input data.
+The Fowler-Noll-Vo (FNV) hash 1a \cite{fnv} is a non-cryptographic hash function known for its extreme speed and ease of implementation. It works by multiplying the hash by a large prime and XORing it with each byte of the input data.
 \begin{itemize}
     \item \textbf{Pros:} High throughput, low collision rates for short strings (ideal for cache keys), and minimal memory overhead.
     \item \textbf{Suitability:} Since this project requires mapping keys to a fixed set of shards during every client request, a low-latency hash function like FNV-1a is preferable over more complex cryptographic hashes like SHA-256 or MD5, which would introduce unnecessary CPU overhead.
@@ -285,14 +285,14 @@ Redis Cluster pre-shards the key-space into 16,384 "hash slots". A key is mapped
 \end{itemize}
 
 \subsubsection{Amazon Dynamo: Availability vs. Consistency}
-Dynamo is the archetypal "AP" (Available, Partition-Tolerant) system. It uses consistent hashing and eventual consistency (Vector Clocks, Gossip protocol) to ensure it is "always on."
+Dynamo is the archetypal "AP" (Available, Partition-Tolerant) system. It uses consistent hashing and eventual consistency (Vector Clocks, Gossip protocol) to ensure it is "always on" \cite{dynamo}.
 \begin{itemize}
     \item \textbf{Inspiration:} Dynamo's concept of a "Preference List" for replication was an inspiration for how the Controller manages shard assignments.
     \item \textbf{The Difference:} Dynamo's philosophy is "eventual consistency." It allows conflicting writes and resolves them later. This system purposefully takes the opposite path: identifying as a "CP" system that uses Raft and fencing to prevent conflicts from ever occurring, matching the strict requirements of linearizability.
 \end{itemize}
 
 \subsubsection{TiKV: Raft-per-Shard vs. Centralized Control}
-TiKV is a modern distributed KV store where every "Region" (shard) is its own independent Raft group.
+TiKV is a modern distributed KV store where every "Region" (shard) is its own independent Raft group \cite{tikv}.
 \begin{itemize}
     \item \textbf{Comparison:} TiKV's approach is the gold standard for massive scalability. However, running 1000 shards would mean running 1000 independent Raft state machines per node, which is computationally expensive.
     \item \textbf{My Approach:} To balance performance with safety, I separated the system into a \textbf{CP Control Plane} (Raft) and a \textbf{Synchronous Data Plane}. This significantly reduces the overhead; only the cluster metadata (topology) requires the full weight of the Raft algorithm, while data replication is handled by a simpler, faster synchronous Primary-Backup protocol.
@@ -954,13 +954,17 @@ As discussed in Chapter 7, the performance of the Raft consensus module is the p
 \begin{thebibliography}{9}
 \bibitem{brewer} E. Brewer, "CAP twelve years later: How the "rules" have changed," in \textit{Computer}, vol. 45, no. 2, Feb. 2012.
 \bibitem{raft} D. Ongaro and J. Ousterhout, "In Search of an Understandable Consensus Algorithm," in \textit{2014 USENIX Annual Technical Conference (USENIX ATC 14)}, Philadelphia, PA, 2014.
-\bibitem{cockroach} T. J. Edwards et al., "CockroachDB: The Resilient Geo-Distributed SQL Database," in \textit{Proceedings of the 2020 ACM SIGMOD International Conference on Management of Data}, 2020.
+\bibitem{cockroach} T. J. Edwards et al., "CockroachDB: The Resilient Geo-Distributed SQL Database" in \textit{Proceedings of the 2020 ACM SIGMOD International Conference on Management of Data}, 2020.
 \bibitem{mongodb} S. Zhou and S. Mu, "Fault-Tolerant Replication with Pull-Based Consensus in MongoDB," in \textit{18th USENIX Symposium on Networked Systems Design and Implementation (NSDI 21)}, 2021. [Online]. Available: https://www.usenix.org/conference/nsdi21/presentation/zhou. [Accessed: 21-Dec-2025].
 \bibitem{neo4j} Neo4j, "Causal Clustering Architecture," [Online]. Available: https://neo4j.com/docs/operations-manual/current/clustering/introduction/. [Accessed: 20-Dec-2024].
 \bibitem{rabbitmq} RabbitMQ, "Quorum Queues," [Online]. Available: https://www.rabbitmq.com/docs/quorum-queues. [Accessed: 20-Dec-2024].
 \bibitem{dbengines} DB-Engines, "Ranking of Key-Value Stores," [Online]. Available: https://db-engines.com/en/ranking/key-value+store. [Accessed: 20-Dec-2024].
 \bibitem{redis_cite} Redis, "Get Started with Redis," [Online]. Available: https://redis.io/docs/latest/get-started/. [Accessed: 21-Dec-2025].
 \bibitem{karger} D. Karger et al., "Consistent hashing and random trees: Distributed caching protocols for relieving hot spots on the world wide web," in \textit{Proceedings of the twenty-ninth annual ACM symposium on Theory of computing}, 1997.
+\bibitem{dynamo} G. DeCandia et al., "Dynamo: Amazon's Highly Available Key-value Store" in \textit{SOSP '07: Proceedings of the twenty-first ACM SIGOPS symposium on Operating systems principles}, 2007.
+\bibitem{tikv} TiKV Project, "TiKV: Deep dive introduction" [Online]. Available: https://tikv.org/deep-dive/introduction/. [Accessed: 21-Dec-2025].
+\bibitem{fnv} G. Fowler, L. C. Noll, and K. Vo, "The FNV Non-Cryptographic Hash Algorithm," [Online]. Available: https://tools.ietf.org/html/draft-eastlake-fnv-17. [Accessed: 21-Dec-2025].
+\bibitem{cassandra} Apache Cassandra, "Dataset Partitioning: Consistent Hashing" [Online]. Available: \text{https://cassandra.apache.org/doc/5.0/cassandra/architecture/dynamo.html\#dataset-partitioning-consistent-hashing}. [Accessed: 21-Dec-2024].
 \end{thebibliography}
 
 
