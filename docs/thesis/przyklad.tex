@@ -122,7 +122,7 @@ Distributed systems operate on data. Consistency is a metric that describes how 
 
 \subsection{The CAP theorem and trade-offs}
 
-CAP theorem, formulated by Eric Brewer in [1], says that a networked system that shares-data, can strictly provide only two of three properties:
+CAP theorem, formulated by Eric Brewer in \cite{brewer}, says that a networked system that shares-data, can strictly provide only two of three properties:
 \begin{itemize}
     \item \textbf{Consistency (C):} Reads will receive the most recent write or an error. If a system is consistent, then all nodes will see the same data at the same time, just like a single-node database would.
     \item \textbf{Availability (A):} Request will always receive a non-error response, without the guarantee that it can contain conflicting data. Availability says that the system remains operational for reads and updates, even if some nodes fail.
@@ -169,7 +169,7 @@ A consensus algorithm ensures that all nodes in a distributed system agree on a 
 
 \textbf{Paxos} is a family of protocols created by Leslie Lamport and historically the most used algorithm for distributed consensus. While it is mathematically proven to be safe and efficient, it is also a very complex to understand and difficult to implement in real-world systems. 
 
-\textbf{Raft} is a modern algorithm, introduced in 2014 by Diego Ongaro and John Ousterhout, that was designed to be easier to implement than Paxos and more understandable than it. It offers performance comparable to Multi-Paxos. It decomposes the problem of consensus into smaller, independent sub-problems of Leader election, Log Replication and Safety. Raft is widely used in many modern distributed systems such as CockroachDB[3], MongoDB[4], Neo4J[5], RabbitMQ[6]. 
+\textbf{Raft} is a modern algorithm, introduced in 2014 by Diego Ongaro and John Ousterhout \cite{raft}, that was designed to be easier to implement than Paxos and more understandable than it. It offers performance comparable to Multi-Paxos. It decomposes the problem of consensus into smaller, independent sub-problems of Leader election, Log Replication and Safety. Raft is widely used in many modern distributed systems such as CockroachDB \cite{cockroach}, MongoDB \cite{mongodb}, Neo4J \cite{neo4j}, RabbitMQ \cite{rabbitmq}. 
 
 \textbf{Key Differences:}
 \begin{itemize}
@@ -203,13 +203,13 @@ Raft ensures safety via the \textbf{Election Restriction}. Candidate cannot win 
 Consensus algorithm ensure the coordination of servers is correct, but architectural design is what allows the system to scale to handle gigabytes of data and thousands of requests per second.
 
 \subsection{Sharding and Consistent Hashing}
-To distribute the data between multiple server, the process called sharding is introduced [7].
+To distribute the data between multiple server, the process called sharding is introduced. Sharding is a process of partitioning data into multiple segments, each stored on a different server. 
 
 \subsubsection{Traditional Modulo Hashing}
 The most basic approach would just use $server = \text{hash}(key) \pmod N$, where $N$ is the number of servers. This method is fine in a static environments where the number of servers remains constant. However if we need to scale dynamically, changing N causes the result of modulo operation to change nearly all keys in the system. This is highly ineffective.
 
 \subsubsection{Consistent Hashing}
-Consistent hashing maps both data and servers onto a logical ring topology ($0$ to $2^{32}-1$). A key is assigned to the first server encountered moving clockwise on the ring. [11] %TODO hyperlink citation
+Consistent hashing maps both data and servers onto a logical ring topology ($0$ to $2^{32}-1$). A key is assigned to the first server encountered moving clockwise on the ring. \cite{karger}
 
 When a server is added or removed, only $K/N$ keys need to be remapped (where $K$ is the total keys), which significantly minimizizes data movement.\\
 When some part of the ring is used way more often then other we use \textbf{Virtual Nodes}. Each physical server is placed onto the ring multiple times (e.g., at 100 different positions). This statistical distribution ensures a more uniform load balancing across the cluster.
@@ -700,7 +700,7 @@ To prevent duplicate operations during retries (especially when a primary node h
 
 This mechanism ensures that the primary node in the Data Plane acts as the coordinator for the token. When writes are replicated, the token is passed along to the replicas. If the primary node fails after replicating but before acknowledging the client, the promoted backup already possesses the request and its token. If the client then resends the request, the new primary will recognize the token and reply with an OK status. This solves the previously discussed problem where only some replicas receive a write before a primary crash (see Section \ref{subsec:consistency_note}).\\
 
-Let us imagine a situation with a primary node $P$ and two replicas $R_1$ and $R_2$. The client sends a request \texttt{PUT(key, value)} with token $T$. Primary node $P$ replicates to $R_1$, which saves the request, but $P$ crashes before replicating to $R_2$ or acknowledging the client. The client request times out, and the client resends it. We have two possibilities:
+Imagine a situation with a primary node $P$ and two replicas $R_1$ and $R_2$. The client sends a request \texttt{PUT(key, value)} with token $T$. Primary node $P$ replicates to $R_1$, which saves the request, but $P$ crashes before replicating to $R_2$ or acknowledging the client. The client request times out, and the client resends it. We have two possibilities:
 \begin{enumerate}
     \item $R_1$ becomes the new primary: It recognizes the request with token $T$ and returns OK. Through shard synchronization (see Section \ref{subsec:data_transfer}), $R_2$ will eventually receive this update, maintaining a consistent state.
     \item $R_2$ becomes the new primary: Since $R_2$ did not receive the initial request, it will process the resent request, write it to memory, and replicate it to $R_1$ (overwriting any partial state). The system remains consistent.
@@ -909,8 +909,8 @@ Artificial Delay & Consensus RPS & Impact \\ \hline
 \noindent This clearly illustrates the significant impact that Raft consensus speed has on the overall system performance.
 
 \section{Comparative Study}
-To evaluate the performance of my implementation, it is necessary to compare it against established solutions. I identified two primary open-source systems for comparison. The first is Etcd, which is also a Raft-based distributed key-value store that guarantees strong consistency. However, Etcd is a durable store, meaning data is persisted to disk to survive node crashes. \\
-The second system is Redis, the most widely used cache in the world \cite{redis_cite}. Redis is primarily an AP (Availability and Partition Tolerance) system, meaning it prioritizes performance over strong consistency, offering eventual consistency instead. Redis is a highly optimized system written in C with over 15 years of development. Matching the performance of Redis is a significant challenge, making it an excellent benchmark for speed.
+To evaluate the performance of my implementation, it is necessary to compare it against established solutions. I identified two primary open-source systems for comparison, based on current industry popularity \cite{dbengines}. The first is Etcd, which is also a Raft-based distributed key-value store that guarantees strong consistency. However, Etcd is a durable store, meaning data is persisted to disk to survive node crashes. \\
+The second system is Redis, the most widely used cache in the world \cite{redis_cite, dbengines}. Redis is primarily an AP (Availability and Partition Tolerance) system, meaning it prioritizes performance over strong consistency, offering eventual consistency instead. Redis is a highly optimized system written in C with over 15 years of development. Matching the performance of Redis is a significant challenge, making it an excellent benchmark for speed.
 
 \subsection{Performance Comparison with Etcd}
 Etcd was deployed using Docker. I utilized the official client package \texttt{go.etcd.io/etcd/client/v3@v3.5.11}. \\
@@ -951,15 +951,16 @@ As discussed in Chapter 7, the performance of the Raft consensus module is the p
 
 %%%%% BIBLIOGRAFIA
 
-\begin{thebibliography}{9} %TODO fix
-\bibitem{brewer} E. Brewer, "CAP twelve years later: How the "rules" have changed," in \textit{Computer}, vol. 45, no. 2, pp. 23-29, Feb. 2012.
-\bibitem{raft} D. Ongaro and J. Ousterhout, "In Search of an Understandable Consensus Algorithm," in \textit{2014 USENIX Annual Technical Conference (USENIX ATC 14)}, Philadelphia, PA, 2014, pp. 305-319.
-\bibitem{cockroach} T. J. Edwards et al., "CockroachDB: The Resilient Geo-Distributed SQL Database," in \textit{Proceedings of the 2020 ACM SIGMOD International Conference on Management of Data}, 2020, pp. 1493-1509.
-\bibitem{mongodb} MongoDB, "Replica Set Protocol Versions," [Online]. Available: https://www.mongodb.com/docs/manual/core/replica-set-protocol-versions/. [Accessed: 20-Dec-2024].
-\bibitem{neo4j} Neo4j, "Causal Clustering Architecture," [Online]. Available: https://neo4j.com/docs/operations-manual/current/clustering/. [Accessed: 20-Dec-2024].
+\begin{thebibliography}{9}
+\bibitem{brewer} E. Brewer, "CAP twelve years later: How the "rules" have changed," in \textit{Computer}, vol. 45, no. 2, Feb. 2012.
+\bibitem{raft} D. Ongaro and J. Ousterhout, "In Search of an Understandable Consensus Algorithm," in \textit{2014 USENIX Annual Technical Conference (USENIX ATC 14)}, Philadelphia, PA, 2014.
+\bibitem{cockroach} T. J. Edwards et al., "CockroachDB: The Resilient Geo-Distributed SQL Database," in \textit{Proceedings of the 2020 ACM SIGMOD International Conference on Management of Data}, 2020.
+\bibitem{mongodb} S. Zhou and S. Mu, "Fault-Tolerant Replication with Pull-Based Consensus in MongoDB," in \textit{18th USENIX Symposium on Networked Systems Design and Implementation (NSDI 21)}, 2021. [Online]. Available: https://www.usenix.org/conference/nsdi21/presentation/zhou. [Accessed: 21-Dec-2025].
+\bibitem{neo4j} Neo4j, "Causal Clustering Architecture," [Online]. Available: https://neo4j.com/docs/operations-manual/current/clustering/introduction/. [Accessed: 20-Dec-2024].
 \bibitem{rabbitmq} RabbitMQ, "Quorum Queues," [Online]. Available: https://www.rabbitmq.com/docs/quorum-queues. [Accessed: 20-Dec-2024].
-\bibitem{sharding} Ultima Online, "The Origin of Sharding," [Online]. Available: https://en.wikipedia.org/wiki/Database\_sharding. [Accessed: 20-Dec-2024].
 \bibitem{dbengines} DB-Engines, "Ranking of Key-Value Stores," [Online]. Available: https://db-engines.com/en/ranking/key-value+store. [Accessed: 20-Dec-2024].
+\bibitem{redis_cite} Redis, "Get Started with Redis," [Online]. Available: https://redis.io/docs/latest/get-started/. [Accessed: 21-Dec-2025].
+\bibitem{karger} D. Karger et al., "Consistent hashing and random trees: Distributed caching protocols for relieving hot spots on the world wide web," in \textit{Proceedings of the twenty-ninth annual ACM symposium on Theory of computing}, 1997.
 \end{thebibliography}
 
 
