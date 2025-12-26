@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+// LeaderCache maintains a local view of the current cluster leader's address.
+// This allows the API server to quickly forward requests without querying Raft every time.
 type LeaderCache struct {
 	mu         sync.RWMutex
 	leaderID   int
@@ -13,6 +15,7 @@ type LeaderCache struct {
 	ttl        time.Duration
 }
 
+// NewLeaderCache initializes a new leader address cache with the specified TTL.
 func NewLeaderCache(ttl time.Duration) *LeaderCache {
 	return &LeaderCache{
 		leaderID:   -1,
@@ -21,6 +24,7 @@ func NewLeaderCache(ttl time.Duration) *LeaderCache {
 	}
 }
 
+// Get returns the cached leader ID and address if valid and not expired.
 func (lc *LeaderCache) Get() (int, string, bool) {
 	lc.mu.RLock()
 	defer lc.mu.RUnlock()
@@ -32,6 +36,7 @@ func (lc *LeaderCache) Get() (int, string, bool) {
 	return lc.leaderID, lc.leaderAddr, true
 }
 
+// Set updates the cached leader information.
 func (lc *LeaderCache) Set(leaderID int, leaderAddr string) {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
@@ -41,6 +46,7 @@ func (lc *LeaderCache) Set(leaderID int, leaderAddr string) {
 	lc.lastUpdate = time.Now()
 }
 
+// Invalidate clears the cached leader information, typically called after a failed forward.
 func (lc *LeaderCache) Invalidate() {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()

@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// Rebalance recalculates shard assignments after a node failure to ensure availability.
 func Rebalance(config *ClusterConfig, deadNodeID string) *ClusterConfig {
 	newConfig := deepCopyConfig(config)
 

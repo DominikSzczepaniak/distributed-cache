@@ -2,12 +2,15 @@ package raft
 
 import (
 	"context"
+
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 	"google.golang.org/grpc"
 )
 
+// PeerClient is the interface for communicating with a remote Raft node.
+// It abstracts the underlying transport (typically gRPC).
 type PeerClient interface {
 	Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.ForwardResponse, error)
 	ForwardGet(ctx context.Context, req *raftpb.GetRequest) (*raftpb.GetResponse, error)
@@ -21,6 +24,7 @@ type GRPCPeerClient struct {
 	cli raftpb.RaftClient
 }
 
+// NewGRPCPeerClient creates a PeerClient implementation that uses gRPC for transport.
 func NewGRPCPeerClient(conn *grpc.ClientConn) *GRPCPeerClient {
 	return &GRPCPeerClient{cli: raftpb.NewRaftClient(conn)}
 }

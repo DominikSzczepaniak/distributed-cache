@@ -11,6 +11,9 @@ import (
 	"sync"
 )
 
+// DataSaver handles the asynchronous persistence of Raft state (logs and metadata) to disk.
+// It uses a background pool of workers to process save requests without blocking
+// the main Raft execution path.
 type DataSaver struct {
 	parent             *Raft
 	logsFilename       string
@@ -33,6 +36,7 @@ type DataSaver struct {
 	DataSaverFunctions
 }
 
+// DataSaverFunctions defines the low-level disk operations required for Raft persistence.
 type DataSaverFunctions interface {
 	SaveValues(currentTerm, votedFor, commitedLength int32, logs []LogEntry) (bool, error)
 	LoadValues() (int, int, int, []LogEntry, error)
@@ -44,6 +48,7 @@ type DataSaverFunctions interface {
 type saveRequest struct {
 }
 
+// NewRaftDataSaver initializes a DataSaver instance with a worker pool for asynchronous persistence.
 func NewRaftDataSaver(r *Raft, cfg *Config) *DataSaver {
 	numWorkers := 4
 	ds := &DataSaver{
@@ -77,6 +82,8 @@ func (rds *DataSaver) saveWorker() {
 	}
 }
 
+// SaveValues queues a request to persist the current Raft state.
+// It returns true if the request was successfully queued.
 func (rds *DataSaver) SaveValues() (bool, error) {
 	rds.pendingSaves.Add(1)
 
@@ -89,6 +96,7 @@ func (rds *DataSaver) SaveValues() (bool, error) {
 	}
 }
 
+// WaitForPendingSaves blocks until all currently queued persistence requests are completed.
 func (rds *DataSaver) WaitForPendingSaves() error {
 	rds.pendingSaves.Wait()
 	rds.errMu.Lock()
@@ -335,6 +343,8 @@ func (rds *DataSaver) loadMetadata(
 	return
 }
 
+// LoadValues reads the persisted Raft state from disk during node startup.
+// It restores the current term, the vote, and the log entries.
 func (rds *DataSaver) LoadValues() (int, int, int, []LogEntry, error) {
 	rds.parent.mu.Lock()
 	defer rds.parent.mu.Unlock()

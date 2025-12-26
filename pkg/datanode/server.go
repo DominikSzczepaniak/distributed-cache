@@ -13,17 +13,20 @@ import (
 	"github.com/dominikszczepaniak/distributed-cache/pkg/metadata"
 )
 
+// WriteRequest represents a client's request to store a value in the DataNode.
 type WriteRequest struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
 	Epoch uint64 `json:"epoch"`
 }
 
+// DeleteRequest represents a client's request to remove a value from the DataNode.
 type DeleteRequest struct {
 	Key   string `json:"key"`
 	Epoch uint64 `json:"epoch"`
 }
 
+// Server implements the HTTP API for a single DataNode in the cluster.
 type Server struct {
 	cache      *cache.ConcurrentMapCache
 	lease      *LeaseManager
@@ -32,6 +35,7 @@ type Server struct {
 	httpClient *http.Client
 }
 
+// NewServer initializes a DataNode server with the provided cache engine and managers.
 func NewServer(c *cache.ConcurrentMapCache, l *LeaseManager, s *StateManager, nodeID string) *Server {
 	return &Server{
 		cache:    c,
@@ -82,6 +86,7 @@ func (s *Server) sendDeleteReplication(replicaURL string, req DeleteRequest) err
 	return nil
 }
 
+// HandlePut processes a write request for a specific key.
 func (s *Server) HandlePut(w http.ResponseWriter, r *http.Request) {
 	if !s.lease.IsActive() {
 		http.Error(w, "Node is Fenced (Lease Expired)", http.StatusServiceUnavailable)
@@ -134,6 +139,8 @@ func (s *Server) HandlePut(w http.ResponseWriter, r *http.Request) {
 	s.cache.Put(req.Key, req.Value)
 	w.WriteHeader(http.StatusOK)
 }
+
+// HandleDelete removes a key from the local cache.
 func (s *Server) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	if !s.lease.IsActive() {
 		http.Error(w, "Node is Fenced (Lease Expired)", http.StatusServiceUnavailable)
@@ -187,6 +194,7 @@ func (s *Server) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// HandleGet retrieves a value from the local cache.
 func (s *Server) HandleGet(w http.ResponseWriter, r *http.Request) {
 	if !s.lease.IsActive() {
 		http.Error(w, "Node is Fenced (Lease Expired)", http.StatusServiceUnavailable)
@@ -208,6 +216,7 @@ func (s *Server) HandleGet(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(val))
 }
 
+// HandleReplicate applies a write request sent from a primary DataNode to a replica.
 func (s *Server) HandleReplicate(w http.ResponseWriter, r *http.Request) {
 	var req WriteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -224,6 +233,8 @@ func (s *Server) HandleReplicate(w http.ResponseWriter, r *http.Request) {
 	s.cache.Put(req.Key, req.Value)
 	w.WriteHeader(http.StatusOK)
 }
+
+// HandleDeleteReplicate applies a delete request sent from a primary DataNode to a replica.
 func (s *Server) HandleDeleteReplicate(w http.ResponseWriter, r *http.Request) {
 	var req DeleteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -241,6 +252,9 @@ func (s *Server) HandleDeleteReplicate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// HandleExport serializes all keys belonging to a specific shard into a JSON format.
+// This is used during shard migration to transfer data from a source node to a target node.
+// HandleExport serializes all keys from a specific shard for migration.
 func (s *Server) HandleExport(w http.ResponseWriter, r *http.Request) {
 	shardIDStr := r.URL.Query().Get("shard")
 	if shardIDStr == "" {
@@ -269,6 +283,9 @@ func (s *Server) HandleExport(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// HandleImport receives a JSON payload of keys and values and stores them in the DataNode's cache.
+// It is the counterpart to HandleExport and is used during shard migration.
+// HandleImport merges multiple keys into the local cache.
 func (s *Server) HandleImport(w http.ResponseWriter, r *http.Request) {
 	var data map[string]string
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
@@ -280,6 +297,10 @@ func (s *Server) HandleImport(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// HandlePull triggers a background data synchronization from a source node for a specific shard.
+// It performs an HTTP GET request to the source node's /internal/export endpoint and
+// imports the resulting data locally.
+// HandlePull orchestrates a data migration by fetching a shard from a source DataNode.
 func (s *Server) HandlePull(w http.ResponseWriter, r *http.Request) {
 	sourceURL := r.URL.Query().Get("source")
 	shardIDStr := r.URL.Query().Get("shard")

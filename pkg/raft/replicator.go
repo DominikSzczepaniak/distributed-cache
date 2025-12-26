@@ -10,11 +10,14 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
+// LogEntry represents a single entry in the Raft log, consisting of a term and a message.
 type LogEntry struct {
 	Term    int
 	Message Message
 }
 
+// Replicator handles the background process of synchronizing the leader's log with a specific follower.
+// Each follower has its own Replicator instance running in a dedicated goroutine.
 type Replicator struct {
 	parent     *Raft
 	followerId int
@@ -70,6 +73,8 @@ func (rep *Replicator) signal() {
 	}
 }
 
+// replicate performs a single synchronization step. It checks if the follower needs
+// a snapshot or a suffix of the leader's log, and sends the appropriate RPC.
 func (rep *Replicator) replicate() {
 	if !rep.parent.isPeerAvailable(rep.followerId) {
 		slog.Debug(fmt.Sprintf("Node %d: Skipping replication to unavailable peer %d",

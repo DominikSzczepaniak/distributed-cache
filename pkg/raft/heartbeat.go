@@ -2,10 +2,12 @@ package raft
 
 import (
 	"context"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"time"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+// Heartbeat manages the periodic broadcast of heartbeats (empty AppendEntries) by the leader.
 type Heartbeat struct {
 	parent        *Raft
 	resetTimerCh  chan struct{}

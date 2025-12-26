@@ -172,10 +172,12 @@ func (r *Raft) checkQuorumHealth() {
 	}
 }
 
+// GetApplication returns the state machine instance associated with this Raft node.
 func (r *Raft) GetApplication() Application {
 	return r.application
 }
 
+// IsLeader returns true if the current node believes it is the cluster leader.
 func (r *Raft) IsLeader() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -186,10 +188,13 @@ func (r *Raft) IsLeader() bool {
 // Use this ONLY in callbacks from the Raft state machine (like Application.AppendMessage)
 // where the Raft mutex is already held by the calling code.
 // WARNING: This is NOT safe to use in general code - use IsLeader() instead.
+// IsLeaderUnsafe provides the leader status without acquiring the Raft mutex.
+// Use with extreme caution.
 func (r *Raft) IsLeaderUnsafe() bool {
 	return r.currentRole == Leader
 }
 
+// ClusterStatus provides a high-level overview of the Raft node's current state.
 type ClusterStatus struct {
 	NodeID     int
 	Role       string
@@ -198,6 +203,7 @@ type ClusterStatus struct {
 	TotalNodes int
 }
 
+// GetStatus returns the current ClusterStatus for monitoring and debugging.
 func (r *Raft) GetStatus() ClusterStatus {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

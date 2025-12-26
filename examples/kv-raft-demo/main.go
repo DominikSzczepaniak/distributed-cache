@@ -77,7 +77,7 @@ func (s *SimpleKVStore) GetSnapshot() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (s *SimpleKVStore) RestoreFromSnapshot(data []byte) (error, int) {
+func (s *SimpleKVStore) RestoreFromSnapshot(data []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -86,7 +86,7 @@ func (s *SimpleKVStore) RestoreFromSnapshot(data []byte) (error, int) {
 
 	var mapLen int32
 	if err := binary.Read(reader, byteOrder, &mapLen); err != nil {
-		return err, 0
+		return 0, err
 	}
 
 	newMap := make(map[int]int)
@@ -95,10 +95,10 @@ func (s *SimpleKVStore) RestoreFromSnapshot(data []byte) (error, int) {
 	for i := 0; i < int(mapLen); i++ {
 		var k64, v64 int64
 		if err := binary.Read(reader, byteOrder, &k64); err != nil {
-			return err, 0
+			return 0, err
 		}
 		if err := binary.Read(reader, byteOrder, &v64); err != nil {
-			return err, 0
+			return 0, err
 		}
 		lastKey = int(k64)
 		newMap[int(k64)] = int(v64)
@@ -106,7 +106,7 @@ func (s *SimpleKVStore) RestoreFromSnapshot(data []byte) (error, int) {
 
 	s.data = newMap
 	slog.Info(fmt.Sprintf("Restored snapshot with %d entries", len(s.data)))
-	return nil, lastKey
+	return lastKey, nil
 }
 
 func (s *SimpleKVStore) GetValue(key int) int {

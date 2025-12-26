@@ -15,6 +15,9 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
+// Raft implements the Raft consensus algorithm.
+// It manages a replicated log, maintains consistent state across a cluster,
+// and handles leader election and log compaction.
 type Raft struct {
 	mu sync.RWMutex
 
@@ -49,6 +52,8 @@ type Raft struct {
 	raftpb.UnimplementedRaftServer
 }
 
+// NewRaft initializes a new Raft node with the provided application and configuration.
+// It starts the background processes for leader election, log replication, and persistence.
 func NewRaft(application Application, cfg *Config) *Raft {
 	r := &Raft{
 		id:             cfg.raftId,
@@ -80,8 +85,8 @@ func NewRaft(application Application, cfg *Config) *Raft {
 		r.log = savedLog
 	}
 	snapshotData, err := r.logSaver.ReadSnapshotData()
-	if err != nil {
-		_, key := r.application.RestoreFromSnapshot(snapshotData)
+	if err == nil {
+		key, _ := r.application.RestoreFromSnapshot(snapshotData)
 		slog.Info(fmt.Sprintf("When exited restore from snapshot, key value is %d", r.application.GetValue(key)))
 	}
 
@@ -141,7 +146,8 @@ func (r *Raft) forwardToLeader(message Message, leader PeerClient) (bool, int, e
 	return resp.Success, int(resp.Value), nil
 }
 
-// This function broadcasts message to all servers, for details -> chapter 4, subsection X
+// Broadcast asynchronously proposes a message to the cluster.
+// It returns immediately after handing the message to the internal Raft loop.
 func (r *Raft) Broadcast(message Message) {
 	if r.artificialDelay > 0 {
 		time.Sleep(r.artificialDelay)
@@ -193,6 +199,9 @@ func (r *Raft) Broadcast(message Message) {
 	}
 }
 
+// BroadcastSync proposes a message to the cluster and waits for it to be committed.
+// It returns true if the message was successfully replicated to a majority of nodes
+// within the specified timeout.
 func (r *Raft) BroadcastSync(message Message, timeout time.Duration) (bool, int, error) {
 	responseChan := make(chan BroadcastResponse, 1)
 	message.ResponseChan = responseChan

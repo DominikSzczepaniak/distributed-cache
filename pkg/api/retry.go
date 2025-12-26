@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// RetryConfig defines the parameters for a retry operation.
 type RetryConfig struct {
 	MaxAttempts       int
 	InitialDelay      time.Duration
@@ -18,6 +19,7 @@ type RetryConfig struct {
 	EnableIdempotency bool
 }
 
+// DefaultRetryConfigs provides standard retry settings for various API operations.
 var DefaultRetryConfigs = map[string]RetryConfig{
 	"PUT": {
 		MaxAttempts:       3,
@@ -45,16 +47,21 @@ var DefaultRetryConfigs = map[string]RetryConfig{
 	},
 }
 
+// RetryableFunc is a function signature that fits into the Retrier's execution loop.
 type RetryableFunc func(ctx context.Context) error
 
+// Retrier implements automated retry logic with exponential backoff.
 type Retrier struct {
 	config RetryConfig
 }
 
+// NewRetrier initializes a new Retrier with the specified configuration.
 func NewRetrier(config RetryConfig) *Retrier {
 	return &Retrier{config: config}
 }
 
+// ExecuteWithRetry runs the provided function and retries it upon failure
+// based on the Retrier's configuration.
 func (r *Retrier) ExecuteWithRetry(ctx context.Context, fn RetryableFunc) error {
 	var lastErr error
 

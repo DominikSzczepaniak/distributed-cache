@@ -17,6 +17,9 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
+// Server implements the HTTP API for the distributed cache.
+// It coordinates requests with the Raft controller and handles
+// client-side idempotency and retries.
 type Server struct {
 	raft             *raft.Raft
 	listenAddr       string
@@ -26,6 +29,7 @@ type Server struct {
 	leaderCache      *LeaderCache
 }
 
+// NewServer initializes an API server with the provided Raft node and listen address.
 func NewServer(r *raft.Raft, listenAddr string) *Server {
 	return &Server{
 		raft:             r,
@@ -36,6 +40,7 @@ func NewServer(r *raft.Raft, listenAddr string) *Server {
 	}
 }
 
+// Start begins the HTTP server and listens for incoming requests.
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
 
@@ -55,6 +60,7 @@ func (s *Server) Start() error {
 	return s.httpServer.ListenAndServe()
 }
 
+// Stop gracefully shuts down the HTTP server.
 func (s *Server) Stop() error {
 	if s.httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -91,6 +97,11 @@ func (s *Server) handleKVWithKey(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handlePut processes a client's request to store a value.
+// It generates an idempotency token based on the request content and uses the
+// IdempotencyCache to ensure that duplicate requests (due to retries) are not
+// reapplied to the Raft log. If the node is not the leader, the Retrier logic
+// handles routing the request to the correct Controller replica.
 func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 	var req PutRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -321,6 +332,8 @@ func (s *Server) handleLeader(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// generateIdempotencyToken creates a unique SHA-256 hash for a PutRequest.
+// This token is used to identify and deduplicate retried requests from clients.
 func (s *Server) generateIdempotencyToken(req *PutRequest, clientID string) string {
 	h := sha256.New()
 	h.Write([]byte(fmt.Sprintf("%s:%d:%d", clientID, req.Key, req.Value)))

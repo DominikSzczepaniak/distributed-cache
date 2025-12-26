@@ -7,6 +7,8 @@ import (
 	"os"
 )
 
+// Snapshot maintains metadata about the last compacted log entry.
+// It tracks the index and term of the last entry included in the snapshot.
 type Snapshot struct {
 	lastIndex int
 	lastTerm  int
@@ -27,6 +29,8 @@ func (rds *DataSaver) openFileForWriting(path string, flags int) (*os.File, erro
 	return os.OpenFile(path, flags, 0644)
 }
 
+// WriteSnapshotData writes a chunk of snapshot data to disk.
+// It is used by Raft when receiving snapshots from a leader.
 func (rds *DataSaver) WriteSnapshotData(data []byte, offset int) (int, error) {
 	var f *os.File
 	var err error
@@ -53,6 +57,9 @@ func (rds *DataSaver) WriteSnapshotData(data []byte, offset int) (int, error) {
 	return bytesWritten, nil
 }
 
+// decideRunSnapshot checks if the log has exceeded the snapshot threshold.
+// If it has, it triggers the creation of a new snapshot from the application state
+// and compacts the Raft log by removing entries included in the snapshot.
 func (r *Raft) decideRunSnapshot() error {
 	//this is run inside mutex, acquiring new one is not needed
 	if len(r.log) < r.snapshotter.snapshotThreshold {
@@ -86,6 +93,7 @@ func (r *Raft) decideRunSnapshot() error {
 	return nil
 }
 
+// ReadSnapshotData loads the combined snapshot data from disk.
 func (rds *DataSaver) ReadSnapshotData() ([]byte, error) {
 	f, err := os.Open(rds.snapshotFilename)
 	if err != nil {

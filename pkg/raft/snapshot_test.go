@@ -2,10 +2,11 @@ package raft
 
 import (
 	"context"
-	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -88,7 +89,7 @@ func TestSnapshotWithApplicationState(t *testing.T) {
 	assert.Greater(t, len(snapshot), 0)
 
 	newApp := newTestApp()
-	err, lastKey := newApp.RestoreFromSnapshot(snapshot)
+	lastKey, err := newApp.RestoreFromSnapshot(snapshot)
 	require.NoError(t, err)
 
 	assert.Equal(t, 100, newApp.GetValue(1))
@@ -190,7 +191,7 @@ func TestSnapshotPersistence(t *testing.T) {
 	readSnap, err := saver2.ReadSnapshotData()
 	require.NoError(t, err)
 
-	err, _ = app2.RestoreFromSnapshot(readSnap)
+	_, err = app2.RestoreFromSnapshot(readSnap)
 	require.NoError(t, err)
 
 	assert.Equal(t, 500, app2.GetValue(5))

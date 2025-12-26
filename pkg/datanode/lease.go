@@ -13,6 +13,7 @@ import (
 	"github.com/dominikszczepaniak/distributed-cache/pkg/metadata"
 )
 
+// LeaseManager handles the periodic acquisition and renewal of a node's lease from the Controller.
 type LeaseManager struct {
 	mu            sync.RWMutex
 	validUntil    time.Time
@@ -23,6 +24,7 @@ type LeaseManager struct {
 	stateMgr      *StateManager
 }
 
+// NewLeaseManager initializes a lease manager with the specified controller connection and renewal settings.
 func NewLeaseManager(controllerURL, nodeID string, duration time.Duration, stateMgr *StateManager) *LeaseManager {
 	return &LeaseManager{
 		duration:      duration,
@@ -33,6 +35,10 @@ func NewLeaseManager(controllerURL, nodeID string, duration time.Duration, state
 	}
 }
 
+// Start begins the background lease renewal loop.
+// It periodically sends heartbeats to the Controller. If a renewal fails, the lease
+// will naturally expire, eventually causing IsActive to return false (fencing the node).
+// Start begins the background lease renewal loop.
 func (l *LeaseManager) Start() {
 	if l.renew() {
 		l.extendLease()
@@ -58,6 +64,9 @@ func (l *LeaseManager) extendLease() {
 	log.Printf("Lease renewed. Valid until: %s", l.validUntil.Format(time.RFC3339))
 }
 
+// renew sends a heartbeat to the Controller and receives the latest topology Epoch.
+// If the local Epoch is stale, it triggers a topology refresh via fetchTopology.
+// Returns true if the heartbeat was successful, allowing the lease to be extended.
 func (l *LeaseManager) renew() bool {
 	payload := map[string]string{"node_id": l.nodeID}
 	data, err := json.Marshal(payload)
@@ -128,6 +137,10 @@ func (l *LeaseManager) fetchTopology() {
 	log.Printf("Updated topology to Epoch %d", config.Epoch)
 }
 
+// IsActive returns true if the node's lease is currently valid.
+// In a distributed system, this acts as a "fencing" mechanism; if a node cannot reach
+// the Control Plane, it must stop serving requests to prevent consistency violations.
+// IsActive returns true if the node currently holds a valid lease from the controller.
 func (l *LeaseManager) IsActive() bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

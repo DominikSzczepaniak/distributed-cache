@@ -92,7 +92,7 @@ func (a *testApp) GetSnapshot() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (a *testApp) RestoreFromSnapshot(data []byte) (error, int) {
+func (a *testApp) RestoreFromSnapshot(data []byte) (int, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -101,7 +101,7 @@ func (a *testApp) RestoreFromSnapshot(data []byte) (error, int) {
 
 	var mapLen int32
 	if err := binary.Read(reader, byteOrder, &mapLen); err != nil {
-		return err, 0
+		return 0, err
 	}
 	newMap := make(map[int]int)
 	var saveKeyValue int
@@ -110,10 +110,10 @@ func (a *testApp) RestoreFromSnapshot(data []byte) (error, int) {
 	for i := 0; i < int(mapLen); i++ {
 		var k64, v64 int64
 		if err := binary.Read(reader, byteOrder, &k64); err != nil {
-			return err, 0
+			return 0, err
 		}
 		if err := binary.Read(reader, byteOrder, &v64); err != nil {
-			return err, 0
+			return 0, err
 		}
 		saveKeyValue = int(k64)
 		saveValue = int(v64)
@@ -121,7 +121,7 @@ func (a *testApp) RestoreFromSnapshot(data []byte) (error, int) {
 	}
 	a.data = newMap
 	slog.Info(fmt.Sprintf("Restore from snapshot in test app, saved key %d and its value %d vs value in the map %d", saveKeyValue, saveValue, a.data[saveKeyValue]))
-	return nil, saveKeyValue
+	return saveKeyValue, nil
 }
 
 func (a *testApp) GetValue(key int) int {

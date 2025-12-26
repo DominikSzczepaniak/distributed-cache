@@ -2,6 +2,7 @@ package raft
 
 import "github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 
+// MessageType represents the classification of a Raft message (GET, PUT, DELETE, or COMMAND).
 type MessageType string
 
 const (
@@ -12,6 +13,7 @@ const (
 	CommandMsg MessageType = "COMMAND"
 )
 
+// Message is the generic container for all state machine operations proposed via Raft.
 type Message struct {
 	MsgType MessageType
 	Key     int

@@ -12,6 +12,9 @@ import (
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 )
 
+// Elector manages the randomization and timing of leader elections.
+// It ensures that if a leader is not heard from within a timeout period,
+// the node will transition to the Candidate role and start a new election.
 type Elector struct {
 	parent *Raft
 	rnd    *rand.Rand
@@ -22,6 +25,7 @@ type Elector struct {
 	cancelTimerCh      chan struct{}
 }
 
+// NewRaftElector initializes the election logic for a Raft node.
 func NewRaftElector(r *Raft) *Elector {
 	src := rand.NewSource(time.Now().UnixNano() + int64(r.id))
 	re := &Elector{
@@ -43,6 +47,8 @@ func (re *Elector) nextTimeout() time.Duration {
 		time.Duration(re.rnd.Int63n(int64(re.maxElectionTimeout-re.minElectionTimeout)))
 }
 
+// electionTimerLoop is the background process that resets the election timer
+// and triggers an election if the timeout is reached without a heartbeat.
 func (re *Elector) electionTimerLoop() {
 	timer := time.NewTimer(re.nextTimeout())
 	defer timer.Stop()
@@ -82,6 +88,7 @@ func (re *Elector) electionTimerLoop() {
 	}
 }
 
+// ResetTimer pushes a reset signal to the background election timer loop.
 func (re *Elector) ResetTimer() {
 	select {
 	case re.resetTimerCh <- struct{}{}:

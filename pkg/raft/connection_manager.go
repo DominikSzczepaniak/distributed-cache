@@ -13,6 +13,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// ConnectionManager maintains a pool of gRPC connections to all peers in the Raft cluster.
+// It handles automatic reconnection with exponential backoff and background health checks.
 type ConnectionManager struct {
 	mu sync.RWMutex
 
@@ -33,6 +35,7 @@ type ConnectionManager struct {
 	wg     sync.WaitGroup
 }
 
+// NewConnectionManager initializes a ConnectionManager and starts background connection loops for all peers.
 func NewConnectionManager(selfID, totalNodes int, addrs []string, cfg *Config) *ConnectionManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -237,6 +240,7 @@ func (cm *ConnectionManager) reconnectPeer(peerID int) {
 	go cm.connectPeerAsync(peerID)
 }
 
+// GetPeer returns the PeerClient (gRPC client) for a specific node ID.
 func (cm *ConnectionManager) GetPeer(peerID int) PeerClient {
 	if peerID < 0 || peerID >= cm.totalNodes {
 		return nil
@@ -247,6 +251,7 @@ func (cm *ConnectionManager) GetPeer(peerID int) PeerClient {
 	return cm.peers[peerID]
 }
 
+// GetPeers returns a slice containing all current PeerClients.
 func (cm *ConnectionManager) GetPeers() []PeerClient {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
@@ -256,6 +261,7 @@ func (cm *ConnectionManager) GetPeers() []PeerClient {
 	return result
 }
 
+// IsPeerAvailable returns true if the connection to the specified peer is healthy and ready.
 func (cm *ConnectionManager) IsPeerAvailable(peerID int) bool {
 	if peerID < 0 || peerID >= cm.totalNodes {
 		return false
@@ -263,6 +269,7 @@ func (cm *ConnectionManager) IsPeerAvailable(peerID int) bool {
 	return cm.peerAvailable[peerID].Load()
 }
 
+// GetAvailablePeerCount returns the number of peers currently marked as available.
 func (cm *ConnectionManager) GetAvailablePeerCount() int {
 	count := 0
 	for i := 0; i < cm.totalNodes; i++ {
@@ -276,6 +283,7 @@ func (cm *ConnectionManager) GetAvailablePeerCount() int {
 	return count
 }
 
+// Close terminates all background loops and closes all active gRPC connections.
 func (cm *ConnectionManager) Close() {
 	slog.Info(fmt.Sprintf("Node %d: Closing connection manager", cm.selfID))
 	cm.cancel()

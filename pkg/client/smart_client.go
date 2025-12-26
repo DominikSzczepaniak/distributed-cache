@@ -22,6 +22,8 @@ type SmartClient struct {
 	maxRetries  int
 }
 
+// NewSmartClient initializes a client that can automatically route requests to the
+// correct DataNode by tracking the cluster topology.
 func NewSmartClient(controllers []string) (*SmartClient, error) {
 	if len(controllers) == 0 {
 		return nil, fmt.Errorf("at least one controller URL is required")
@@ -42,6 +44,7 @@ func NewSmartClient(controllers []string) (*SmartClient, error) {
 	return c, nil
 }
 
+// FetchTopology retrieves the latest cluster configuration from one of the controllers.
 func (c *SmartClient) FetchTopology() error {
 	var lastErr error
 
@@ -75,12 +78,14 @@ func (c *SmartClient) FetchTopology() error {
 	return fmt.Errorf("failed to fetch topology from any controller: %w", lastErr)
 }
 
+// GetConfig returns the current cluster configuration held by the client.
 func (c *SmartClient) GetConfig() *metadata.ClusterConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.config
 }
 
+// GetEpoch returns the version (epoch) of the current cluster configuration.
 func (c *SmartClient) GetEpoch() uint64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -96,6 +101,9 @@ type RouteResult struct {
 	ShardID   int
 }
 
+// Route determines which DataNode is responsible for a given key.
+// it uses the FNV-1a hashing algorithm to map the key to a shard, and then
+// looks up the current primary for that shard in the topology config.
 func (c *SmartClient) Route(key string) (*RouteResult, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -138,6 +146,10 @@ type writeRequest struct {
 	Epoch uint64 `json:"epoch"`
 }
 
+// Put stores a value in the distributed cache.
+// It automatically routes the request to the correct primary DataNode.
+// If the node is not the primary, the shard is locked (migration), or the Epoch is stale,
+// the client will refresh the topology and retry the operation.
 func (c *SmartClient) Put(key, value string) error {
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
 		route, err := c.Route(key)
@@ -196,6 +208,9 @@ func (c *SmartClient) Put(key, value string) error {
 	return fmt.Errorf("max retries exceeded for Put(%s)", key)
 }
 
+// Get retrieves a value from the distributed cache.
+// It hashes the key to find the responsible node and performs an HTTP GET.
+// Like Put, it handles retries and topology refreshes if the cluster state changes.
 func (c *SmartClient) Get(key string) (string, error) {
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
 		route, err := c.Route(key)
@@ -244,6 +259,9 @@ type deleteRequest struct {
 	Epoch uint64 `json:"epoch"`
 }
 
+// Delete removes a key-value pair from the distributed cache.
+// It uses the same routing and retry logic as Put and Get to ensure consistency
+// even during shard migrations or node failures.
 func (c *SmartClient) Delete(key string) error {
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
 		route, err := c.Route(key)

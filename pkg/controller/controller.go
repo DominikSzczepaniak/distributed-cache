@@ -12,6 +12,8 @@ import (
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft"
 )
 
+// Controller is the central coordinator of the distributed cache cluster.
+// It manages topology, node health, and consistency via Raft.
 type Controller struct {
 	mu     sync.RWMutex
 	raft   *raft.Raft
@@ -19,6 +21,7 @@ type Controller struct {
 	config *metadata.ClusterConfig
 }
 
+// NewController initializes a new cluster coordinator with Raft and a failure detection reaper.
 func NewController(r *raft.Raft, gracePeriod time.Duration) *Controller {
 	c := &Controller{
 		raft:   r,
@@ -31,6 +34,12 @@ func NewController(r *raft.Raft, gracePeriod time.Duration) *Controller {
 	return c
 }
 
+// MoveShard orchestrates a multi-phase migration of a shard from one node to another.
+// Phase 1: Trigger a data pull on the target node from the source node (non-blocking).
+// Phase 2: Lock the shard in the topology (StatusLocked) and increment the Epoch. This prevents new writes.
+// Phase 3: Trigger a final catch-up pull on the target node to ensure all data is migrated.
+// Phase 4: Update the topology to set the target node as the new primary and unlock the shard (StatusActive).
+// MoveShard manually triggers a migration of a shard to a different node.
 func (c *Controller) MoveShard(shardID int, targetNodeID string) error {
 	c.mu.Lock()
 	config := c.config
@@ -109,6 +118,9 @@ func (c *Controller) triggerPull(targetAddr, sourceAddr string, shardID int) err
 	return nil
 }
 
+// HandleNodeFailure is called when the Reaper detects that a node has missed its heartbeat deadline.
+// It marks the node as failed and triggers a cluster-wide rebalance to reassign its shards.
+// HandleNodeFailure is called when the reaper detects a node as non-responsive.
 func (c *Controller) HandleNodeFailure(nodeID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -129,17 +141,19 @@ func (c *Controller) HandleNodeFailure(nodeID string) {
 	go c.Rebalance()
 }
 
+// GetConfig returns the current global view of the cluster configuration.
 func (c *Controller) GetConfig() *metadata.ClusterConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.config
 }
 
+// Heartbeat records a node's presence to prevent it from being reaped.
 func (c *Controller) Heartbeat(nodeID string) {
 	c.reaper.Track(nodeID)
 }
 
-// SetTopology forces a specific cluster configuration (for testing/debugging)
+// SetTopology forces a specific cluster configuration (useful for testing and bootstrapping).
 func (c *Controller) SetTopology(config *metadata.ClusterConfig) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -187,6 +201,9 @@ func (c *Controller) applyRegisterNode(nodeID, address string) {
 	}
 }
 
+// RegisterNode adding a new node to the cluster metadata.
+// It broadcasts a CmdRegisterNode message via Raft to ensure all controller replicas agree on the new membership.
+// Once consensus is reached, the node is added to the topology.
 func (c *Controller) RegisterNode(nodeID, address string) error {
 	payload := RegisterNodePayload{
 		NodeID:  nodeID,
@@ -228,6 +245,8 @@ type replicaSyncTask struct {
 	replicaID string
 }
 
+// Rebalance ensures that all shards are assigned a primary and the desired number of replicas.
+// It attempts to distribute shards evenly across all active nodes and broadcasts updates via Raft.
 func (c *Controller) Rebalance() {
 	c.mu.RLock()
 	config := c.config
@@ -366,6 +385,7 @@ func (c *Controller) syncNewReplicas(tasks []replicaSyncTask, config *metadata.C
 	}
 }
 
+// BroadcastTopologyUpdate sends the current cluster configuration to all nodes via Raft.
 func (c *Controller) BroadcastTopologyUpdate(config *metadata.ClusterConfig) error {
 	payload := UpdateTopologyPayload{
 		Config: *config,
@@ -399,6 +419,7 @@ func (c *Controller) BroadcastTopologyUpdate(config *metadata.ClusterConfig) err
 	return nil
 }
 
+// NoOp broadcasts a NoOp command through Raft to verify cluster consensus and health.
 func (c *Controller) NoOp() error {
 	cmd := Command{
 		Type:    CmdNoOp,

@@ -31,6 +31,7 @@ func (r *Raft) serveGRPC(addr string) {
 
 type forwardHopKey struct{}
 
+// Forward handles a forwarded state machine command from another node.
 func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.ForwardResponse, error) {
 	slog.Info(fmt.Sprintf("Received Forward on node %d", r.id))
 	var val *int
@@ -84,6 +85,7 @@ func (r *Raft) Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.Forwar
 	}, nil
 }
 
+// ForwardGet handles a forwarded read request from another node.
 func (r *Raft) ForwardGet(ctx context.Context, req *raftpb.GetRequest) (*raftpb.GetResponse, error) {
 	slog.Info(fmt.Sprintf("Received ForwardGet on node %d for key %d", r.id, req.Key))
 
@@ -142,6 +144,7 @@ func convertLogRequestArgs(args *raftpb.LogRequestArgs) (int, int, int, int, int
 
 }
 
+// LogRequest handles an AppendEntries RPC from the cluster leader.
 func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) {
 	if r.artificialDelay > 0 {
 		time.Sleep(r.artificialDelay)
@@ -232,6 +235,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 	}
 }
 
+// VoteRequest handles a RequestVote RPC during a leader election.
 func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*raftpb.VoteResponse, error) {
 	candidateId := int(in.CandidateId)
 	candidateTerm := int(in.CandidateTerm)
@@ -286,11 +290,13 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 	}
 }
 
+// Heartbeat handles a simple heartbeat RPC to verify node connectivity.
 func (r *Raft) Heartbeat(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error) {
 	r.heartbeat.receiveHeartbeat()
 	return &emptypb.Empty{}, nil
 }
 
+// InstallSnapshot handles an InstallSnapshot RPC from the cluster leader.
 func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRequest) (*raftpb.InstallSnapshotResponse, error) {
 	r.raftElector.ResetTimer()
 	r.mu.Lock()
@@ -337,7 +343,7 @@ func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRe
 	if err != nil {
 		return defaultResponse, err
 	}
-	if err, key := r.application.RestoreFromSnapshot(snapshot); err != nil {
+	if key, err := r.application.RestoreFromSnapshot(snapshot); err != nil {
 		return defaultResponse, err
 	} else {
 		slog.Info(fmt.Sprintf("When exited restore from snapshot, key value is %d", r.application.GetValue(key)))

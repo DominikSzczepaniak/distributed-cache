@@ -8,21 +8,31 @@ import (
 	"time"
 )
 
+// StartupMode defines the strategy for starting the Raft node.
 type StartupMode int
 
 const (
+	// StartAlways immediately begins the election and heartbeat loops.
 	StartAlways StartupMode = iota
+	// WaitForQuorum waits for a majority of nodes to be available before starting.
 	WaitForQuorum
+	// WaitForAnyPeer waits for at least one peer to be available before starting.
 	WaitForAnyPeer
 )
 
+// RetryConfig holds parameters for exponential backoff during reconnection attempts.
 type RetryConfig struct {
+	// InitialBackoff is the duration to wait after the first failure.
 	InitialBackoff time.Duration
-	MaxBackoff     time.Duration
-	Multiplier     float64
-	MaxRetries     int
+	// MaxBackoff is the upper limit for the wait duration.
+	MaxBackoff time.Duration
+	// Multiplier is the factor by which the backoff increases after each attempt.
+	Multiplier float64
+	// MaxRetries is the number of attempts before giving up (-1 for infinite).
+	MaxRetries int
 }
 
+// Config contains all parameters for a Raft node, typically loaded from environment variables.
 type Config struct {
 	logsFilename      string
 	metadataFilename  string
@@ -66,6 +76,8 @@ func getEnvInt(key string, defaultVal int) int {
 	return defaultVal
 }
 
+// LoadConfig reads Raft configuration from environment variables (e.g., FILENAME, RAFT_ID, RAFT_ADDRS).
+// It panics if essential variables are missing or malformed.
 func LoadConfig() *Config {
 	filename, exists := os.LookupEnv("FILENAME")
 	if !exists || filename == "" {

@@ -5,17 +5,20 @@ import (
 	"sync"
 )
 
+// ConcurrentMapCache is a thread-safe cache implementation using a RWMutex and a standard map.
 type ConcurrentMapCache struct {
 	data map[string]string
 	mu   sync.RWMutex
 }
 
+// NewConcurrentMapCache initializes a new ConcurrentMapCache.
 func NewConcurrentMapCache() *ConcurrentMapCache {
 	return &ConcurrentMapCache{
 		data: make(map[string]string),
 	}
 }
 
+// Get retrieves a value from the cache.
 func (c *ConcurrentMapCache) Get(key string) string {
 	c.mu.RLock()
 	val := c.data[key]
@@ -23,18 +26,21 @@ func (c *ConcurrentMapCache) Get(key string) string {
 	return val
 }
 
+// Delete removes a key from the cache.
 func (c *ConcurrentMapCache) Delete(key string) {
 	c.mu.Lock()
 	delete(c.data, key)
 	c.mu.Unlock()
 }
 
+// Put stores a value in the cache.
 func (c *ConcurrentMapCache) Put(key, value string) {
 	c.mu.Lock()
 	c.data[key] = value
 	c.mu.Unlock()
 }
 
+// ExportShard serializes keys that belong to a specific shard.
 func (c *ConcurrentMapCache) ExportShard(shardID int, totalShards int) map[string]string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -55,6 +61,7 @@ func (c *ConcurrentMapCache) ExportShard(shardID int, totalShards int) map[strin
 	return result
 }
 
+// Import merges external data into the local cache.
 func (c *ConcurrentMapCache) Import(data map[string]string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

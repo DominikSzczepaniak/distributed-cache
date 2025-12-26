@@ -7,17 +7,21 @@ import (
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft"
 )
 
+// IdempotencyCache provides a mechanism to deduplicate requests by storing
+// their results for a specific duration (TTL).
 type IdempotencyCache struct {
 	mu      sync.RWMutex
 	entries map[string]*IdempotencyCacheEntry
 	ttl     time.Duration
 }
 
+// IdempotencyCacheEntry holds the result and completion time of a processed request.
 type IdempotencyCacheEntry struct {
 	Response    raft.BroadcastResponse
 	CompletedAt time.Time
 }
 
+// NewIdempotencyCache initializes a new cache for request de-duplication.
 func NewIdempotencyCache(ttl time.Duration) *IdempotencyCache {
 	cache := &IdempotencyCache{
 		entries: make(map[string]*IdempotencyCacheEntry),
@@ -29,6 +33,7 @@ func NewIdempotencyCache(ttl time.Duration) *IdempotencyCache {
 	return cache
 }
 
+// Get retrieves a cached response for a given token, if it exists and hasn't expired.
 func (c *IdempotencyCache) Get(token string) (*raft.BroadcastResponse, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -45,6 +50,7 @@ func (c *IdempotencyCache) Get(token string) (*raft.BroadcastResponse, bool) {
 	return &entry.Response, true
 }
 
+// Set stores a response in the cache, associated with the provided token.
 func (c *IdempotencyCache) Set(token string, response raft.BroadcastResponse) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
