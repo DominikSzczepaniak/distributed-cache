@@ -30,7 +30,7 @@ Poprawność została zweryfikowana testami. Nacisk został przede wszystkim po�
 }
 \englishabstract{ Presented work is focused on the design and implementation of a distributed key-value storage system. It is designed to manage data across multiple servers with focus on data being truthful after each operation. Many modern systems like Redis, Apache Cassandra or Amazon DynamoDB focus on system being unavailable for as little time as possible. This often comes at the cost of temporary data inconsistency. This project ensures that all users see the exact same, up to date data regardless of the server that they connected to even in the event of network failures. 
 
-The system is built using an architecture that separates itself into layers. This design allows to detect server failures and automatically reorginize itself without compromising any data integrity. The system is supported with a specialized client library that optimizes communication and ensures that requests are router as efficiently as possible to the correct server.
+The system is built using an architecture that separates itself into layers. This design allows to detect server failures and automatically reogranize itself without compromising any data integrity. The system is supported with a specialized client library that optimizes communication and ensures that requests are router as efficiently as possible to the correct server.
 
 The system was implemented by the autor in Go language, with gRPC used for internal communication and HTTP for external communication. 
 
@@ -87,20 +87,20 @@ The correctness of solution has been tested with multiple tests. Particular emph
 
 \section{Distributed systems and the problem with data consistency}
 When collecting the data in the application, the volume can grow infinitely. Computers, however, have limited amount of resources due to hardware limits or law of physics. In consequence, developers can decide they need scale their application to more than one computer. As the amount of data grows and the amount of computer computers increases, so does the complexity of the system. \\
-Some of the data might be reused more often then other. Querying the data in correct database and then fetching it can be slow,so developers often use specialized software to accelerate this operations, most often in the form of the local cache - a key-value store. However, the data can scale to such enourmous size, that it can no longer be stored locally.\\
-In that case, the distributed cache is used, to balance the load between multiple servers. However the data in cache is meant to be accessed and modified frequently, the conflicts between two server might arise. In most applications, this won't be a problem, because developer can simply refetch the data from database or ignore these uncommon events. However, there are systems that require the data to be correct at all times. This challenge is addressed by the problem of data consistency, which describes how the conflicts are managed and how often they occur.
+Some of the data might be reused more often then other. Querying the data in correct database and then fetching it can be slow, so developers often use specialized software to accelerate this operations, most often in the form of the local cache - a key-value store. However, the data can scale to such enourmous size, that it can no longer be stored locally.\\
+In that case, the distributed cache is used to balance the load between multiple servers and provide total capacity that exceeds the hardware limits of a single machine. Distributed systems solve the problem of limited local resources because they allow for the addition of more computers, whose individual resources are additive, forming a larger shared pool of memory. However the data in cache is meant to be accessed and modified frequently, the conflicts between two server might arise. In most applications, this won't be a problem, because developer can simply refetch the data from database or ignore these uncommon events. However, there are systems that require the data to be correct at all times. This challenge is addressed by the problem of data consistency, which describes how the conflicts are managed and how often they occur.
 
 \section{Objective and scope of the thesis}
 
-The objective of this thesis is to design and implement a distributed in-memory cache, a key-value store, that ensures strong consistency of stored data. Strong consistency implies, that at all times, system behaves as its a single-node entity where every node agrees on the current state. The strong consistency concept will be defined in more depth later in chapter \ref{subsubsec:strong_consistency}. \\
-It is important to note, that due to the system being a cache rather than a database, data peristence after crash is not guaranteed. Since data is stored exclusively in-memory on the Data Nodes to maximize performance, it remains volatile. If a server and all replicas on which the data is stored crashes or its host servers restarts, the data is lost and has to be refetched from persistent storage such as a database and put again into the system. The primary guarantee of this system is not data persistance after failures, but the consistency - correctness. Whenever user asks for the data and receives a response, this response will be correct and consistent across every server in the cluster. 
+The objective of this thesis is to design and implement a distributed in-memory cache, a key-value store, that ensures strong consistency of stored data. Strong consistency implies, that at all times, system behaves as its a single-node entity where every node agrees on the current state. The strong consistency concept will be defined in more depth later in chapter \ref{subsec:strong_consistency}. \\
+It is important to note, that due to the system being a cache rather than a database, data persistence after crash is not guaranteed. Since data is stored exclusively in-memory on the data servers to maximize performance, it remains volatile. If a server, and all replicas on which the data is stored, crashes or its host servers restarts, the data is lost and has to be refetched from persistent storage such as a database and put again into the system. The primary guarantee of this system is not data persistence after failures, but the consistency - correctness. Whenever user asks for the data and receives a response, this response will be correct and consistent across every server in the cluster. \\
 The user interface is implemented as a CLI tool that supports all key-value store operations. The system runs on Docker containers and allows user to easily start itself on a local machine. With some configuration, the user can also start it on many computers and add new servers when needed. 
 
 \section{Technology stack choice}
 
 The Go programming language was chosen due to its advanced concurrency model. System relies on the concurrent operations both inside the node and also across the nodes in the cluster. Due to the need for a tool that supports such tasks, the Go was chosen. Furthermore, the system also uses a lot of network intensive operations, which Go excels at.\\
 There were other considerations for languages of the project, namely C++ and Java, but both were rejected. C++ because of its high complexity and the potential impact on the development time considering author's proficiency level. Java was excluded, because it is generally slower than Go in network-intensive tasks and has a higher resource overhead, which we are trying to minimise.\\
-For internal communication I utilized gRPC (a high-performance framework for calling functions on other servers). The choice was made because of gRPC's high performance and efficient binary serialization. For external communication the HTTP protocol was selected due to its simplicity and ease of integration.
+For internal communication I utilized gRPC, a high-performance framework for calling functions on other servers. The choice was made because of gRPC's high performance and efficient binary serialization. For external communication the HTTP protocol was selected due to its simplicity and ease of integration.
 
 \section{Structure of this thesis}
 
@@ -181,8 +181,6 @@ CAP theorem, formulated by Eric Brewer in \cite{brewer}, says that a networked s
     \item \textbf{AP (Availability + Partition Tolerance):} When a partition occurs, system will continue to accept write and read requests, with probability that it will return conflicting data. This approach prioritizes throughput, uptime and user-experience over corectness of the data.
 \end{enumerate}
 In this thesis, I have chosen to implement a CP system, prioritizing data integrity as the primary requirement for the distributed cache.
-
-
 
 \section{Split brain problem}
 
@@ -1017,5 +1015,83 @@ As discussed in Chapter 7, the performance of the Raft consensus module is the p
 \end{thebibliography}
 
 
+\appendix
+\chapter{Installation}
+Appendix provides description of where to find the project, how to set it up and how to run it for both testing and development purposes.
+
+\section{Project location}
+Project is located on author's GitHub repository at \url{https://github.com/DominikSzczepaniak/thesis-distributed-cache}. 
+
+\section{Project setup}
+
+\subsection{Prerequisites}
+
+System require Docker to be installed with Docker Compose addition. The system is meant to be run inside a Docker container. If user wants to interact with system using author's CLI tool, then Go 1.24.1 or higher is required. 
+
+\subsection{Setup}
+
+If user wants to test the system and does not need to scale it yet, it is better to set up the project on local computer as its faster and more convenient. \\
+The easiest way to start the cluster is using the provided script in the root directory of the project: \texttt{run\_local.sh}. This script provides an interactive menu that automates the deployment and management of the system. It handles the following tasks:
+\begin{itemize}
+    \item \textbf{Cluster Lifecycle:} It builds the necessary binaries and starts a base cluster consisting of three Controllers (forming a Raft quorum) and one initial DataNode.
+    \item \textbf{Dynamic Scaling:} It allows the user to easily scale the cluster by adding additional DataNodes (\texttt{datanode-2} through \texttt{datanode-5}) at runtime. This is particularly useful for observing the automatic shard rebalancing mechanism in action.
+    \item \textbf{Fault Simulation:} It provides an option to stop specific DataNodes, allowing the user to verify the system's resilience and its ability to promote replicas to primary status.
+    \item \textbf{Interactive Testing:} It can launch the \texttt{raftcli} tool directly inside the Docker network. This allows for immediate testing of the cache with commands like \texttt{put} and \texttt{get}. Furthermore, the CLI's \texttt{load} command can be used to insert mock data (e.g., thousands of keys) to test the system's performance and data distribution.
+    \item \textbf{Observability:} It includes a shortcut for viewing real-time logs of any specific service, which is essential for debugging and monitoring the Raft consensus process.
+\end{itemize}
+
+However, if user wants to do it himself, user should define a docker compose file with controllers for Control Plane. It is recommended to use at least 3 controllers, as only 1 will not guarantee any availability when it fails. \\
+
+The docker compose example is given in the root directory as \texttt{docker-compose.yml}. It has defined:
+\begin{itemize}
+    \item Controllers - the Dockerfile for building them is given in \texttt{deploy/Dockerfile}, however user can create any Dockerfile. It should use \texttt{cmd/controller} package to compile the binary. The Controller in Dockerfile needs a list of environment variables to be set:
+    \begin{itemize}
+        \item \texttt{RAFT\_ID}: The unique numeric identifier of the node (e.g., "0", "1", "2").
+        \item \texttt{TOTAL\_NODES}: The total number of controllers in the cluster.
+        \item \texttt{RAFT\_ADDRS}: A comma-separated list of addresses for all controllers (e.g., \texttt{controller-0:9000,controller-1:9000}).
+        \item \texttt{FILENAME}: The path where the Raft log and metadata will be persisted.
+        \item \texttt{SNAPSHOT\_THRESHOLD}: The number of log entries that trigger a snapshot.
+        \item \texttt{API\_ADDR}: The address on which the internal and external HTTP API will listen (e.g., ":8080").
+        \item \texttt{API\_IDEMPOTENCY\_TTL}: The time-to-live for idempotency tokens in the cache.
+    \end{itemize}
+    However if user wants, he can further configure the system by defining:
+    \begin{itemize}
+        \item \texttt{RAFT\_ARTIFICIAL\_DELAY}: Simulates network or CPU lag for performance testing (e.g., "10ms").
+        \item \texttt{RAFT\_INITIAL\_BACKOFF}: Initial delay for gRPC reconnection attempts.
+        \item \texttt{RAFT\_MAX\_BACKOFF}: Maximum delay for reconnection attempts.
+        \item \texttt{RAFT\_BACKOFF\_MULTIPLIER}: Factor by which the backoff increases after each failed attempt.
+        \item \texttt{RAFT\_MAX\_RETRIES}: Maximum number of reconnection retries ($-1$ for infinite).
+        \item \texttt{RAFT\_CONN\_TIMEOUT}: Timeout for establishing a gRPC connection.
+        \item \texttt{RAFT\_HEALTH\_CHECK\_INTERVAL}: Frequency of health checks for cluster nodes.
+        \item \texttt{API\_RETRY\_MAX\_ATTEMPTS}: Maximum retries for internal API requests.
+        \item \texttt{API\_RETRY\_INITIAL\_DELAY}: Initial delay before retrying an API request.
+        \item \texttt{API\_RETRY\_MAX\_DELAY}: Maximum delay between API retry attempts.
+    \end{itemize}
+
+    Controllers should also have exported ports and defined volumes for the data saves to be persistent. 
+    
+    \item DataNodes - the Dockerfile is given in \texttt{deploy/Dockerfile.datanode}. They use the \texttt{cmd/datanode} package. Required variables:
+    \begin{itemize}
+        \item \texttt{CONTROLLER\_URL}: The address of one of the controllers to perform registration and heartbeat (e.g., \texttt{http://controller-0:8080}).
+        \item \texttt{NODE\_ID}: The unique identifier/address of the DataNode itself.
+        \item \texttt{LEASE\_DURATION}: The time after which a node is considered dead if no heartbeat is received.
+    \end{itemize}
+
+    DataNodes should also have exported ports and should be dependent on any of the controllers, so it can register and heartbeat.
+\end{itemize}
+
+\subsubsection{Multi server setup}
+If user wants to use multiple servers, he should fetch the repository on each of them and run the same \texttt{docker-compose.yml} file. Note that, controller addresses have to be manually set by user in that file. It is recommended to start the containers around the same time on each of the computer, but its not required. 
+
+Data nodes can be added at any time, as long as they point to a correct controller IP address. The Control Plane is meant to handle the registration automatically. 
+
+Please note that this implementation is designed for demonstration and research purposes and is not intended for production environments. It lacks advanced features such as edge proxying or industrial-grade load balancing, which should be provided by specialized infrastructure in a commercial deployment. Furthermore, the setup requires robust network connectivity; all controllers and DataNodes must be able to communicate bidirectionally. Users must ensure that the networks defined in the \texttt{docker-compose.yml} file are properly routed across physical hosts and that all necessary ports are correctly mapped and accessible.
+
+\section{Using the CLI}
+
+The CLI gives a simple interface to test the system. It supports cache operations of GET, PUT, DELETE. It has to be started with command \texttt{raftcli controller-0:8080,controller-1:8080,controller-2:8080} - the user has to pass all controller IPs for it to work. Then it is just a simple interface that accepts \texttt{(COMMAND-TYPE) (KEY) (VALUE - optional)}, for example \texttt{put 1 10} or \texttt{get 1}. 
+
+\section{Performance Benchmarking}
+The benchmarks discussed in Chapter 7 can be reproduced using the scripts in \texttt{tests/benchmark}. These allow for automated comparisons with other systems like Redis and Etcd.
 
 \end{document}
