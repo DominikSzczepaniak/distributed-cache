@@ -214,7 +214,9 @@ Due to its focus on implementability and the availability of robust documentatio
 
 \section{Detailed analysis of the Raft algorithm}
 
-Raft ensures that a cluster of $N$ servers can tolerate $F$ failures, where $N = 2F + 1$.
+The Raft algorithm is designed to manage a replicated log on behalf of a state machine, ensuring that all nodes in a cluster eventually agree on the same sequence of operations. One of its fundamental properties is its fault tolerance: Raft ensures that a cluster of $N$ servers can tolerate $F$ failures, where $N = 2F + 1$. This means a majority of nodes must be functional for the system to remain available and consistent.
+
+\noindent It is standard practice to use an odd number of nodes in a cluster because even-sized clusters do not provide additional fault tolerance. For any $N = 2n + 1$ (odd) and $N = 2n + 2$ (even), both clusters tolerate exactly $n$ failures. A \hyperref[def:quorum]{quorum} $Q$ is defined as $\lfloor N/2 \rfloor + 1$. For $N = 3$, $Q = 2$ and the system tolerates $3 - 2 = 1$ failure. For $N = 4$, $Q = 3$ and the system also tolerates only $4 - 3 = 1$ failure. Consequently, a 4-node cluster is less efficient than a 3-node cluster; it requires more resources and a larger number of servers to reach an agreement, while providing the same level of reliability. 
 
 \subsection{Core concepts and terminologies}
 Before describing how the algorithm works, it is important to note, that it uses several key concepts. In consequence, understanding these terms is necessary to follow the detailed analysis. For more details, reader should refer to the original Raft paper \cite{raft}.
