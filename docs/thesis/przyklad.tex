@@ -147,8 +147,13 @@ In this thesis, several technical terms are used to describe the components and 
     \item \textbf{Reaper} \label{def:reaper} - a background process that monitors nodes and "reaps" (removes or handles) those that have failed.
     \item \textbf{Goroutine} \label{def:goroutine} - a lightweight, independent task managed by the Go programming language that allows the system to do many things at the same time.
     \item \textbf{Channel} \label{def:channel} - a "pipe" used by goroutines to communicate and send messages to each other safely.
-    \item \textbf{Mutex (Lock)} \label{def:mutex} - a mechanism that ensures only one part of the program can access or change a piece of data at a time to prevent errors.
+    \item \textbf{Mutex (Lock)} \label{def:mutex} - a mechanism that ensures only one part of the program can access or change a piece of data at a time to prevent errors. There are different types: a regular mutex allows only one accessor (reader or writer), while an RWMutex (Read-Write Mutex) allows multiple readers but only one writer at a time, improving performance when reads are more common than writes.
+    \item \textbf{Thread Safety} \label{def:threadsafety} - ensuring that multiple goroutines can access shared data at the same time without causing corruption, conflicts, or incorrect results. This is achieved using locks, channels, or other synchronization mechanisms.
     \item \textbf{Deadlock} \label{def:deadlock} - a bug where two or more parts of a program are waiting for each other to finish, causing the entire system to freeze.
+    \item \textbf{Ticker} \label{def:ticker} - a repeating timer that triggers an action at regular intervals. For example, a 50ms ticker will trigger something every 50 milliseconds.
+    \item \textbf{Serialization} \label{def:serialization} - the process of converting data from memory into a format that can be saved to disk or sent over a network. Deserialization is the reverse—converting saved or received data back into memory. Common formats include Protocol Buffers, JSON, and Go's gob encoding.
+    \item \textbf{Durability} \label{def:durability} - data that survives crashes and restarts because it has been saved to disk (or other stable storage), not just kept in memory which is lost when power is lost.
+    \item \textbf{Modular Design} \label{def:modular} - breaking a complex system into smaller, independent pieces (modules) where each piece does one specific job. This makes the system easier to understand, test, and modify.
 \end{itemize}
 
 \textbf{Performance Metrics}
@@ -215,6 +220,55 @@ There are many strategies to manage this problem. Algorithms like Raft only allo
 
 The system has to decide what to do when split brain problem occurs, but that will be described more in chapter 5. However, there already comes a conclusion, that we need some mechanism that disallows any damage this problem can do. Consensus algorithms are one of the possibility to handle split brain problem.
 
+% \section{Reliability patterns in distributed systems}
+
+% Distributed systems must handle network failures, slow responses, and temporary unavailability of nodes. To build robust systems, several reliability patterns are commonly used. These patterns are essential for the implementation discussed in Chapter 4.
+
+% \subsection{Retry Strategies and Backoff}
+% When a network request fails (e.g., timeout, connection refused), the system has several options:
+% \begin{itemize}
+%     \item \textbf{Immediate Retry:} Retry the request immediately. This works if the failure was a brief network hiccup, but can overwhelm a struggling or recovering server.
+%     \item \textbf{Fixed Delay:} Wait a fixed amount of time (e.g., 1 second) before retrying. This is better than immediate retry, but if many clients all retry at the same interval, they may all hit the server simultaneously.
+%     \item \textbf{Exponential Backoff:} Wait an increasing amount of time between each retry attempt. For example, wait 100ms, then 200ms, then 400ms, then 800ms, and so on, doubling the wait time after each failure. This gives a struggling server more time to recover while avoiding overwhelming it with requests.
+% \end{itemize}
+
+% \noindent The exponential backoff strategy is particularly effective because:
+% \begin{enumerate}
+%     \item It allows quick recovery from transient failures (first retry is fast)
+%     \item It reduces load on a struggling system (longer waits give it time to recover)
+%     \item It typically includes a maximum wait time (e.g., 30 seconds) to prevent waiting too long
+% \end{enumerate}
+
+% \subsection{Jitter: Adding Randomness}
+% Even with exponential backoff, if many clients all fail at the same time (e.g., when a server crashes), they will all retry on the same schedule. To prevent this synchronization, we add \textbf{jitter}—small random variations to the wait time.
+
+% For example, instead of waiting exactly 400ms, a client might wait between 350ms and 450ms (a random value in that range). This ensures that clients retry at slightly different times, spreading the load more evenly.
+
+% \subsection{The Thundering Herd Problem}
+% \label{subsec:thundering_herd}
+
+% The \textbf{Thundering Herd} problem occurs when many clients or nodes simultaneously try to access a resource that has just become available, overwhelming it immediately.
+
+% \textbf{Example scenario:}
+% \begin{enumerate}
+%     \item A server crashes, and 1000 clients all detect the failure
+%     \item The server restarts and comes back online
+%     \item All 1000 clients immediately try to reconnect at the exact same moment
+%     \item The flood of connection requests overwhelms the server, causing it to crash again
+% \end{enumerate}
+
+% This is similar to a crowd of people rushing through a door the moment it opens—the door (or server) cannot handle everyone at once.
+
+% \textbf{Solutions:}
+% \begin{itemize}
+%     \item \textbf{Randomized backoff with jitter:} Each client waits a different amount of time before reconnecting
+%     \item \textbf{Rate limiting:} The server limits how many new connections it accepts per second
+%     \item \textbf{Load balancing:} Distribute clients across multiple servers
+% \end{itemize}
+
+% These patterns are used extensively in the Raft implementation (Chapter 4) to ensure reliable communication between nodes even during failures and recovery.
+
+
 \section{Consensus algorithms}
 
 A consensus algorithm is a set of rules that allows all servers in a system to reach a single agreement on the same data or sequence of actions. This ensures that every server has exactly the same information at any given time, even if some of them crash or have network problems. It serves as the backbone of the system I developed for this thesis - the Control Plane is entirely based on it. There are two very popular algorithms: Paxos and Raft.
@@ -244,9 +298,14 @@ The Raft algorithm is designed to manage a replicated log on behalf of a state m
 Having understood that Raft requires Quorum to work correctly, the practical question that comes to mind is how is the leader selected. Next section will broadly describe this, but for more details one should read original paper.
 
 \subsubsection{Leader Election}
-Raft uses a heartbeat mechanism (an "I am alive" signal) to maintain leadership. If no heartbeat is received in some configurable time window, then server can assume the leader is dead and start a new election. \
-The election starts by the node incrementing its current \texttt{Term} (a logical clock used to detect stale information), changing its current state to the Candidate state, voting for itself, and broadcasting \texttt{RequestVote} RPCs to all other nodes. A candidate wins if it receives votes from a majority of the cluster. \
-To prevent conflicts during elections, Raft uses randomized election timeouts. Each node waits for a random amount of time before starting an election. This randomization ensures that in most cases, only one node will timeout first and become a candidate, avoiding split votes where multiple nodes compete simultaneously and no one achieves a majority. Without this randomization, multiple nodes could start elections at the same time, leading to repeated failed elections and system stalls. \
+Raft defines three states a node can be in - Follower, Candidate and Leader. The Leader is responsible, as in name, for leading the cluster. It accepts the requests, it sends the data to different servers. The Leader is the coordinating server of all of the other servers in cluster. Followers always listen to the Leader. The Candidate is a role that Follower transitions to, when he wants to become a Leader when election starts. 
+
+Raft uses a heartbeat mechanism (an "I am alive" signal) to maintain leadership. If no heartbeat is received in some configurable time window, then server can assume the leader is dead and start a new election. 
+
+The election starts by the node incrementing its current \texttt{Term} (a logical clock used to detect stale information), changing its current state to the Candidate state, voting for itself, and broadcasting \texttt{RequestVote} RPCs to all other nodes. A candidate wins if it receives votes from a majority of the cluster. 
+
+To prevent conflicts during elections, Raft uses randomized election timeouts. Each node waits for a random amount of time before starting an election. This randomization ensures that in most cases, only one node will timeout first and become a candidate, avoiding split votes where multiple nodes compete simultaneously and no one achieves a majority. Without this randomization, multiple nodes could start elections at the same time, leading to repeated failed elections and system stalls. 
+
 For a complete specification of the leader election algorithm, including detailed edge cases and safety proofs, readers should refer to the original Raft paper \cite{raft}.
 
 The cluster is now ready to accept the requests, but system is using multiple servers, so the servers need to exchange informations. Log replication is used for that.
@@ -261,6 +320,10 @@ Once elected, the leader accepts client commands. A command flows through the fo
     \item In subsequent heartbeats, the leader notifies followers of the new \texttt{commitIndex}, instructing them to apply the data to their own state machines.
 \end{enumerate}
 
+Raft uses a simple but powerful principle: if the logs between two servers are identical up to some index (both the index positions and the values match), then their entire prefix is also correct. This property enables an efficient optimization where the leader only needs to find the last point where its log matches the follower's log, and then send the suffix (the remaining entries) from that point forward. 
+
+Once Leader replicates the log to the majority of nodes (at least a quorum) it will apply the operation to the local state machine.
+
 However, the system is working in distributed network, so many problems can occur. One of them is where leader loses connection for some time and cluster operates in the meantime. Raft introduces a Safety mechanism for that case and some other problems.
 
 \subsubsection{Safety}
@@ -271,15 +334,29 @@ The safety guarantees described above only work if nodes can remember their stat
 \begin{itemize}
     \item \textbf{currentTerm} - The latest term the server has seen. This prevents a restarted node from participating in an old election with a stale term.
     \item \textbf{votedFor} - Which candidate received this server's vote in the current term. This ensures a server doesn't vote twice in the same election after a crash.
-    \item \textbf{log[]} - The entire sequence of log entries. This allows a restarted node to know which operations have been replicated and ensures the log history is never lost. Due to log growing infinitely, the Snapshot mechanism is introduced, which will be described in more detail later in chapter 4.
+    \item \textbf{log[]} - The entire sequence of log entries. This allows a restarted node to know which operations have been replicated and ensures the log history is never lost. Due to log growing infinitely, the Snapshot mechanism is introduced, which will be described in next section.
 \end{itemize}
 
 Without persistence, a node crash or restart might damage the safety of the entire system. By saving the data to disk, Raft ensures that the most crucial data is not lost after any failure. Server always recovers it state from the stable storage and by design does it quickly. The detailed implementation of this will be described in Chapter 4.
 
+\subsubsection{Log compaction and Snapshotting}
+\label{subsec:snapshotting_theory}
+
+Infinite log growth causes many problems. First, the storage requirements for maintaining complete logs can become very large. Second, transferring large logs across the network (potentially millions of entries) may cost too much. Third, recovery time after a crash becomes increasingly problematic as the server must read entire log into memory one by one (because the order of the log is very important) to maintain correctness, resulting in extended downtime. 
+
+An important observation reveals that not all log entries are necessary to maintain system state. Consider an example where operation $X$ performs \texttt{PUT 1 3} (setting key 1 to value 3), and a subsequent operation $Y$ (where $Y > X$) performs \texttt{DEL 1} (deleting key 1). Once all servers reach consensus on this state, the value of key 1 no longer exists in the key-value store, yet the log keeps this obsolete information. Similarly, when a key is changed multiple times, only the final value is useful to the system.
+
+To address these problems, the snapshot mechanism is introduced. When the log size exceeds a configurable threshold, the current state of the cache (all key-value pairs) is serialized and saved to a snapshot file. In the worst case, where each operation modifies a distinct key, the snapshot size equals the number of operations. However, this scenario is highly unlikely in practice, as operations typically modify a limited set of keys repeatedly. Consequently, the snapshot size is generally significantly smaller than the complete log.
+
+Snapshot recovery is straightforward: the system restores its state by loading the key-value pairs from the snapshot file. This recovery process can be performed in parallel, as each key has a single associated value and there are no dependencies or conflicts between different key-value pairs. 
+
+This approach introduces a new problem - instead of replicating logs, the leader has to replicate snapshots too. However, as noted previously, snapshots guarantee to be smaller than the real logs would be, so this is more efficient than log replication. The Leader has to replicate snapshot if a follower is so far behind that the Leader has already discarded the needed log entries to find its latest index where these two servers agree to the prefix of the logs. 
+
 After establishing the consensus foundation via Raft, the next consideration is how to organize data across multiple servers and how clients interact with the distributed cache. 
 
-\section{Cache system architectures}
+\section{Overview of cache system architectures and methods}
 This section explores common architectural patterns for sharding strategies and client designs, which form the basis for the implementation decisions discussed in later chapters.
+
 Consensus algorithm ensure the coordination of servers is correct, but architectural design is what allows the system to scale to handle gigabytes of data and thousands of requests per second. One of the first problems to consider is how to distribute data across multiple servers.
 
 \subsection{Sharding and Consistent Hashing}
@@ -503,7 +580,7 @@ On RPC failure, the client retries the request against the current primary. If t
 \chapter{Implementation of the Raft Consensus Module (pkg/raft)}
 The core of the distributed system is the Raft consensus algorithm, located in the \texttt{pkg/raft} package. The Raft implementation is responsible for managing the state of distributed nodes, ensuring data consistency across the cluster, and handling leader election and failure recovery. While the Data Plane uses synchronous replication to ensure data durability and strong consistency across replicas, the Control Plane requires the more sophisticated Raft consensus algorithm to manage the cluster's critical metadata with formal correctness and safety guarantees.
 
-The implementation is highly modular, decomposing (breaking down) the Raft protocol into several distinct components: \texttt{Elector}, \texttt{Replicator}, \texttt{DataSaver}, and \texttt{Snapshotter}. This separation of concerns allows for a clean concurrency model (a way to manage multiple tasks at once) where each component operates on its own set of \hyperref[def:goroutine]{goroutines}, communicating via \hyperref[def:channel]{channels} to minimize lock contention (a situation where many tasks wait for the same lock, slowing down the system).
+The implementation is highly modular, decomposing (breaking down) the Raft protocol into several distinct components: \texttt{Elector}, \texttt{Replicator}, \texttt{DataSaver}, and \texttt{Snapshotter}. Each of these components will be throughoutly described later. This separation of concerns allows for a clean concurrency model (a way to manage multiple tasks at once) where each component operates on its own set of \hyperref[def:goroutine]{goroutines}, communicating via \hyperref[def:channel]{channels} to minimize lock contention (a situation where many tasks wait for the same lock, slowing down the system).
 
 Before diving into the specific components, it is important to understand the overall approach to concurrency and thread safety in this implementation.
 
@@ -532,7 +609,7 @@ The system defines the node's lifecycle through three primary roles: \texttt{Fol
 The roles are defined as typed constants in \texttt{types.go}: \texttt{Follower}, \texttt{Candidate}, and \texttt{Leader}.
 \begin{itemize}
     \item \textbf{Follower:} The default state upon initialization (in \texttt{NewRaft}). Followers passively respond to RPCs from leaders and candidates.
-    \item \textbf{Candidate:} A node transitions to this state when an election timeout occurs. This logic is encapsulated within the \texttt{startElection} method in \texttt{election.go}.
+    \item \textbf{Candidate:} A node transitions to this state when an election timeout occurs. This logic is contained in the \texttt{startElection} method in \texttt{election.go}.
     \item \textbf{Leader:} The node that handles all client requests and coordinates log replication. Transition to this role is handled by the \texttt{becomeLeader} function in \texttt{utils.go}, which initializes the \texttt{Replicator} instances for all peers.
 \end{itemize}
 
@@ -541,7 +618,7 @@ As previously mentioned, leader has its own election mechanism.
 \subsection{Leader Election Mechanism (election.go)}
 The \texttt{Elector} manages the node's election timer using a randomized timeout strategy (400--800\,ms) to reduce the probability of split votes in large clusters.
 \begin{enumerate}
-    \item \textbf{Timer Loop:} A dedicated goroutine runs \texttt{electionTimerLoop}, which listens on a \texttt{resetTimerCh}. This channel allows other components (like heartbeats or valid AppendEntries RPCs) to reset the timer efficiently.
+    \item \textbf{Timer Loop:} A dedicated goroutine (one that does only this task) runs \texttt{electionTimerLoop}, which listens on a \texttt{resetTimerCh}. This channel allows other components (like heartbeats or valid AppendEntries RPCs) to reset the timer efficiently.
     \item \textbf{Safety Checks:} Before starting an election, the node verifies it is not currently the leader and is not in the middle of installing a snapshot, as snapshot installation is a heavy I/O operation that might temporarily delay heartbeat processing.
     \item \textbf{Parallel Requests:} When a node becomes a Candidate, it broadcasts \texttt{VoteRequest} RPCs to all peers in parallel using individual goroutines, ensuring the election process is as fast as the fastest majority of the network.
 \end{enumerate}
@@ -557,14 +634,14 @@ The replication logic is implemented using an isolated "per-peer" model. For eve
 Each \texttt{Replicator} maintains its own state for a specific peer, including \texttt{nextIndex} and \texttt{matchIndex}. This provides several advantages:
 \begin{itemize}
     \item \textbf{Fault Isolation:} A slow or disconnected follower does not block replication to other healthy nodes.
-    \item \textbf{Instant vs. Periodic Replication:} The replicator waits on a \texttt{signalCh}. When the leader receives a new client request, it "pulses" this channel to trigger immediate replication. If no writes occur, a 50\,ms ticker ensures periodic heartbeats are sent to maintain leadership.
+    \item \textbf{Instant vs. Periodic Replication:} The replicator waits on a \texttt{signalCh}. When the leader receives a new client request, it "pulses" this channel to trigger immediate replication. If no writes occur, a 50\,ms ticker (repeating timer) ensures periodic heartbeats are sent to maintain leadership.
     \item \textbf{Self-Healing Quorum:} If a replicator detects too many consecutive failures (defined in \texttt{maxConsecutiveFailures}), it triggers a \texttt{checkQuorumHealth()} call, which can cause a leader to step down if it realizes it no longer has a healthy majority.
 \end{itemize}
 
 With this architecture in place, the next question is how the leader prepares and sends log entries to its followers.
 
 \subsection{The Log Request (AppendEntries)}
-The protocol uses a sophisticated \texttt{prepareLogRequestArgs} method to calculate the exact suffix of the log that needs to be sent. It handles the transition between sending incremental log entries and triggering a full snapshot installation if the follower's lag exceeds the available logs in memory.
+The protocol uses a sophisticated \texttt{prepareLogRequestArgs} method to calculate the exact suffix (end portion) of the log that needs to be sent. It handles the transition between sending incremental log entries (only the new entries since last update) and triggering a full snapshot installation if the follower's lag exceeds the available logs in memory.
 
 Replication is triggered via the \texttt{LogRequest} RPC (standard Raft \textit{AppendEntries}). The \texttt{Replicator} runs a continuous loop that monitors a signal channel. When triggered, it calculates the \texttt{prevLogIndex} and \texttt{prevLogTerm} to ensure log consistency. These arguments are packaged into a \texttt{LogRequestArgs} Protocol Buffer message and sent via the \texttt{PeerClient} interface.
 
@@ -596,7 +673,7 @@ The state is split into two files:
 \end{itemize}
 
 \subsection{State Recovery}
-Upon restart, the \texttt{LoadValues} method performs a sequential scan of the log file, reconstructing the in-memory log slice. Because logs are append-only (new data is only added to the end), the system handles partial writes by ignoring corrupted entries at the end of the file during recovery.
+Upon restart, the \texttt{LoadValues} method performs a sequential scan of the log file, reconstructing the in-memory log slice. Because logs are append-only (new data is only added to the end, never modified), the system handles partial writes by ignoring corrupted entries at the end of the file during recovery.
 
 The system should support a very large amount of operations, but as log grows the space needed to store them might be too big. Another problem caused by very big logs is how fast they are loaded on failure. Due to this problems, the snapshotting mechanism is implemented.
 
@@ -615,9 +692,9 @@ Transferring a large snapshot over gRPC can be problematic as it might exceed th
 \begin{itemize}
     \item The snapshot file is read in 128\,KB blocks.
     \item Each block is sent as a separate \texttt{InstallSnapshotRequest} containing an \texttt{offset} and a \texttt{Done} flag.
-    \item The follower reconstructs the file using \texttt{WriteAt}, ensuring that the snapshot is durable on the follower's disk even if the transfer is interrupted and resumed.
+    \item The follower reconstructs the file using \texttt{WriteAt}, ensuring that the snapshot is durable (saved to disk and survives crashes) on the follower's disk even if the transfer is interrupted and resumed.
 \end{itemize}
-This mechanism allows the system to synchronize new nodes even when the dataset is significantly larger than available network buffers. Without it, the nodes that do not participate in snapshot transfer might see leader as dead, as it wouldn't response to the requests because of possible overhead from sending the entire snapshot. 
+This mechanism allows the system to synchronize new nodes even when the dataset is significantly larger than available network buffers (temporary memory used to hold data being transmitted). Without it, the nodes that do not participate in snapshot transfer might see leader as dead, as it wouldn't response to the requests because of possible overhead from sending the entire snapshot. 
 
 Due to many possibilities of network speeds and memory size, the entire Raft algorithm needs to be highly configurable.
 
