@@ -209,7 +209,7 @@ In this thesis, I have chosen to implement a CP system, prioritizing data integr
 There are many problems that can occur due to splitting application from one servers into multiple. One of this problem is a Split brain problem, that this system too has to solve.
 
 Split brain is a problem in distributed system where a network divides the cluster into two or more disconnected groups (sub-clusters). Due to disconnection, the nodes cannot communicate with each other, so each node may incorrectly deduct that other nodes in the other group have died. This creates a situation where separate parts of the system operate independently and accept conflicting writes, believing they are the only active group.
-There are many strategies to manage this problem. Algorithms like Raft only allow a node to become a leader (definition of leader will be explained in next section) if more than half of total nodes agrees. Another solution to this problem is called fencing - a technique that makes a node physically or logically disable its peer to ensure it cannot write to shared storage.
+There are many strategies to manage this problem. Algorithms like Raft only allow a node to become a leader (definition of leader will be explained in next section) if more than half of total nodes agrees. Another solution to this problem is called fencing \label{def:fencing} - a technique that makes a node physically or logically disable its peer to ensure it cannot write to shared storage.
 
 \begin{figure}[h]
     \centering
@@ -219,55 +219,6 @@ There are many strategies to manage this problem. Algorithms like Raft only allo
 \end{figure}
 
 The system has to decide what to do when split brain problem occurs, but that will be described more in chapter 5. However, there already comes a conclusion, that we need some mechanism that disallows any damage this problem can do. Consensus algorithms are one of the possibility to handle split brain problem.
-
-% \section{Reliability patterns in distributed systems}
-
-% Distributed systems must handle network failures, slow responses, and temporary unavailability of nodes. To build robust systems, several reliability patterns are commonly used. These patterns are essential for the implementation discussed in Chapter 4.
-
-% \subsection{Retry Strategies and Backoff}
-% When a network request fails (e.g., timeout, connection refused), the system has several options:
-% \begin{itemize}
-%     \item \textbf{Immediate Retry:} Retry the request immediately. This works if the failure was a brief network hiccup, but can overwhelm a struggling or recovering server.
-%     \item \textbf{Fixed Delay:} Wait a fixed amount of time (e.g., 1 second) before retrying. This is better than immediate retry, but if many clients all retry at the same interval, they may all hit the server simultaneously.
-%     \item \textbf{Exponential Backoff:} Wait an increasing amount of time between each retry attempt. For example, wait 100ms, then 200ms, then 400ms, then 800ms, and so on, doubling the wait time after each failure. This gives a struggling server more time to recover while avoiding overwhelming it with requests.
-% \end{itemize}
-
-% \noindent The exponential backoff strategy is particularly effective because:
-% \begin{enumerate}
-%     \item It allows quick recovery from transient failures (first retry is fast)
-%     \item It reduces load on a struggling system (longer waits give it time to recover)
-%     \item It typically includes a maximum wait time (e.g., 30 seconds) to prevent waiting too long
-% \end{enumerate}
-
-% \subsection{Jitter: Adding Randomness}
-% Even with exponential backoff, if many clients all fail at the same time (e.g., when a server crashes), they will all retry on the same schedule. To prevent this synchronization, we add \textbf{jitter}—small random variations to the wait time.
-
-% For example, instead of waiting exactly 400ms, a client might wait between 350ms and 450ms (a random value in that range). This ensures that clients retry at slightly different times, spreading the load more evenly.
-
-% \subsection{The Thundering Herd Problem}
-% \label{subsec:thundering_herd}
-
-% The \textbf{Thundering Herd} problem occurs when many clients or nodes simultaneously try to access a resource that has just become available, overwhelming it immediately.
-
-% \textbf{Example scenario:}
-% \begin{enumerate}
-%     \item A server crashes, and 1000 clients all detect the failure
-%     \item The server restarts and comes back online
-%     \item All 1000 clients immediately try to reconnect at the exact same moment
-%     \item The flood of connection requests overwhelms the server, causing it to crash again
-% \end{enumerate}
-
-% This is similar to a crowd of people rushing through a door the moment it opens—the door (or server) cannot handle everyone at once.
-
-% \textbf{Solutions:}
-% \begin{itemize}
-%     \item \textbf{Randomized backoff with jitter:} Each client waits a different amount of time before reconnecting
-%     \item \textbf{Rate limiting:} The server limits how many new connections it accepts per second
-%     \item \textbf{Load balancing:} Distribute clients across multiple servers
-% \end{itemize}
-
-% These patterns are used extensively in the Raft implementation (Chapter 4) to ensure reliable communication between nodes even during failures and recovery.
-
 
 \section{Consensus algorithms}
 
@@ -505,6 +456,61 @@ The system, that is cluster of servers, is split into two logical parts: the Con
 
 Topology is defined as current configuration and state of the entire system - which nodes exists, whats their status - failed or active, which shards they are responsible for and which role they play (primary or replica) for each shard. The topology includes an Epoch counter that says how many times the topology has changed. Epoch counter allows to logic about many things about the system, in particular it may detect incorrect requests if the epoch number is too old and make the client refetch the topology.
 
+\subsection{High-Level request flow}
+
+Before diving into the detailed architecture, it is helpful to understand the complete flow of a typical client request through the system. This high-level overview shows how the three main components: Client, Control Plane, and Data Plane work together.
+
+\textbf{Step 1: Client Determines Target Shard}
+
+When a client wants to perform an operation (GET, PUT, or DELETE), it first calculates which shard is responsible for the requested key:
+\begin{enumerate}
+    \item The client hashes the key using hashing
+    \item It computes the shard ID by taking the hash modulo the total number of shards
+    \item It looks up the primary node for that shard in its locally cached topology
+\end{enumerate}
+
+The client maintains a local copy of the cluster topology (which nodes exist, which shards they own), so it can make this determination independently without contacting the Control Plane for every request.
+
+\textbf{Step 2: Control Plane Provides Topology (Initial Setup)}
+
+Before the client can route requests, it must first obtain the cluster topology from the Control Plane:
+\begin{enumerate}
+    \item The client contacts any Controller node in the Control Plane (there are multiple Controllers running Raft consensus and the client can access all of them)
+    \item If the contacted Controller is not the leader, it forwards the topology request to the current leader
+    \item The leader responds with the complete topology: which Data Plane nodes are alive, which shards are assigned to which nodes, and the current Epoch (version number)
+    \item The client caches this topology locally to avoid repeated lookups
+\end{enumerate}
+
+The Control Plane continuously monitors the Data Plane nodes via heartbeats. If a node fails, the Control Plane automatically promotes a replica to become the new primary and increments the Epoch. Clients detect stale topology when their requests are rejected due to an outdated Epoch and the client is then made to refetch the topology from Control Plane.
+
+\textbf{Step 3: Data Plane Processes and Replicates the Request}
+
+Once the client knows the target primary node, the request flows through the Data Plane:
+\begin{enumerate}
+    \item The client sends the request to the primary node for the shard
+    \item The primary node validates the request (checks that it is indeed the current primary, verifies the client's Epoch is current)
+    \item For write operations, the primary \textbf{synchronously} replicates the data to all replica nodes:
+    \begin{itemize}
+        \item The primary sends the same operation to each replica
+        \item Each replica saves the data and acknowledges back to the primary
+        \item The primary waits for \textbf{all} replicas to confirm before proceeding
+    \end{itemize}
+    \item Only after all replicas have confirmed, the primary acknowledges success to the client
+    \item For read operations (GET), the primary can respond immediately from its local state without any replicas interaction
+\end{enumerate}
+
+This synchronous replication ensures strong consistency: if a write succeeds, the data is guaranteed to be on all nodes, so any subsequent read (even if it hits a newly promoted replica) will see the latest value.
+
+\textbf{Summary of the Flow:}
+\begin{itemize}
+    \item \textbf{Client} $\rightarrow$ calculates shard, looks up primary in cached topology
+    \item \textbf{Control Plane} $\rightarrow$ provides topology on demand, monitors health, triggers rebalancing
+    \item \textbf{Primary (Data Plane)} $\rightarrow$ validates request, replicates to all replicas, then acknowledges client
+    \item \textbf{Replicas (Data Plane)} $\rightarrow$ receive and save the data, confirm to primary
+\end{itemize}
+
+The following sections will go into more details of each component design.
+
 \subsection{Separation of the Control Plane and the Data Plane}
 The Control Plane is responsible for:
 \begin{itemize}
@@ -518,9 +524,12 @@ The Control Plane is responsible for:
     \item Storing the actual key-value data.
     \item Handling client RPCs (GET, PUT, DELETE).
     \item Reporting heartbeats (regular "I am alive" signals) to the Control Plane.
+    \item Replicating data across replicas to ensure strong consistency and fault tolerance.
 \end{itemize}
 
-To minimize the time for RPC calls, gRPC is used.
+\noindent \textbf{Synchronous Primary-Backup Replication:} Unlike the Control Plane which uses Raft, the Data Plane employs a simpler but effective replication strategy. Each shard has a designated primary node and one or more replica nodes. When a client writes data, the primary node synchronously replicates the write to all replicas before acknowledging the client. This means the primary waits for all replicas to confirm they have saved the data before returning success to the client. This approach ensures strong consistency—if a write succeeds, all nodes have the data, guaranteeing that subsequent reads will always see that write. The trade-off is that writes are slower than asynchronous replication (where the primary acknowledges immediately without waiting), but this is necessary to meet the system's strong consistency requirement.
+
+To minimize the time for RPC calls in internode communication, gRPC is used.
 
 \subsection{gRPC Communication Protocol and Interface Definition} \label{subsec:grpc_protocol}
 gRPC is a high-performance Remote Procedure Call (RPC) framework developed by Google. It uses Protocol Buffers as its interface definition language (a set of rules for how messages should look) and message serialization format (the process of turning data into a compact binary format that can be sent over the network). This provides an alternative to traditional JSON-over-HTTP, which results in smaller payloads (the actual data being sent) and faster processing.
@@ -560,18 +569,150 @@ Topology data includes:
 
 The Controller updates the cluster topology using the Raft algorithm. I want to ensure that the Control Plane provides strong consistency, because if it did not, then the system as a whole would not be strongly consistent. This is because, if there were conflicts in the Control Plane, a client might send a request to the wrong DataNode, hence creating an inconsistent state which would fail to guarantee a "correct response on every request".\\
 
-Rebalancing uses the Control Plane's active nodes to determine which node should be primary and which should be a replica. It then writes the new configuration to the Raft Log, which is distributed among every other Controller in the Control Plane.
+Rebalancing uses the Control Plane's active nodes to determine which node should be primary and which should be a replica. It then writes the new configuration to the Raft Log, which is distributed among every other Controller in the Control Plane. 
 
-However, as mentioned multiple times, in distributed systems failures are common. The system needs some mechanism to monitor nodes failures.
+However, due to working in distributed environment and Control Plane managing topology, there must be some mechanism to detect failures.
 
 \subsection{Node Failure Detection Mechanism}
-I implemented a Reaper mechanism which tracks the last heartbeat timestamp of each node. In the background, the Reaper runs a thread that checks if a node has sent a heartbeat within the configured grace period. If it hasn't, the Reaper invokes a callback to the Control Plane, triggering a topology rebalance. The Reaper mechanism is described in more details in chapter 5. 
+I implemented a Reaper mechanism which tracks the last heartbeat timestamp of each node in Data Plane. In the background, the Reaper runs a thread that checks if a node has sent a heartbeat within the configured grace period. If it hasn't, the Reaper invokes a callback to the Control Plane, triggering a topology rebalance. The details of Reaper implementation will be described in chapter 5.
+
+Having established how the Control Plane detects failures and maintains an accurate view of which nodes are alive, the next important question is: how is data actually distributed across these nodes? Understanding the data distribution strategy is essential before discussing how the system rebalances data when failures occur.
+
+\subsection{Sharding strategy: Fixed Shard Model}
+
+As described previously, the system employs a fixed shard model, inspired by Redis Cluster. The keyspace is pre-partitioned into a fixed number of shards that is a configurable value. Each key is deterministically mapped to a shard using hashing. 
+
+This approach decouples data distribution from number of physical nodes. There can be 1024 shards defined, but only 5 nodes present, where each node would handle around 200 shards. When a new node joins, it will take ownership of some shard IDS without requirement of rehashing all existing keys.
+
+\textbf{Why Fixed Shards?} This design provides:
+\begin{itemize}
+    \item \textbf{Scalability:} Adding or removing nodes only affects the shard to node mapping, not the key to shard mapping.
+    \item \textbf{Determinism:} Any client can independently calculate which shard holds a given key.
+    \item \textbf{Flexibility:} The number of shards can be configured independently of the initial cluster size.
+\end{itemize}
+
+However system has to allow scaling, but it also has to do something on failures, so the process of rebalancing is introduced.
+
+\subsection{Shard Rebalancing Strategy}
+
+When nodes fail or join the cluster, the Control Plane must automatically reassign shards to maintain data availability and redundancy. This process is called \textbf{rebalancing}.
+
+\textbf{Handling Node Failures:} When a node fails, the system performs an emergency promotion strategy:
+\begin{enumerate}
+    \item Node failure mechanism detects the failure and notifies the Control Plane
+    \item For each shard where the failed node was primary, a replica is immediately promoted to become the new primary - this is almost instantenous and decreases the unavailability of the system
+    \item The failed node is removed from the active node list
+    \item The system identifies shards that now lack sufficient replicas and assigns new nodes as backups
+\end{enumerate}
+
+This ensures that data remains accessible even during failures, as long as at least one replica survives. Note that if there is no replica and the primary server dies the data for this shards is lost - this system does not guarantee data durability. However, for the data to not be lost, at least one replica has to be alive. User can add as many replicas as needed in configuration file, but each replica decreases performance of the system, as the primary node has to send data to higher amount of servers.
+
+\textbf{Handling Node Additions (Lazy Assignment):} When a new node joins:
+\begin{enumerate}
+    \item The node is automatically assigned as primary for shards that have no current primary
+    \item It is assigned as a replica for shards that lack sufficient backups
+    \item Data is migrated to the new node using a synchronization protocol (described below)
+\end{enumerate}
+
+This strategy is called "lazy" because it does the minimum necessary work. If a shard already has a healthy primary and the correct number of replicas, the system leaves it alone, it does not move or reassign it. The system only takes action for shards that are missing a primary or need more replicas. This approach reduces unnecessary data transfers and keeps the cluster stable during scaling.
+
+Next chapter will describe how data is migrated between primary nodes and replicas.
+
+\subsection{Data Migration and Synchronization}
+
+Moving data between nodes while maintaining strong consistency and zero downtime requires careful coordination. The system uses a \textbf{four-phase synchronization protocol}:
+
+\begin{enumerate}
+    \item \textbf{Bulk Copy:} The target node copies all data from the source node. Writes continue to be accepted by the source during this phase.
+    \item \textbf{Lock for Consistency:} The shard is temporarily locked to prevent new writes. This ensures a consistent snapshot can be taken.
+    \item \textbf{Incremental Catch-Up:} Any data written during Phase 1 is transferred to ensure the target has a complete, up to date copy.
+    \item \textbf{Unlock and Activate:} The shard is unlocked, and the target node is officially added as a replica or promoted to primary.
+\end{enumerate}
+
+This protocol ensures:
+\begin{itemize}
+    \item \textbf{Zero Data Loss:} All data is transferred before the migration is considered complete
+    \item \textbf{Minimal Downtime:} Only Phase 2 blocks writes, and this phase is very short (just the incremental delta)
+    \item \textbf{Consistency:} The lock ensures the target has an exact copy without missing any recent writes
+\end{itemize}
+
+The migration uses a \textbf{pull-based approach}, where the target node requests data from the source. This allows the target to control the transfer rate and retry on failures, making the protocol more resilient than a push-based approach where the source must track progress.
+
+The system has to be resilient for network failures that cause cluster divisions. This problem was previously described and is known as Split-Brain problem. Below section describes how does the system handle this problem.
+
+\subsection{Split-Brain Prevention: Lease-Based Fencing}
+
+The Control Plane uses Raft consensus to prevent split-brain scenarios, but the Data Plane does not. Without additional mechanisms, a Data Plane node that loses network connectivity to the Control Plane might continue serving requests as if it were still the primary, leading to inconsistent data if a replica has been promoted in its place.
+
+To prevent this, the system employs a lease-based \hyperref[def:fencing]{fencing} mechanism:
+
+\textbf{How Leases Work:}
+\begin{itemize}
+    \item Each Data Plane node periodically sends heartbeats to the Control Plane
+    \item The Control Plane responds with an acknowledgment, granting the node a time limited validity lease (e.g., valid for 30 seconds)
+    \item The node tracks its lease expiration locally
+    \item Before processing any request (GET, PUT, DELETE), the node verifies that its lease has not expired
+    \item If the lease has expired, the node immediately stops serving requests and returns an error (HTTP 503 Service Unavailable)
+\end{itemize}
+
+This is a form of self-fencing: nodes fence themselves out of the cluster if they cannot maintain connectivity to the Control Plane. This prevents a partitioned node from making conflicting writes.
+
+\textbf{Why This Prevents Split-Brain:}
+\begin{enumerate}
+    \item A network partition occurs, isolating Node A from the Control Plane
+    \item Node A can no longer send heartbeats or receive lease renewals
+    \item After the lease expires (e.g., 30 seconds), Node A voluntarily stops serving requests
+    \item Meanwhile, the Control Plane detects the failure via Reaper and promotes a replica to primary
+    \item The new primary begins serving requests with a valid lease
+    \item There is no window where both nodes believe they are primary and serve conflicting writes
+\end{enumerate}
+
+This approach trades availability for consistency: a partitioned node becomes unavailable, but the system never produces inconsistent results.
 
 The last part of the system is how the user interacts with it - the client.
 
 \section{Smart Client Design} \label{subsec:query_routing}
 Upon initialization, the client connects to the Control Plane to fetch the topology, which it stores in a local memory. For each request, the client hashes the key to a shard ID and looks up the primary node from the cached topology. The request is then sent.
-On RPC failure, the client retries the request against the current primary. If the primary is unreachable or the request is rejected, the client refetches the cluster topology. 
+
+\subsection{Epoch-Based Request Validation}
+
+To prevent stale writes, every client request includes the client's current Epoch number (obtained from the topology). The Data Plane node compares the client's Epoch to its own:
+\begin{itemize}
+    \item If the client's Epoch is older, the request is rejected with a specific error that signalizes the client to refetch the topology
+    \item If the Epochs match, the request is processed normally
+\end{itemize}
+
+This prevents a client with outdated topology information from writing to a node that is no longer the primary, which could cause data inconsistency.
+
+\subsection{Adaptive Retry Strategy}
+
+The client implements an intelligent retry mechanism that adapts to different failure scenarios. On RPC failure, the client employs a tiered wait strategy:
+\begin{itemize}
+    \item \textbf{Topology Mismatch:} If the node rejects the request because it's not the primary, the client immediately refetches the topology and retries (no delay)
+    \item \textbf{Shard Locked:} If a shard is undergoing migration, the client waits briefly (e.g., 100ms) before retrying, allowing the migration to complete - as described previously, the shard is locked for a very short time, so this won't be an performance issue
+    \item \textbf{Node Failure:} If a node is unreachable or fenced, the client waits longer (e.g., 200ms) to allow the Control Plane's Reaper (node failure detection mechanism) to detect the failure and promote a replica
+\end{itemize}
+
+However, as previously mentioned, the primary node can fail, but the request to replicas could suceed. Next section describes the idea of dealing with such an edge-case.
+
+\subsection{Client-Side Idempotency}
+
+To handle the case where a write succeeds on the server but the acknowledgment is lost (e.g., due to network issues or node failure), the client includes a unique idempotency token with each write or delete operation. This token is a UUID that uniquely identifies the request.
+
+When the client retries a request, it includes the same token. The Data Plane (and its replicas) track which tokens have been processed. If a retry arrives with a token that has already been processed, the server recognizes it as a duplicate and returns success without re-executing the operation.
+
+\textbf{Why This Matters:}
+\begin{enumerate}
+    \item Client sends PUT(key=X, value=Y, token=T) to Primary
+    \item Primary replicates to replicas and all nodes save token T
+    \item Primary crashes before sending acknowledgment to client
+    \item Client times out and retries the same request (same token T)
+    \item The promoted replica (now primary) recognizes token T and returns success
+    \item The operation is not duplicated, maintaining consistency
+\end{enumerate}
+
+This mechanism ensures that retries are safe and that the strong consistency guarantee is maintained even when failures occur during write operations.
+ 
 
 
 
