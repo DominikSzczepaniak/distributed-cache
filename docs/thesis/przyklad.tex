@@ -426,6 +426,8 @@ Now that the system requirements are known, the next section will describe high 
 \section{High-Level Architecture}
 The system, that is cluster of servers, is split into two logical parts: the Control Plane and the Data Plane. Some of the servers are assigned to be part of the Control Plane, while others are assigned to the Data Plane. The part of architecture into which the server is assigned will dictate how it will behave and what it will do.
 
+Topology is defined as current configuration and state of the entire system - which nodes exists, whats their status - failed or active, which shards they are responsible for and which role they play (primary or replica) for each shard. The topology includes an Epoch counter that says how many times the topology has changed. Epoch counter allows to logic about many things about the system, in particular it may detect incorrect requests if the epoch number is too old and make the client refetch the topology.
+
 \subsection{Separation of the Control Plane and the Data Plane}
 The Control Plane is responsible for:
 \begin{itemize}
@@ -499,19 +501,19 @@ On RPC failure, the client retries the request against the current primary. If t
 % chapter 4
 
 \chapter{Implementation of the Raft Consensus Module (pkg/raft)}
-The core of the distributed system is the Raft consensus algorithm, located in the \texttt{pkg/raft} package. This module is responsible for managing the state of distributed nodes, ensuring data consistency across the cluster, and handling leader election and failure recovery. While the Data Plane uses synchronous replication for performance, the Control Plane requires the formal correctness and safety guarantees of Raft to manage the cluster's critical metadata.
+The core of the distributed system is the Raft consensus algorithm, located in the \texttt{pkg/raft} package. The Raft implementation is responsible for managing the state of distributed nodes, ensuring data consistency across the cluster, and handling leader election and failure recovery. While the Data Plane uses synchronous replication to ensure data durability and strong consistency across replicas, the Control Plane requires the more sophisticated Raft consensus algorithm to manage the cluster's critical metadata with formal correctness and safety guarantees.
 
 The implementation is highly modular, decomposing (breaking down) the Raft protocol into several distinct components: \texttt{Elector}, \texttt{Replicator}, \texttt{DataSaver}, and \texttt{Snapshotter}. This separation of concerns allows for a clean concurrency model (a way to manage multiple tasks at once) where each component operates on its own set of \hyperref[def:goroutine]{goroutines}, communicating via \hyperref[def:channel]{channels} to minimize lock contention (a situation where many tasks wait for the same lock, slowing down the system).
 
 Before diving into the specific components, it is important to understand the overall approach to concurrency and thread safety in this implementation.
 
 \section{Concurrency and Locking Model}
-Unlike simple implementations that wrap the entire state in a single mutex, this module uses a \texttt{sync.RWMutex} (a special \hyperref[def:mutex]{lock} that allows many readers but only one writer) for the core Raft state, while sub-components often use their own internal synchronization. A critical design choice was the delivery of committed logs to the \texttt{Application} interface; to prevent \hyperref[def:deadlock]{deadlocks} and blocking the consensus loop, the mutex is explicitly unlocked during the \texttt{deliverToApplication} phase, allowing the application to process data without stalling incoming RPCs.
+Unlike simple implementations that wrap the entire state in a single mutex, the Raft implementation uses a \texttt{sync.RWMutex} (a special \hyperref[def:mutex]{lock} that allows many readers but only one writer) for the core Raft state, while sub-components often use their own internal synchronization. A critical design choice was the delivery of committed logs to the \texttt{Application} interface; to prevent \hyperref[def:deadlock]{deadlocks} and blocking the consensus loop, the mutex is explicitly unlocked during the \texttt{deliverToApplication} phase, allowing the application to process data without stalling incoming RPCs.
 
 In chapter 3 I mentioned that gRPC integration with Raft is important. Below is a description of said interaction.
 
 \subsection{gRPC Connection Management}
-Maintaining stable gRPC connections in a dynamic cluster is handled by the \texttt{ConnectionManager}.
+Maintaining stable gRPC connections in a dynamic cluster is handled by the \texttt{ConnectionManager}. This component must be configured with parameters such as initial backoff duration, maximum backoff duration, and health check intervals—these values are provided through environment variables when starting the system (showcased in Appendix).
 \begin{itemize}
     \item \textbf{Lazy Initialization:} Connections to peers are only established when needed (e.g., during the first replication attempt or vote request).
     \item \textbf{Exponential Backoff with Jitter:} If a connection fails, the manager uses a backoff strategy (waiting longer and longer between retries, starting at 100\,ms up to 5\,s) with added randomization (jitter). This prevents the "Thundering Herd" problem where all nodes try to reconnect to a recovering leader at the exact same moment, potentially overwhelming its network capacity.
@@ -520,9 +522,9 @@ Maintaining stable gRPC connections in a dynamic cluster is handled by the \text
 
 All of the communication between servers is done with gRPC. Thanks to these mechanisms and the gRPC's speed, the operations are both robust and performant.
 
-With the concurrency model established and why gRPC is used, the following sections describe the individual components of the Raft implementation, starting with the base state machine.
+With the concurrency model established and why gRPC is used, the following sections describe the individual components of the Raft implementation, starting with the node roles and lifecycle.
 
-\section{Raft Node State Machine}
+\section{Raft Node Roles and Lifecycle}
 The system defines the node's lifecycle through three primary roles: \texttt{Follower}, \texttt{Candidate}, and \texttt{Leader}. The transition between these roles is strictly controlled by the term logic and majority voting rules.
 
 \subsection{Implementation of Roles: Follower, Candidate, and Leader}
@@ -922,13 +924,13 @@ The following table lists the endpoints exposed by the API server for external i
 
 \section{Methodology for testing distributed systems}
 
-As testing distributed systems requires independent servers I considered two options. First option was to run tests using multiple computers. This option however wasn't developer friendly. Every time I would want to test my system I had to boot multiple computers, synchronize data through version control system, then set it up. This would take too much time and effort just to run some basic testing. Thats where the second option came in - I simulated distributed servers using \textbf{Docker Containers} (a way to package and run software in an isolated environment). As I can control almost everything about Docker Containers - restarts, failures, networks, this was my way of testing.
+As testing distributed systems requires independent servers I considered two options. First option was to run tests using multiple computers. This option however wasn't developer friendly. Every time I would want to test my system I had to boot multiple computers, synchronize data through version control system, then set it up. This would take too much time and effort just to run some basic testing. Thats where the second option came in - I simulated distributed servers using \textbf{Docker Containers} \cite{docker} (a way to package and run software in an isolated environment). As I can control almost everything about Docker Containers - restarts, failures, networks, this was my way of testing.
 
 To facilitate consistent and repeatable testing, the entire system is orchestrated using \texttt{docker-compose}. The current setup simulates a cluster composed of 3 Controllers and 5 Data Nodes. This configuration is defined in the \texttt{docker-compose.yml} file, which manages:
 \begin{itemize}
     \item \textbf{Network Isolation:} It defines two distinct bridge networks: \texttt{raft-cluster} for internal \hyperref[def:rpc]{gRPC communication} between Raft nodes, and \texttt{client-access} for external API requests.
     \item \textbf{Persistence:} Volumes are mapped for each controller to ensure that Raft logs and snapshots survive container restarts, allowing for testing of recovery mechanisms.
-    \item \textbf{Service Dependencies:} Data nodes are configured to depend on controllers, mirroring the real-world startup sequence where nodes must register with a functional control plane.
+    \item \textbf{Service Dependencies:} In Docker Compose, dependencies define the order in which containers start. Data nodes are configured to depend on controllers, meaning Docker Compose will start the controllers first and wait for them to be ready before starting the data nodes. This mirrors the real-world startup sequence where data nodes must register with a functional Control Plane—if a data node starts before any controllers are available, it would have nowhere to register and would fail to join the cluster.
 \end{itemize}
 This containerized approach allows for complex failure scenarios (like killing a node or partitioning the network via \texttt{docker network disconnect}) to be automated in scripts.
 
@@ -996,7 +998,7 @@ This automated feedback loop was essential for the rapid development of complex 
 
 \section{Benchmarks}
 The primary advantage of a cache is its speed. If performance were not a priority, a traditional database would be a more suitable choice. Consequently, a thorough performance analysis is crucial. \\
-I conducted benchmarks to calculate the \textbf{Requests Per Second (RPS)} (the \hyperref[def:throughput]{throughput} or speed) the cache can support. Each benchmark was executed for 10\,seconds using 100 workers. The tool issues as many write requests as possible, with each request targeting a unique key. After 10\,seconds, the total number of requests is divided by 10 to determine the average RPS. \\
+I conducted benchmarks to calculate the \textbf{Requests Per Second (RPS)} (the \hyperref[def:throughput]{throughput} or speed) the cache can support. Each benchmark was executed for 10\,seconds using 100 workers (clients) implemented as threads. Unless specified otherwise in test, all tests will use 100 workers. The tool issues as many write requests as possible, with each request targeting a unique key. After 10\,seconds, the total number of requests is divided by 10 to determine the average RPS. \\
 
 \noindent The benchmarks were performed on a MacBook Air M1 (2020) with 16\,GB of RAM, running macOS Tahoe 15.1.
 
@@ -1080,6 +1082,8 @@ Artificial Delay & Consensus RPS & Impact \\ \hline
 To evaluate the performance of my implementation, it is necessary to compare it against established solutions. I identified two primary open-source systems for comparison, based on current industry popularity \cite{dbengines}. The first is Etcd, which is also a Raft based distributed key-value store that guarantees strong consistency. However, Etcd is a durable store, meaning data is persisted to disk to survive node crashes. \\
 The second system is Redis, the most widely used cache in the world \cite{redis_cite, dbengines}. Redis is primarily an AP (Availability and Partition Tolerance) system, meaning it prioritizes performance over strong consistency, offering eventual consistency instead (for more information, read chapter 2 again). Redis is a highly optimized system written in C with over 15 years of development. Matching the performance of Redis is a significant challenge, making it an excellent benchmark for speed.
 
+Both Etcd and Redis use default Docker containers created by their development teams. Redis uses container \texttt{redis:7-alpine} with default options and Etcd uses \texttt{gcr.io/etcd-development/etcd:v3.5.11} with default options.
+
 \subsection{Performance Comparison with Etcd}
 Etcd was deployed using Docker. I utilized the official client package \path{go.etcd.io/etcd/client/v3@v3.5.11}. \\
 I performed ten iterations of the 10-second, 100-worker benchmark described in Section 7.1. The results were averaged, yielding a score of 26,661 RPS.
@@ -1146,6 +1150,7 @@ As discussed in Chapter 7, the performance of the Raft consensus module is the p
 \bibitem{cassandra} Apache Cassandra, "Dataset Partitioning: Consistent Hashing" [Online]. Available: \url{https://cassandra.apache.org/doc/5.0/cassandra/architecture/dynamo.html\#dataset-partitioning-consistent-hashing}. [Accessed: 21-Dec-2025].
 \bibitem{paxos} L. Lamport, "The Part-Time Parliament" in \textit{ACM Transactions on Computer Systems}, vol. 16, no. 2, May 1998.
 \bibitem{paxos_simple} L. Lamport, "Paxos Made Simple" in \textit{ACM SIGACT News (Distributed Computing Column)}, vol. 32, no. 4, Dec. 2001.
+\bibitem{docker} Docker Inc., "Docker Documentation" [Online]. Available: https://docs.docker.com/. [Accessed: 19-Jan-2026].
 \end{thebibliography}
 
 
