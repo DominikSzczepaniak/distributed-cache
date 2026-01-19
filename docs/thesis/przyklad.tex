@@ -219,8 +219,6 @@ The system has to decide what to do when split brain problem occurs, but that wi
 
 A consensus algorithm is a set of rules that allows all servers in a system to reach a single agreement on the same data or sequence of actions. This ensures that every server has exactly the same information at any given time, even if some of them crash or have network problems. It serves as the backbone of the system I developed for this thesis - the Control Plane is entirely based on it. There are two very popular algorithms: Paxos and Raft.
 
-\subsection{Paxos vs. Raft – Comparison of understanding and implementation}
-
 \textbf{Paxos} is a family of protocols created by Leslie Lamport \cite{paxos} and historically the most used algorithm for distributed consensus. While it is mathematically proven to be safe and efficient, it is also a very complex to understand and difficult to implement in real-world systems. 
 
 \textbf{Raft} is a modern algorithm, introduced in 2014 by Diego Ongaro and John Ousterhout \cite{raft}, that was designed to be easier to implement than Paxos and more understandable than it. It offers performance comparable to Multi-Paxos \cite{paxos_simple} (a more efficient version of the original Paxos). It decomposes the problem of consensus into smaller, independent sub-problems of choosing a coordinator, replicating the sequence of updates and ensuring safety. Raft is widely used in many modern distributed systems such as CockroachDB \cite{cockroach}, MongoDB \cite{mongodb}, Neo4J \cite{neo4j}, RabbitMQ \cite{rabbitmq}. 
@@ -926,7 +924,6 @@ The following table lists the endpoints exposed by the API server for external i
 
 As testing distributed systems requires independent servers I considered two options. First option was to run tests using multiple computers. This option however wasn't developer friendly. Every time I would want to test my system I had to boot multiple computers, synchronize data through version control system, then set it up. This would take too much time and effort just to run some basic testing. Thats where the second option came in - I simulated distributed servers using \textbf{Docker Containers} (a way to package and run software in an isolated environment). As I can control almost everything about Docker Containers - restarts, failures, networks, this was my way of testing.
 
-\subsection{Docker-based Simulation Environment}
 To facilitate consistent and repeatable testing, the entire system is orchestrated using \texttt{docker-compose}. The current setup simulates a cluster composed of 3 Controllers and 5 Data Nodes. This configuration is defined in the \texttt{docker-compose.yml} file, which manages:
 \begin{itemize}
     \item \textbf{Network Isolation:} It defines two distinct bridge networks: \texttt{raft-cluster} for internal \hyperref[def:rpc]{gRPC communication} between Raft nodes, and \texttt{client-access} for external API requests.
@@ -957,7 +954,6 @@ As noted in chapter 3, Raft is a central thing in Control Plane, and Control Pla
 
 While the Raft tests are useful for testing Raft, they are not useful for testing the entire system. System requirement was to be Strongly Consistent and have Partition Tolerance. To verify these properties, I developed a suite of automated shell scripts located in \texttt{tests/fault\_injection/} and \texttt{tests/e2e/}.
 
-\subsection{Fault Injection and End-to-End Test Suite}
 The two primary verification scripts are:
 \begin{enumerate}
     \item \texttt{test\_network\_partition.sh}: This script verifies Partition Tolerance by executing the following sequence:
@@ -1004,7 +1000,6 @@ I conducted benchmarks to calculate the \textbf{Requests Per Second (RPS)} (the 
 
 \noindent The benchmarks were performed on a MacBook Air M1 (2020) with 16\,GB of RAM, running macOS Tahoe 15.1.
 
-\subsection{Benchmark Toolset}
 To ensure objective and reproducible results, I developed a suite of benchmarking tools located in the \texttt{tests/benchmark/} directory:
 \begin{itemize}
     \item \texttt{benchmark\_rps.go}: A high-performance Go based benchmark that measures maximum RPS using \hyperref[def:goroutine]{goroutines} and connection pooling.
@@ -1103,8 +1098,6 @@ I re-ran my system alongside Etcd and Redis using the same 10x10-second, 100-wor
 \section{Evaluation of the Achievement of Research Objectives}
 
 The functional and non-functional requirements of the system have all been met. Every requirement was verified with a corresponding test case to ensure correctness.
-
-\subsection{Encountered Implementation Problems and Challenges}
 
 The most significant challenge of the project was the implementation itself. Since the original Raft paper provides high-level algorithmic details rather than low-level implementation specifications, designing the concurrency model and operational logic was my primary responsibility. \\
 Initially, I implemented Raft using multiple \hyperref[def:mutex]{mutexes}, which made the system difficult to reason about and led to several \hyperref[def:deadlock]{deadlocks} that required extensive debugging. \\
