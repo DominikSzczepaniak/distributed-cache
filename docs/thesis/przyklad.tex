@@ -143,7 +143,7 @@ In this thesis, several technical terms are used to describe the components and 
 \begin{itemize}
     \item \textbf{RPC (Remote Procedure Call)} \label{def:rpc} - a way for one server to call a function or send a message to another server over the network.
     \item \textbf{State Machine} \label{def:statemachine} - the component of the server that actually stores the data (like a table of keys and values) and applies changes to it.
-    \item \textbf{Epoch} \label{def:epoch} - a version number for the cluster topology; it increases whenever the system configuration changes.
+    \item \textbf{Epoch} \label{def:epoch} - a version number for the cluster topology (what is a topology will be defined later in chapter 3); it increases whenever the system configuration changes.
     \item \textbf{Reaper} \label{def:reaper} - a background process that monitors nodes and "reaps" (removes or handles) those that have failed.
     \item \textbf{Goroutine} \label{def:goroutine} - a lightweight, independent task managed by the Go programming language that allows the system to do many things at the same time.
     \item \textbf{Channel} \label{def:channel} - a "pipe" used by goroutines to communicate and send messages to each other safely.
@@ -235,6 +235,7 @@ Due to its focus on implementability and the availability of robust documentatio
 \subsection{Core concepts and terminologies}
 Before describing how the algorithm works, it is important to note, that it uses several key concepts. In consequence, understanding these terms is necessary to follow the detailed analysis. For more details, both about definitions and overall Raft working idea, reader should refer to the original Raft paper \cite{raft}.
 \begin{itemize}
+    \item \textbf{State Machine} \label{def:statemachine} - A state machine is the application logic that processes commands and maintains state (data). In a distributed system using Raft, each server has its own local state machine. The fundamental goal of the Raft algorithm is to ensure that all servers state machines execute the same sequence of commands in the same order, reaching identical states. For example, in a key-value store, the state machine would handle PUT and DELETE operations, and Raft ensures that all replicas agree on which operations occurred and in what order.
     \item \textbf{Leader} - Only one server can be a coordinator of the data at any time. This server is called a leader, and all other servers must treat it as a source of truth. It manages all client requests and coordinates rest of cluster.
     \item \textbf{Elections} - Since system needs a leader to function, there must be a way to pick one. If current leader stops working, nodes start an election to choose a new one.
     \item \textbf{Logs} - A log is a sequence of entries that store operations sent by users. We need them to keep track of what happened in the system so it can be recovered later.
@@ -273,6 +274,26 @@ Once elected, the leader accepts client commands. A command flows through the fo
 
 Raft uses a simple but powerful principle: if the logs between two servers are identical up to some index (both the index positions and the values match), then their entire prefix is also correct. This property enables an efficient optimization where the leader only needs to find the last point where its log matches the follower's log, and then send the suffix (the remaining entries) from that point forward. 
 
+\textbf{Example of diverging logs after a network partition:}
+
+Consider a cluster with 5 nodes (A, B, C, D, E) where Server A is the leader in Term 1:
+\begin{enumerate}
+    \item Initial state: All servers have log entries [1, 2, 3] from Term 1
+    \item A network partition splits the cluster: (A, B) on one side and (C, D, E) on the other
+    \item Before the partition is detected, the old leader A receives two client requests and appends them locally: A's log becomes [1, 2, 3, 4, 5]
+    \item Since A cannot reach a majority (only has B), these entries are never committed
+    \item The other partition (C, D, E) elects a new leader C in Term 2
+    \item Leader C receives different client requests and successfully commits them with majority: C's log becomes [1, 2, 3, 6, 7] where 6 and 7 are from Term 2
+    \item The network partition heals
+    \item Leader C (with higher term) sends \texttt{AppendEntries} to A
+    \item A detects that C has a higher term, steps down to follower
+    \item C finds that logs match up to index 3 (the prefix [1, 2, 3])
+    \item C instructs A to delete uncommitted entries [4, 5] and replace them with the correct suffix [6, 7] from Term 2
+    \item A's log is now [1, 2, 3, 6, 7], matching the cluster consensus
+\end{enumerate}
+
+This example demonstrates why the term number is crucial: entries from an old term (Term 1) that never reached a majority are overwritten by committed entries from a newer term (Term 2). This ensures safety. 
+
 Once Leader replicates the log to the majority of nodes (at least a quorum) it will apply the operation to the local state machine.
 
 However, the system is working in distributed network, so many problems can occur. One of them is where leader loses connection for some time and cluster operates in the meantime. Raft introduces a Safety mechanism for that case and some other problems.
@@ -288,14 +309,27 @@ The safety guarantees described above only work if nodes can remember their stat
     \item \textbf{log[]} - The entire sequence of log entries. This allows a restarted node to know which operations have been replicated and ensures the log history is never lost. Due to log growing infinitely, the Snapshot mechanism is introduced, which will be described in next section.
 \end{itemize}
 
-Without persistence, a node crash or restart might damage the safety of the entire system. By saving the data to disk, Raft ensures that the most crucial data is not lost after any failure. Server always recovers it state from the stable storage and by design does it quickly. The detailed implementation of this will be described in Chapter 4.
+Without persistence, a node crash or restart might damage the safety of the entire system. Consider the following dangerous scenario:
+
+\textbf{Example of failure without persistence:}
+\begin{enumerate}
+    \item Server A votes for Candidate B in Term 5 and updates its \texttt{votedFor} field to B
+    \item Before saving this information to disk, Server A crashes
+    \item Server A restarts with no memory of having voted
+    \item Another Candidate C requests votes for the same Term 5
+    \item Server A, having lost its vote record, votes for C as well
+    \item Now both B and C might receive a majority, potentially creating two leaders in the same term, violating Raft's safety guarantees
+\end{enumerate}
+
+By saving the data to disk, Raft ensures that the most crucial data is not lost after any failure. When Server A restarts in the example above, it reads from stable storage that it already voted for B in Term 5, and correctly rejects C's vote request. Server always recovers its state from the stable storage and by design does it quickly. The detailed implementation of this will be described in Chapter 4.
+
 
 \subsubsection{Log compaction and Snapshotting}
 \label{subsec:snapshotting_theory}
 
 Infinite log growth causes many problems. First, the storage requirements for maintaining complete logs can become very large. Second, transferring large logs across the network (potentially millions of entries) may cost too much. Third, recovery time after a crash becomes increasingly problematic as the server must read entire log into memory one by one (because the order of the log is very important) to maintain correctness, resulting in extended downtime. 
 
-An important observation reveals that not all log entries are necessary to maintain system state. Consider an example where operation $X$ performs \texttt{PUT 1 3} (setting key 1 to value 3), and a subsequent operation $Y$ (where $Y > X$) performs \texttt{DEL 1} (deleting key 1). Once all servers reach consensus on this state, the value of key 1 no longer exists in the key-value store, yet the log keeps this obsolete information. Similarly, when a key is changed multiple times, only the final value is useful to the system.
+An important observation reveals that not all log entries are necessary to maintain system state. Consider an example where operation $X$ performs \texttt{PUT 1 3} (setting key 1 to value 3), and a subsequent operation $Y$ (where Y has been executed after X) performs \texttt{DELETE 1} (deleting key 1). Once all servers reach consensus on this state, the value of key 1 no longer exists in the key-value store, yet the log keeps this obsolete information. Similarly, when a key is changed multiple times, only the final value is useful to the system.
 
 To address these problems, the snapshot mechanism is introduced. When the log size exceeds a configurable threshold, the current state of the cache (all key-value pairs) is serialized and saved to a snapshot file. In the worst case, where each operation modifies a distinct key, the snapshot size equals the number of operations. However, this scenario is highly unlikely in practice, as operations typically modify a limited set of keys repeatedly. Consequently, the snapshot size is generally significantly smaller than the complete log.
 
@@ -349,7 +383,7 @@ Range partitioning is better suited for analytical systems, where users frequent
 The Fowler-Noll-Vo (FNV) hash 1a \cite{fnv} is a non-cryptographic hash function known for its extreme speed and ease of implementation. It works by multiplying the hash by a large prime and XORing it with each byte of the input data.
 \begin{itemize}
     \item \textbf{Pros:} High throughput, low collision rates for short strings (ideal for cache keys), and minimal memory overhead.
-    \item \textbf{Suitability:} Since this project requires mapping keys to a fixed set of shards during every client request, a low-latency hash function like FNV-1a is preferable over more complex cryptographic hashes like SHA-256 or MD5, which would introduce unnecessary CPU overhead.
+    \item \textbf{Why it was used, why it suits the project:} Since this project requires mapping keys to a fixed set of shards during every client request, a low-latency hash function like FNV-1a is preferable over more complex cryptographic hashes like SHA-256 or MD5, which would introduce unnecessary CPU overhead.
 \end{itemize}
 
 
