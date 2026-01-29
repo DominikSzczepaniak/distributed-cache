@@ -104,6 +104,14 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
+	mux.HandleFunc("/debug/raft_noop", func(w http.ResponseWriter, req *http.Request) {
+		if err := ctrl.NoOp(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
 	slog.Info(fmt.Sprintf("Starting API server on %s", apiAddr))
 	if err := http.ListenAndServe(apiAddr, mux); err != nil {
 		slog.Error("Failed to start API server", "error", err)

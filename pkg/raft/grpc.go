@@ -143,6 +143,9 @@ func convertLogRequestArgs(args *raftpb.LogRequestArgs) (int, int, int, int, int
 }
 
 func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raftpb.LogResponse, error) {
+	if r.artificialDelay > 0 {
+		time.Sleep(r.artificialDelay)
+	}
 	leaderId, term, prevIndex, prevTerm, commitLength, suffix := convertLogRequestArgs(in)
 
 	r.mu.Lock()
