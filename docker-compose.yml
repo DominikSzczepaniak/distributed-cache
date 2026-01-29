@@ -17,6 +17,7 @@ services:
       RAFT_ADDRS: "controller-0:9000,controller-1:9000,controller-2:9000"
       FILENAME: "/data/node0"
       SNAPSHOT_THRESHOLD: "100"
+      RAFT_ARTIFICIAL_DELAY: "${RAFT_ARTIFICIAL_DELAY:-0s}"
 
       # Connection management (configurable)
       RAFT_INITIAL_BACKOFF: "1s"
@@ -55,6 +56,7 @@ services:
       RAFT_ADDRS: "controller-0:9000,controller-1:9000,controller-2:9000"
       FILENAME: "/data/node1"
       SNAPSHOT_THRESHOLD: "100"
+      RAFT_ARTIFICIAL_DELAY: "${RAFT_ARTIFICIAL_DELAY:-0s}"
 
       # Connection management
       RAFT_INITIAL_BACKOFF: "1s"
@@ -93,6 +95,7 @@ services:
       RAFT_ADDRS: "controller-0:9000,controller-1:9000,controller-2:9000"
       FILENAME: "/data/node2"
       SNAPSHOT_THRESHOLD: "100"
+      RAFT_ARTIFICIAL_DELAY: "${RAFT_ARTIFICIAL_DELAY:-0s}"
 
       # Connection management
       RAFT_INITIAL_BACKOFF: "1s"

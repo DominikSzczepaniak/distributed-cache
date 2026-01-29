@@ -44,6 +44,8 @@ type Raft struct {
 	replicators []*Replicator
 	snapshotter *Snapshot
 
+	artificialDelay time.Duration
+
 	raftpb.UnimplementedRaftServer
 }
 
@@ -61,6 +63,8 @@ func NewRaft(application Application, cfg *Config) *Raft {
 		votesReceived:   mapset.NewSet[int](),
 		sentLengths:     make([]int, cfg.totalNodes),
 		ackedLengths:    make([]int, cfg.totalNodes),
+
+		artificialDelay: cfg.artificialDelay,
 
 		application: application,
 	}
@@ -137,7 +141,11 @@ func (r *Raft) forwardToLeader(message Message, leader PeerClient) (bool, int, e
 	return resp.Success, int(resp.Value), nil
 }
 
+// This function broadcasts message to all servers, for details -> chapter 4, subsection X
 func (r *Raft) Broadcast(message Message) {
+	if r.artificialDelay > 0 {
+		time.Sleep(r.artificialDelay)
+	}
 	isLeader, leaderID := r.getLeaderData()
 
 	if !isLeader {
