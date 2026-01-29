@@ -101,15 +101,15 @@ The user interface is implemented as a command line tool that supports all key-v
 \section{Technology stack choice}
 
 The Go programming language was chosen due to its advanced concurrency model. System relies on the concurrent operations both inside the node and also across the nodes in the cluster. Due to the need for a tool that supports such tasks, the Go was chosen. Furthermore, the system also uses a lot of network intensive operations, which Go excels at.\\
-There were other considerations for languages of the project, namely C++ and Java, but both were rejected. C++ because of its high complexity and the potential impact on the development time considering author's proficiency level. Java was excluded, because it is generally slower than Go in network-intensive tasks and has a higher resource overhead, which we are trying to minimise.\\
+There were other considerations for languages of the project, namely C++ and Java, but both were rejected. C++ because of its high complexity and the potential impact on the development time considering author's proficiency level. Java was excluded, because it is generally slower than Go in network-intensive tasks and has a higher resource overhead, and the goal is to minimize the use of resource. \\
 For internal communication I utilized gRPC, a high-performance framework for calling functions on other servers. The choice was made because of gRPC's high performance and efficient binary serialization. For external communication the HTTP protocol was selected due to its simplicity and ease of integration.
 
 \section{Structure of this thesis}
 
 \textbf{Chapter 2} presents theoretical background necessary to understand the problem of state management in distributed systems. It discusses the CAP theorem, data consistency models, consensus algorithms - what are they, why we need them. It compares two of the most popular consensus algorithms and describe what the chosen one is doing. The chapter reviews existing architectural patterns across industrial solutions, techniques for splitting data between multiple servers and client types. \\
-\textbf{Chapter 3} outlines more detailed requirements of the project and the system design. It defines high-level architecture, separation of Control Plane from Data plane. It also details communication between servers and the specific design of client. \\
+\textbf{Chapter 3} outlines more detailed requirements of the project and the system design. It defines high-level architecture, separation of Control Plane from Data plane. It also details communication between servers and the specific design of client. This chapter is a theoretical description of the architecture of the system. \\
 \textbf{Chapter 4} presents a detailed implementation of Raft consensus algorithm. It describes implementation of basic parts of the algorithm as well as more advanced. \\
-\textbf{Chapter 5} covers the implementation details of the remaining system components. It describes the logic of the Control Plane, the Data Nodes and the client library. Special attention is given to mechanisms of shard rebalancing and failure detection. \\
+\textbf{Chapter 5} covers the implementation details of the architecture. It describes in detail the implementation of every part of the system that was mentioned in chapter 3. Special attention is given to mechanisms of shard rebalancing and failure detection. \\
 \textbf{Chapter 6} is dedicated to testing and verification of the system. It describes the testing methodology, including unit tests, end to end tests, integration tests and failure injection tests used to validate system correctness and stability. \\
 \textbf{Chapter 7} presents the performance analysis and benchmarks in comparison to other industry-standard systems. It contains the results of benchmark tests measuring latency and throughput (requests per second) in comparison to other industry standard systems. \\
 \textbf{Chapter 8} summarizes the thesis, evaluating the degree to which the project goals were met, discussing the encountered challenges and potential directions for future development. \\
@@ -128,7 +128,7 @@ In this thesis, several technical terms are used to describe the components and 
     \item \textbf{Node / Server / Instance} - the smallest unit of the system, referring to a single running process usually isolated in its own container or physical machine.
     \item \textbf{Cluster} - a collective group of nodes working together. Initially, the system operates as a single cluster containing all nodes. However, due to network failures or partitions, the cluster can be split into multiple independent \textbf{subclusters} that are unable to communicate with each other.
     \item \textbf{Cache / Key-Value Store / System} - the entire distributed entity designed and implemented in this project, encompassing all nodes and their configurations.
-    \item \textbf{Control Plane / Data Plane} - the architectural separation of nodes, between the management layer (\textbf{Control Plane}) and the actual storage layer (\textbf{Data Plane}). This will be in depth more described in chapter 5.
+    \item \textbf{Control Plane / Data Plane} - the architectural separation of nodes, between the management layer (\textbf{Control Plane}) and the actual storage layer (\textbf{Data Plane}). This will be in depth more described in chapter 3 and 5.
 \end{itemize}
 
 \textbf{Roles and Replication}
@@ -136,22 +136,22 @@ In this thesis, several technical terms are used to describe the components and 
     \item \textbf{Primary / Replica} - roles within servers that store the same data; the \textbf{Primary} node handles writes and ensures consistency by replicating data to one or more \textbf{Replica} (Backup) nodes. Replica is just a copy of the data in case the primary node crashes.
     \item \textbf{Synchronous Replication} - a method where the system waits for all replicas to save the data before telling the user it succeeded. This is slow but safe.
     \item \textbf{Asynchronous Replication} - a method where the system tells the user "OK" immediately after the primary saves data, without waiting for replicas. This is very fast but can lose data if someone crashes.
-    \item \textbf{Quorum / Majority} \label{def:quorum} - refers to more than half of the total nodes in a cluster (e.g., 3 out of 5), required to reach a consensus, as explained later in chapter 2.5.
+    \item \textbf{Quorum / Majority} \label{def:quorum} - refers to more than half of the total nodes in a cluster (e.g., 3 out of 5), required to reach a consensus, as explained later in section \ref{sec:consensus_algorithms}.
 \end{itemize}
 
 \textbf{Internal Mechanisms and Concurrency}
 \begin{itemize}
     \item \textbf{RPC (Remote Procedure Call)} \label{def:rpc} - a way for one server to call a function or send a message to another server over the network.
     \item \textbf{Epoch} \label{def:epoch} - a version number for the cluster topology (what is a topology will be defined later in chapter 3); it increases whenever the system configuration changes.
-    \item \textbf{Reaper} \label{def:reaper} - a background process that monitors nodes and "reaps" (removes or handles) those that have failed.
+    \item \textbf{Reaper} \label{def:reaper} - a background process that monitors nodes and "reaps" (removes or handles) those that have failed. Described in more detail in chapter 3.
     \item \textbf{Goroutine} \label{def:goroutine} - a lightweight, independent task managed by the Go programming language that allows the system to do many things at the same time.
     \item \textbf{Channel} \label{def:channel} - a "pipe" used by goroutines to communicate and send messages to each other safely.
     \item \textbf{Mutex (Lock)} \label{def:mutex} - a mechanism that ensures only one part of the program can access or change a piece of data at a time to prevent errors. There are different types: a regular mutex allows only one accessor (reader or writer), while an RWMutex (Read-Write Mutex) allows multiple readers but only one writer at a time, improving performance when reads are more common than writes.
     \item \textbf{Thread Safety} \label{def:threadsafety} - ensuring that multiple goroutines can access shared data at the same time without causing corruption, conflicts, or incorrect results. This is achieved using locks, channels, or other synchronization mechanisms.
     \item \textbf{Deadlock} \label{def:deadlock} - a bug where two or more parts of a program are waiting for each other to finish, causing the entire system to freeze.
     \item \textbf{Ticker} \label{def:ticker} - a repeating timer that triggers an action at regular intervals. For example, a 50ms ticker will trigger something every 50 milliseconds.
-    \item \textbf{Serialization} \label{def:serialization} - the process of converting data from memory into a format that can be saved to disk or sent over a network. Deserialization is the reverse—converting saved or received data back into memory. Common formats include Protocol Buffers, JSON, and Go's gob encoding.
-    \item \textbf{Durability} \label{def:durability} - data that survives crashes and restarts because it has been saved to disk (or other stable storage), not just kept in memory which is lost when power is lost.
+    \item \textbf{Serialization} \label{def:serialization} - the process of converting data from memory into a format that can be saved to disk or sent over a network. Deserialization is the reverse converting saved or received data back into memory. Common formats include Protocol Buffers, JSON, and binary encoding - for example with the help of Go's gob encoding library.
+    \item \textbf{Durability} \label{def:durability} - feature of the system that data survives crashes and restarts,  because it has been saved to disk (or other stable storage), not just kept in memory which is lost on failures
     \item \textbf{Modular Design} \label{def:modular} - breaking a complex system into smaller, independent pieces (modules) where each piece does one specific job. This makes the system easier to understand, test, and modify.
 \end{itemize}
 
@@ -166,7 +166,7 @@ In this thesis, several technical terms are used to describe the components and 
 Distributed systems operate on data. Consistency is a metric that describes how many conflicts between nodes are resolved and how long it takes to resolve them. In this thesis, I will focus on two main categories of consistency models: strong and weak. 
 
 \subsection{Strong Consistency (Linearizability)} \label{subsec:strong_consistency}
-This is a strongly consistent model that ensures that all nodes agree on the order in which operations were done. Reads will always return the most recent version of data. When an update occurs, this model makes sure that every other server reflects that change. Due to these guarantees, this model limits how fast the system can work, but allows the system to be seen as a single-node database.
+This is a strongly consistent model that ensures that all nodes agree on the order in which operations were done. Reads will always return the most recent version of data. When an update occurs, this model makes sure that every other server reflects that change. Due to these guarantees, this model limits how fast the system can work, but allows the system to be seen as a single-node entity.
 
 Linearizability is the strongest guarantee for consistency for single-object requests (operations like getting or setting a single key). It gives an illusion that the system is in fact a single copy of data and the data is not distributed. It guarantees that once a write operation is completed successfully, all subsequent read operations will return that value, or a newer value if any update happened.
 
@@ -181,8 +181,8 @@ Mathematically, when operation $Write(x)$ completes at time $t_1$, then for any 
 \subsection{Eventual Consistency}
 This is one of weak consistency models that prioritizes availability and performance. It allows data between servers to conflict, but if no updates occur, eventually these conflicts will resolve.
 In eventually consistent systems, if no new updates are made to a given data item, eventually all accesses to that item will return the last updated value. This model allows for temporary inconsistencies where different nodes serve different versions of data.
-This approach enables high availability and low latency because writes can be accepted by a single node without waiting for other nodes to accept and make a consensus. This approach, however, requires adding logic for conflict resolution strategies (rules to decide which data is correct, for example, "the newest write wins") when merging data from different nodes.
-One example can be a like system on a social media platform. Imagine we have two friends, one who lives in Australia and the second one who lives in Poland. Before the Australian friend likes a post, the number of likes is \texttt{x}, but after the Australian friend likes the post, the number of likes is \texttt{x + 1}. The Polish friend however, still sees the amount of likes equal to \texttt{x}. Only after some small amount of time, the number of likes synchronizes to \texttt{x + 1}. This is a temporary inconsistency, that the eventual consistency allows. The number of likes is not a crucial data that can cause any issues if it is not consistent.
+This approach enables high availability and low latency because writes can be accepted by a single node without waiting for other nodes to accept and agree of the state of the system. This approach, however, requires adding logic for conflict resolution strategies (rules to decide which data is correct, for example, "the newest write wins") when merging data from different nodes.
+One example can be a like system on a social media platform. Imagine we have two friends, one who lives in Australia and the second one who lives in Poland. Before the Australian friend likes a post, the number of likes is \texttt{x}, but after the Australian friend likes the post, the number of likes is \texttt{x + 1}. The Polish friend however, still sees the amount of likes equal to \texttt{x}. Only after some small amount of time, the number of likes synchronizes to \texttt{x + 1}. This is a temporary inconsistency, that the eventual consistency allows. The number of likes is not a crucial data that can cause any issues if it is not consistent, hence system can allow for temporal inconsistencies.
 
 Having explored both strong consistency (where all nodes always agree) and eventual consistency (where nodes may temporarily disagree), a natural question arises: why do these different models exist? Why can't a distributed system simply provide both perfect consistency and perfect availability at all times? The answer lies in a fundamental theoretical limitation of distributed computing, known as the CAP theorem.
 
@@ -195,31 +195,31 @@ CAP theorem, formulated by Eric Brewer in \cite{brewer}, says that a networked s
     \item \textbf{Partition Tolerance (P):} The system will work even if a network failure occurs or some nodes crash or there are very big delays. The system continues to operate despite an arbitrary number of messages being dropped or delayed by the network between nodes.
 \end{itemize}
 
-\noindent In real-world distributed systems, we cannot have Consistent and Available system, because the distributed system itself is a partitioned system, so for it to work it has to be partition tolerant. For example if a hardware failure or network failure occurs, then there is inevitable Network Partition. Hence in real-world distributed systems, the choice is between Consistency and Availability. Most cache systems focus on Availability, because authors wants to maximize performance. Most cache operate on argument, that if a user wants consistency, they should use database. However, there are cases, where the need of Consistency is more important then availability, for example in banking applications or in any system where data correctness is critical.
+\noindent In real-world distributed systems, we cannot have Consistent and Available system, because the distributed system itself is a partitioned system, so for it to work it has to be partition tolerant. For example if a hardware failure or network failure occurs, then there is inevitable Network Partition. Hence in real-world distributed systems, the choice is between Consistency and Availability. Most cache systems focus on Availability, because authors wants to maximize performance. Most cache operate on argument, that if a user wants consistency, they should use database. However, there are cases, where the need of Consistency is more important then Availability, for example in banking applications or in any system where data correctness is critical.
 
 \noindent The distributed systems are either:
 \begin{enumerate}
-    \item \textbf{CP ((Strong) Consistency + Partition Tolerance):} When partition occurs, system will shut down all non-consistent nodes or refuse writes if the system cannot support them any longer. This approach prioritizes safety over throughput or uptime.
-    \item \textbf{AP (Availability + Partition Tolerance):} When a partition occurs, system will continue to accept write and read requests, with probability that it will return conflicting data. This approach prioritizes throughput, uptime and user-experience over correctness of the data.
+    \item \textbf{CP ((Strong) Consistency + Partition Tolerance):} \label{def:cp} When partition occurs, system will shut down all non-consistent nodes or refuse writes if the system cannot support them any longer. This approach prioritizes safety over throughput or uptime.
+    \item \textbf{AP (Availability + Partition Tolerance):} \label{def:ap} When a partition occurs, system will continue to accept write and read requests, with probability that it will return conflicting data. This approach prioritizes throughput, uptime and user-experience over correctness of the data.
 \end{enumerate}
 In this thesis, I have chosen to implement a CP system, prioritizing data integrity as the primary requirement for the distributed cache.
 
-\section{Split brain problem}
-There are many problems that can occur due to splitting application from one servers into multiple. One of this problem is a Split brain problem, that this system too has to solve.
+\section{The Split-brain problem}
+There are many problems that can occur due to splitting application from one servers into multiple. One of this problem is a Split-brain problem, that this system too has to solve.
 
-Split brain is a problem in distributed system where a network divides the cluster into two or more disconnected groups (sub-clusters). Due to disconnection, the nodes cannot communicate with each other, so each node may incorrectly deduct that other nodes in the other group have died. This creates a situation where separate parts of the system operate independently and accept conflicting writes, believing they are the only active group.
+Split-brain is a problem in distributed system where a network divides the cluster into two or more disconnected groups (sub-clusters). Due to disconnection, the nodes cannot communicate with each other, so each node may incorrectly deduct that other nodes in the other group have died. This creates a situation where separate parts of the system operate independently and accept conflicting writes, believing they are the only active group.
 There are many strategies to manage this problem. Algorithms like Raft only allow a node to become a leader (definition of leader will be explained in next section) if more than half of total nodes agrees. Another solution to this problem is called fencing \label{def:fencing} - a technique that makes a node physically or logically disable its peer to ensure it cannot write to shared storage.
 
 \begin{figure}[h]
     \centering
     \includegraphics[width=\textwidth]{images/image1.png}
-    \caption{Visualization of split brain problem. The network X has been split into subnetworks Y and Z}
+    \caption{Visualization of split-brain problem. The network X has been split into subnetworks Y and Z}
     \label{fig:split_brain}
 \end{figure}
 
-The system has to decide what to do when split brain problem occurs, but that will be described more in chapter 5. However, there already comes a conclusion, that we need some mechanism that disallows any damage this problem can do. Consensus algorithms are one of the possibility to handle split brain problem.
+The system has to decide what to do when split-brain problem occurs, but that will be described more in chapter 5. However, there already comes a conclusion, that we need some mechanism that disallows any damage this problem can do. Consensus algorithms are one of the possibility to handle split-brain problem.
 
-\section{Consensus algorithms}
+\section{Consensus algorithms} \label{sec:consensus_algorithms}
 
 A consensus algorithm is a set of rules that allows all servers in a system to reach a single agreement on the same data or sequence of actions. This ensures that every server has exactly the same information at any given time, even if some of them crash or have network problems. It serves as the backbone of the system I developed for this thesis - the Control Plane is entirely based on it. There are two very popular algorithms: Paxos and Raft.
 
@@ -237,9 +237,10 @@ Before describing how the algorithm works, it is important to note, that it uses
     \item \textbf{State Machine} \label{def:statemachine} - A state machine is the application logic that processes commands and maintains state (data). In a distributed system using Raft, each server has its own local state machine. The fundamental goal of the Raft algorithm is to ensure that all servers' state machines execute the same sequence of commands in the same order, reaching identical states. For example, in a key-value store, the state machine would handle PUT and DELETE operations, and Raft ensures that all replicas agree on which operations occurred and in what order.
     \item \textbf{Leader} - Only one server can be a coordinator of the data at any time. This server is called a leader, and all other servers must treat it as a source of truth. It manages all client requests and coordinates rest of cluster.
     \item \textbf{Elections} - Since system needs a leader to function, there must be a way to pick one. If current leader stops working, nodes start an election to choose a new one.
-    \item \textbf{Logs} - A log is a sequence of entries that store operations sent by users. We need them to keep track of what happened in the system so it can be recovered later.
+    \item \textbf{Logs} - A log is a sequence of entries that store operations sent by users. We need them to keep track of what happened in the system so it can be recovered later. Logs represent exact order of the operations history.
     \item \textbf{Term} - This is a logical clock. It acts as a version number for the Raft algorithm, helping nodes to identify which information is current and which is old.
     \item \textbf{Safety} - Safety is a set of rules that guarantee that nodes never agree on different things for the same operation. It also guarantees that node who crashed and rebooted will not become a leader until the data it has is up to date.
+    \item \textbf{Commit Index} - The index of the highest log entry known to be committed (i.e., stored on a majority of nodes). Once an entry is committed, it is considered permanent and will eventually be applied to all state machines in the cluster.
 \end{itemize}
 
 The Raft algorithm is designed to manage a replicated log on behalf of a state machine, ensuring that all nodes in a cluster eventually agree on the same sequence of operations. One of its fundamental properties is its fault tolerance: Raft ensures that a cluster of $N$ servers can tolerate $F$ failures, where $N = 2F + 1$. This means a majority of nodes must be functional for the system to remain available and consistent.
@@ -268,10 +269,10 @@ Once elected, the leader accepts client commands. A command flows through the fo
     \item It sends \texttt{AppendEntries} RPCs to all followers.
     \item Once a majority of followers acknowledge the entry, the leader marks the entry as committed.
     \item The leader applies the entry to its state machine and returns the result to the client.
-    \item In subsequent heartbeats, the leader notifies followers of the new \texttt{commitIndex}, instructing them to apply the data to their own state machines.
+    \item In subsequent heartbeats, the leader notifies followers of the new \texttt{commitIndex}. This is the highest index known to be safely replicated on a majority of nodes; once followers receive this value, they apply all entries up to that index to their own state machines.
 \end{enumerate}
 
-Raft uses a simple but powerful principle: if the logs between two servers are identical up to some index (both the index positions and the values match), then their entire prefix is also correct. This property enables an efficient optimization where the leader only needs to find the last point where its log matches the follower's log, and then send the suffix (the remaining entries) from that point forward. 
+Raft uses a simple but powerful principle: if the logs between two servers are identical at some index (both the index positions and the values match), then their entire prefix is also identical. This property enables an efficient optimization where the leader only needs to find the last point where its log matches the follower's log, and then send the suffix (the remaining entries) from that point forward. 
 
 \textbf{Example of diverging logs after a network partition:}
 
@@ -280,12 +281,12 @@ Consider a cluster with 5 nodes (A, B, C, D, E) where Server A is the leader in 
     \item Initial state: All servers have log entries [1, 2, 3] from Term 1
     \item A network partition splits the cluster: (A, B) on one side and (C, D, E) on the other
     \item Before the partition is detected, the old leader A receives two client requests and appends them locally: A's log becomes [1, 2, 3, 4, 5]
-    \item Since A cannot reach a majority (only has B), these entries are never committed
+    \item Since A cannot reach a majority (only has B), these entries are never committed while the clients are waiting for acknowledge
     \item The other partition (C, D, E) elects a new leader C in Term 2
     \item Leader C receives different client requests and successfully commits them with majority: C's log becomes [1, 2, 3, 6, 7] where 6 and 7 are from Term 2
     \item The network partition heals
     \item Leader C (with higher term) sends \texttt{AppendEntries} to A
-    \item A detects that C has a higher term, steps down to follower
+    \item A detects that C has a higher Term, steps down to Follower state
     \item C finds that logs match up to index 3 (the prefix [1, 2, 3])
     \item C instructs A to delete uncommitted entries [4, 5] and replace them with the correct suffix [6, 7] from Term 2
     \item A's log is now [1, 2, 3, 6, 7], matching the cluster consensus
@@ -301,12 +302,14 @@ However, the system is working in distributed network, so many problems can occu
 Raft ensures safety via the Election Restriction. Candidate cannot win election if its log is not in the most up to date state. During the voting process, a voter denies its vote if the candidate's log is less up to date than its own by comparing the index and term of the last log entry. Additionally nodes utilize a Term number to detect and reject stale leaders. If a node receives a request from a leader with a lower term than its own, then it will reject that request and force a stale leader to step down. This mechanism guarantees the State Machine Safety property, that is, if a server has applied a log entry at given index to its state machine, then no other server will ever apply a different entry at the same index. This guarantees the prefix is also the same.
 
 \subsubsection{Persistence}
-The safety guarantees described above only work if nodes can remember their state across crashes and restarts. To achieve this, Raft requires each server to persist three critical pieces of information to stable storage (typically hard drive) before responding to any RPC:
+The safety guarantees described above only work if nodes can remember their state across crashes and restarts. To achieve this, Raft requires each server to persist four critical pieces of information to stable storage (typically hard drive) before responding to any RPC:
 \begin{itemize}
     \item \textbf{currentTerm} - The latest term the server has seen. This prevents a restarted node from participating in an old election with a stale term.
     \item \textbf{votedFor} - Which candidate received this server's vote in the current term. This ensures a server doesn't vote twice in the same election after a crash.
-    \item \textbf{log[]} - The entire sequence of log entries. This allows a restarted node to know which operations have been replicated and ensures the log history is never lost. Due to log growing infinitely, the Snapshot mechanism is introduced, which will be described in next section.
+    \item \textbf{log[]} - The entire sequence of log entries. This allows a restarted node to know which operations have been replicated and ensures the log history is never lost.
+    \item \textbf{committedLength} - The index of the highest log entry known to be committed. Persisting this allows the node to know which entries can safely be applied to the state machine after a restart.
 \end{itemize}
+Due to log growing infinitely, the Snapshot mechanism is introduced, that is also saved to persistent storage. Snapshot mechanism will be described in next section. \label{subsec:persistence_desc} 
 
 Without persistence, a node crash or restart might damage the safety of the entire system. Consider the following dangerous scenario:
 
@@ -334,7 +337,7 @@ To address these problems, the snapshot mechanism is introduced. When the log si
 
 Snapshot recovery is straightforward: the system restores its state by loading the key-value pairs from the snapshot file. This recovery process can be performed in parallel, as each key has a single associated value and there are no dependencies or conflicts between different key-value pairs. 
 
-This approach introduces a new problem - instead of replicating logs, the leader has to replicate snapshots too. However, as noted previously, snapshots guarantee to be smaller than the real logs would be, so this is more efficient than log replication. The Leader has to replicate snapshot if a follower is so far behind that the Leader has already discarded the needed log entries to find its latest index where these two servers agree to the prefix of the logs. 
+This approach introduces a new problem - alongside of logs replication, the leader has to replicate snapshots too. However, as noted previously, snapshots guarantee to be smaller than the real logs would be, so this is more efficient than log replication. The Leader has to replicate snapshot if a follower is so far behind that the Leader has already discarded the needed log entries to find its latest index where these two servers agree to the prefix of the logs. 
 
 After establishing the consensus foundation via Raft, the next consideration is how to organize data across multiple servers and how clients interact with the distributed cache. 
 
@@ -405,23 +408,21 @@ A crucial decision is on how the client interacts with the system:
 \end{itemize}
 In this thesis, I have implemented a Smart Client to improve the latency time and for scalability.
 
-Many industrial systems have to solve these problems and most of them solve it differently. Below there are examples of how Redis and Etcd handle consistency.
-
 \section{Overview of existing solutions (Redis Cluster, Etcd) - Analysis in terms of consistency}
 This section compares two distributed key-value stores - Redis Cluster and Etcd, analyzing their architectural choices and consistency guarantees to provide context for the design decisions made in this thesis.
 
 \subsection{Redis Cluster}
-Redis Cluster is the industry standard for distributed caching. It employs a multi-master architecture with asynchronous replication.
+Redis Cluster is the industry standard for distributed caching. It employs a multi-master architecture (where multiple nodes act as "masters" — primary nodes that have the authority to accept and process write operations for their specific subsets of data) with asynchronous replication.
 \begin{itemize}
     \item \textbf{Architecture:} It uses sharding with 16,384 hash slots. Each master node owns a subset of slots and has one or more replicas.
-    \item \textbf{Consistency:} Redis prioritizes Availability and Performance (AP-leaning). By default, replication to slaves is asynchronous. If a master crashes after accepting a write but before replicating it to a slave, and that slave is promoted to master, the write is lost. Redis does not guarantee strong consistency; it provides eventual consistency and high throughput.
+    \item \textbf{Consistency:} Redis prioritizes Availability and Performance (\hyperref[def:ap]{AP-leaning}). By default, replication to slaves is asynchronous. If a master crashes after accepting a write but before replicating it to a slave, and that slave is promoted to master, the write is lost. Redis does not guarantee strong consistency; it provides eventual consistency and high throughput.
 \end{itemize}
 
 \subsection{Etcd}
 Etcd is a distributed key-value store used primarily for shared configuration and service discovery (e.g., in Kubernetes).
 \begin{itemize}
     \item \textbf{Architecture:} It is built strictly on the Raft consensus algorithm. Unlike Redis, it does not shard data by default; every node replicates the full state machine.
-    \item \textbf{Consistency:} Etcd is a CP system guaranteeing strict serializability. Every write goes through the Raft leader and must be committed to a quorum before returning success. This ensures data safety at the cost of lower write throughput compared to Redis.
+    \item \textbf{Consistency:} Etcd is a \hyperref[def:cp]{CP} system guaranteeing strict serializability. Every write goes through the Raft leader and must be committed to a quorum before returning success. This ensures data safety at the cost of lower write throughput compared to Redis.
     \item \textbf{Durability:} Etcd is a system that guarantees durability: Even if a node crash, the data is not lost.
 \end{itemize}
 
@@ -436,11 +437,11 @@ This subsection describes some architectural patterns from production systems th
 Redis Cluster pre-shards the key-space into 16,384 "hash slots". A key is mapped to a slot using a mathematical formula called \texttt{CRC16}: $\text{slot} = \text{CRC16}(\text{key}) \pmod{16384}$ (where modulo gives the remainder of the division).
 \begin{itemize}
     \item \textbf{Inspiration:} My implementation adopts this "Fixed Shard" model. By mapping keys to a constant number of shards (e.g., 10 or 1024) the system decouples the data distribution from the number of physical nodes. 
-    \item \textbf{The Difference:} Redis uses asynchronous replication by default to maximize performance, which can lead to data loss. This system uses \textbf{Synchronous Replication} to ensure Strong Consistency, sacrificing a degree of write latency for the safety guarantees required by the thesis.
+    \item \textbf{The Difference:} Redis uses asynchronous replication by default to maximize performance, which can lead to data loss. This system uses Synchronous Replication to ensure Strong Consistency, sacrificing a degree of write latency for the safety guarantees required by the thesis.
 \end{itemize}
 
 \subsubsection{Amazon Dynamo: Availability vs. Consistency}
-Dynamo is the archetypal "AP" (Available, Partition-Tolerant) system. It uses consistent hashing and eventual consistency mechanisms like \textbf{Vector Clocks} (to track versions of data) and a \textbf{Gossip protocol} (where servers share updates with each other like neighbors sharing rumors) to ensure it is "always on" \cite{dynamo}.
+Dynamo is the archetypal "AP" (Available, Partition-Tolerant) system. It uses consistent hashing and eventual consistency mechanisms like Vector Clocks (to track versions of data) and a Gossip protocol (where servers share updates with each other like neighbors sharing rumors) to ensure it is "always on" \cite{dynamo}.
 \begin{itemize}
     \item \textbf{Inspiration:} Dynamo's concept of a "Preference List" for replication was an inspiration for how the Controller manages shard assignments.
     \item \textbf{The Difference:} Dynamo's philosophy is "eventual consistency." It allows conflicting writes and resolves them later. This system purposefully takes the opposite path: identifying as a "CP" system that uses Raft and fencing to prevent conflicts from ever occurring, matching the strict requirements of linearizability.
@@ -450,7 +451,7 @@ Dynamo is the archetypal "AP" (Available, Partition-Tolerant) system. It uses co
 TiKV is a modern distributed key-value store where every "Region" (shard) is its own independent Raft group \cite{tikv}.
 \begin{itemize}
     \item \textbf{Comparison:} TiKV's approach is the gold standard for massive scalability. However, running 1000 shards would mean running 1000 independent Raft state machines per node, which is computationally expensive.
-    \item \textbf{My Approach:} To balance performance with safety, I separated the system into a \textbf{CP Control Plane} (Raft) and a \textbf{Synchronous Data Plane}. This significantly reduces the overhead; only the cluster metadata (topology) requires the full weight of the Raft algorithm, while data replication is handled by a simpler, faster synchronous \textbf{Primary-Backup protocol} (where the primary just forwards the data directly to its replicas).
+    \item \textbf{My Approach:} To balance performance with safety, I separated the system into a Control Plane (Raft) and a Synchronous Data Plane. This significantly reduces the overhead; only the cluster metadata (topology) requires the full weight of the Raft algorithm, while data replication is handled by a simpler, faster synchronous Primary-Backup protocol (where the primary just forwards the data directly to its replicas).
 \end{itemize}
 
 
@@ -482,12 +483,12 @@ Functional requirements define specific behaviors and functions the system must 
     \item High Availability during maintenance - no downtime when adding or removing nodes and redistributing shards between data nodes.
 \end{itemize}
 
-Now that the system requirements are known, the next section will describe high level architecture of a system. More detailed architecture is described in chapter 5.
+Now that the system requirements are known, the next section will describe high level architecture of a system. 
 
 \section{High-Level Architecture}
 The system, that is cluster of servers, is split into two logical parts: the Control Plane and the Data Plane. Some of the servers are assigned to be part of the Control Plane, while others are assigned to the Data Plane. The part of architecture into which the server is assigned will dictate how it will behave and what it will do.
 
-Topology is defined as current configuration and state of the nodes of the entire system - which nodes exist, what's their status - failed or active, which shards they are responsible for and which role they play (primary or replica) for each shard. The topology includes an Epoch counter that says how many times the topology has changed. Epoch counter allows to logic about many things about the system, in particular it may detect incorrect requests if the epoch number is too old and make the client refetch the topology.
+Topology is defined as current configuration and state of the nodes of the entire system - which nodes exist, what's their status - failed or active, which shards they are responsible for and which role they play (primary or replica) for each shard. The topology includes an \hyperref[def:epoch]{Epoch} counter that says how many times the topology has changed. \hyperref[def:epoch]{Epoch} counter allows to logic about many things about the system, in particular it may detect incorrect requests if the epoch number is too old and make the client refetch the topology.
 
 \subsection{High-Level request flow}
 
@@ -548,8 +549,8 @@ The following sections will go into more details of each component design.
 The Control Plane is responsible for:
 \begin{itemize}
     \item Running a Raft consensus algorithm that stores cluster metadata: topology, shard mapping, node status, and an epoch counter. Epoch is used as a counter for which "version" of application is currently running. The version changes when rebalancing occurs, for example when some nodes fail and replica becomes a primary node. 
-    \item Exposing internal HTTP endpoints used by DataNodes for pull based shard migration.
-    \item Performing node failure detection (via the `Reaper` - a background process that checks if nodes are still alive) and initiating rebalancing.
+    \item Exposing internal HTTP endpoints used by data nodes for pull based shard migration.
+    \item Performing node failure detection (via the 'Reaper' - a background process that checks if nodes are still alive) and initiating rebalancing.
 \end{itemize}
 
 \noindent The Data Plane is responsible for:
@@ -560,12 +561,12 @@ The Control Plane is responsible for:
     \item Replicating data across replicas to ensure strong consistency and fault tolerance.
 \end{itemize}
 
-\noindent \textbf{Synchronous Primary-Backup Replication:} Unlike the Control Plane which uses Raft, the Data Plane employs a simpler but effective replication strategy. Each shard has a designated primary node and one or more replica nodes. When a client writes data, the primary node synchronously replicates the write to all replicas before acknowledging the client. This means the primary waits for all replicas to confirm they have saved the data before returning success to the client. This approach ensures strong consistency—if a write succeeds, all nodes have the data, guaranteeing that subsequent reads will always see that write. The trade-off is that writes are slower than asynchronous replication (where the primary acknowledges immediately without waiting), but this is necessary to meet the system's strong consistency requirement.
+\noindent \textbf{Synchronous Primary-Backup Replication:} Unlike the Control Plane which uses Raft, the Data Plane employs a simpler but effective replication strategy. Each shard has a designated primary node and one or more replica nodes. When a client writes data, the primary node synchronously replicates the write to all replicas before acknowledging the client. This means the primary waits for all replicas to confirm they have saved the data before returning success to the client. This approach ensures strong consistency. If a write succeeds, all nodes have the data, guaranteeing that subsequent reads will always see that write. The tradeoff is that writes are slower than asynchronous replication (where the primary acknowledges immediately without waiting), but this is necessary to meet the system's strong consistency requirement.
 
 To minimize the time for RPC calls in internode communication, gRPC is used.
 
 \subsection{gRPC Communication Protocol and Interface Definition} \label{subsec:grpc_protocol}
-gRPC is a high-performance Remote Procedure Call (RPC) framework developed by Google. It uses Protocol Buffers as its interface definition language (a set of rules for how messages should look) and message serialization format (the process of turning data into a compact binary format that can be sent over the network). This provides an alternative to traditional JSON-over-HTTP, which results in smaller payloads (the actual data being sent) and faster processing.
+gRPC is a high-performance Remote Procedure Call (RPC) framework developed by Google. It uses Protocol Buffers as its interface definition language (a set of rules for how messages should look) and message serialization format (the process of turning data into a compact binary format that can be sent over the network). This provides an alternative to traditional JSON over HTTP, which results in smaller payloads (the actual data being sent) and faster processing.
 
 The system utilizes a dedicated gRPC service for the Control Plane's Raft operations. We define six core methods and ten data types in the \texttt{raft.proto} file - a configuration file for Protocol Buffer to automatically generate Go code that defines all structs and functions:
 
@@ -595,12 +596,12 @@ As previously mentioned, the Control Plane is mainly responsible for storing the
 \subsection{Cluster Topology and Metadata Management}
 Topology data includes:
 \begin{itemize}
-    \item Nodes map: node ID mapped to NodeMetadata (address, status, last heartbeat timestamps).
-    \item Shards map: shard ID mapped to ShardMetadata (primary ID, replica ID, status).
-    \item Epoch: a monotonically increasing identifier used for conflict-free updates.
+    \item Nodes map: node ID mapped to node metadata (address, status, last heartbeat timestamp).
+    \item Shards map: shard ID mapped to shard metadata (primary ID, replica ID, status).
+    \item Epoch: a monotonically increasing identifier used for conflict free updates.
 \end{itemize}
 
-The Controller updates the cluster topology using the Raft algorithm. I want to ensure that the Control Plane provides strong consistency, because if it did not, then the system as a whole would not be strongly consistent. This is because, if there were conflicts in the Control Plane, a client might send a request to the wrong DataNode, hence creating an inconsistent state which would fail to guarantee a "correct response on every request".\\
+The Controller updates the cluster topology using the Raft algorithm. I want to ensure that the Control Plane provides strong consistency, because if it did not, then the system as a whole would not be strongly consistent. This is because, if there were conflicts in the Control Plane, a client might send a request to the wrong data node, hence creating an inconsistent state which would fail to guarantee a "correct response on every request".\\
 
 Rebalancing uses the Control Plane's active nodes to determine which node should be primary and which should be a replica. It then writes the new configuration to the Raft Log, which is distributed among every other Controller in the Control Plane. 
 
@@ -613,7 +614,7 @@ Having established how the Control Plane detects failures and maintains an accur
 
 \subsection{Sharding strategy: Fixed Shard Model}
 
-As described previously, the system employs a fixed shard model, inspired by Redis Cluster. The keyspace is pre-partitioned into a fixed number of shards that is a configurable value. Each key is deterministically mapped to a shard using hashing. 
+As described previously, the system employs a fixed shard model, inspired by Redis Cluster. The keyspace is prepartitioned into a fixed number of shards that is a configurable value. Each key is deterministically mapped to a shard using hashing. 
 
 This approach decouples data distribution from the number of physical nodes. There can be 1024 shards defined, but only 5 nodes present, where each node would handle around 200 shards. When a new node joins, it will take ownership of some shard IDs without requirement of rehashing all existing keys.
 
@@ -730,7 +731,7 @@ However, as previously mentioned, the primary node can fail, but the request to 
 
 \subsection{Client-Side Idempotency}
 
-To handle the case where a write succeeds on the server but the acknowledgment is lost (e.g., due to network issues or node failure), the client includes a unique idempotency token with each write or delete operation. This token is a UUID that uniquely identifies the request.
+To handle the case where a write succeeds on the server but the acknowledgment is lost (e.g., due to network issues or node failure), the client includes a unique idempotency token with each write or delete operation. This token is a UUID (randomly generated string with low probability of of colliding that server as an id) that uniquely identifies the request.
 
 When the client retries a request, it includes the same token. The Data Plane (and its replicas) track which tokens have been processed. If a retry arrives with a token that has already been processed, the server recognizes it as a duplicate and returns success without re-executing the operation.
 
@@ -764,7 +765,7 @@ Unlike simple implementations that wrap the entire state in a single mutex, the 
 In chapter 3 I mentioned that gRPC integration with Raft is important. Below is a description of said interaction.
 
 \subsection{gRPC Connection Management}
-Maintaining stable gRPC connections in a dynamic cluster is handled by the \texttt{ConnectionManager}. This component must be configured with parameters such as initial backoff duration, maximum backoff duration, and health check intervals—these values are provided through environment variables when starting the system (showcased in Appendix).
+Maintaining stable gRPC connections in a dynamic cluster is handled by the \\ \texttt{ConnectionManager}. This component must be configured with parameters such as initial backoff duration, maximum backoff duration, and health check intervals—these values are provided through environment variables when starting the system (showcased in Appendix).
 \begin{itemize}
     \item \textbf{Lazy Initialization:} Connections to peers are only established when needed (e.g., during the first replication attempt or vote request).
     \item \textbf{Exponential Backoff with Jitter:} If a connection fails, the manager uses a backoff strategy (waiting longer and longer between retries, starting at 100\,ms up to 5\,s) with added randomization (jitter). This prevents the "Thundering Herd" problem where all nodes try to reconnect to a recovering leader at the exact same moment, potentially overwhelming its network capacity.
@@ -794,7 +795,7 @@ The \texttt{Elector} manages the node's election timer using a randomized timeou
 \begin{enumerate}
     \item \textbf{Timer Loop:} A dedicated goroutine (one that does only this task) runs \texttt{electionTimerLoop}, which listens on a \texttt{resetTimerCh}. This channel allows other components (like heartbeats or valid AppendEntries RPCs) to reset the timer efficiently.
     \item \textbf{Safety Checks:} Before starting an election, the node verifies it is not currently the leader and is not in the middle of installing a snapshot, as snapshot installation is a heavy I/O operation that might temporarily delay heartbeat processing.
-    \item \textbf{Parallel Requests:} When a node becomes a Candidate, it broadcasts \texttt{VoteRequest} RPCs to all peers in parallel using individual goroutines, ensuring the election process is as fast as the fastest majority of the network.
+    \item \textbf{Parallel Requests:} When a node becomes a Candidate, it broadcasts \\ \texttt{VoteRequest} RPCs to all peers in parallel using individual goroutines, ensuring the election process is as fast as the fastest majority of the network.
 \end{enumerate}
 
 With the leader elected, the data must be distributed to the other servers, log replication does that.
@@ -809,7 +810,7 @@ Each \texttt{Replicator} maintains its own state for a specific peer, including 
 \begin{itemize}
     \item \textbf{Fault Isolation:} A slow or disconnected follower does not block replication to other healthy nodes.
     \item \textbf{Instant vs. Periodic Replication:} The replicator waits on a \texttt{signalCh}. When the leader receives a new client request, it "pulses" this channel to trigger immediate replication. If no writes occur, a 50\,ms ticker (repeating timer) ensures periodic heartbeats are sent to maintain leadership.
-    \item \textbf{Self-Healing Quorum:} If a replicator detects too many consecutive failures (defined in \texttt{maxConsecutiveFailures}), it triggers a \texttt{checkQuorumHealth()} call, which can cause a leader to step down if it realizes it no longer has a healthy majority.
+    \item \textbf{Self-Healing Quorum:} If a replicator detects too many consecutive failures (defined in \texttt{maxConsecutiveFailures} config variable), it triggers a \\ \texttt{checkQuorumHealth()} call, which can cause a leader to step down if it realizes it no longer has a healthy majority.
 \end{itemize}
 
 With this architecture in place, the next question is how the leader prepares and sends log entries to its followers.
@@ -913,12 +914,12 @@ The Control Plane node is the central orchestrator of the entire application. It
 
 \subsection{Topology State Machine}
 
-The core of the Control Plane is a Replicated \hyperref[def:statemachine]{State Machine} (a system where every controller has its own identical copy of the state) responsible for managing cluster metadata. This ensures that, in a multi-node setup, all controller instances agree on which DataNode holds which shard. To make sure that Control Plane's data is consistent and correct, the Raft algorithm is used. \\
+The core of the Control Plane is a Replicated \hyperref[def:statemachine]{State Machine} (a system where every controller has its own identical copy of the state) responsible for managing cluster metadata. This ensures that, in a multi-node setup, all controller instances agree on which data node holds which shard. To make sure that Control Plane's data is consistent and correct, the Raft algorithm is used. \\
 The state represents:
 \begin{itemize}
     \item Epoch: A monotonically increasing number representing the version of the topology. This works similarly to a Raft term. It stores the information how many times the topology has changed due to node failures or addition or removal.
-    \item Nodes: A map of all registered DataNodes with information about their addresses and statuses.
-    \item Shards: A map of all shard IDs to their primary and replica DataNode IDs.
+    \item Nodes: A map of all registered data nodes with information about their addresses and statuses.
+    \item Shards: A map of all shard IDs to their primary and replica data node IDs.
 \end{itemize}
 
 The Control Plane implements the Raft application interface, processing commands such as node registration and topology updates. Changes to the topology are not applied until they are committed by the Raft algorithm to ensure strong consistency. When a command is sent to the controller, it updates its local configuration and, if the controller is the leader, it may trigger a rebalance. To prevent the Raft log from growing infinitely, the system supports snapshots, which save the current cluster configuration to durable storage. 
@@ -965,7 +966,7 @@ Rebalancing is responsible for ensuring that data availability and the even dist
 The Control Plane exposes HTTP endpoints that provide a simplified interface for external communication. These endpoints abstract the complexity and allow client and Data Plane to perform operations without needing to understand the mechanisms of the Control Plane.
 
 \subsection{Controller HTTP API Reference}
-The Control Plane exposes several internal and external HTTP endpoints. These are used by DataNodes for registration and by the Smart Client for topology discovery.
+The Control Plane exposes several internal and external HTTP endpoints. These are used by data nodes for registration and by the Smart Client for topology discovery.
 
 \begin{table}[h!]
 \centering
@@ -974,7 +975,7 @@ The Control Plane exposes several internal and external HTTP endpoints. These ar
 \begin{tabularx}{\textwidth}{|l|l|X|}
 \hline
 \textbf{Endpoint} & \textbf{Method} & \textbf{Description} \\ \hline
-\texttt{/register} & POST & Registers a new DataNode with its address. \\ \hline
+\texttt{/register} & POST & Registers a new data node with its address. \\ \hline
 \texttt{/heartbeat} & POST & Receives health updates and returns the current Epoch. \\ \hline
 \texttt{/topology} & GET & Returns the full JSON description (a standard text-based data format) of the cluster state. \\ \hline
 \texttt{/pull} & POST & Triggers a shard migration from a source to a target node. \\ \hline
@@ -985,7 +986,7 @@ While emergency promotion handles sudden failures, the system also manages the l
 \subsubsection{Scaling Up: The Lazy Assignment Strategy}
 The system uses a fixed shard model inspired by Redis Cluster, where the keyspace is pre-partitioned into a configurable number of shards (e.g., 10 or 1024). Each key is deterministically mapped to a shard using a hash function: \texttt{shardID = hash(key) \% totalShards}. This decouples data distribution from the number of physical nodes.
 
-When a new DataNode registers, the \texttt{Rebalance()} function is invoked and follows a \textit{Lazy Assignment} strategy:
+When a new data node registers, the \texttt{Rebalance()} function is invoked and follows a \textit{Lazy Assignment} strategy:
 \begin{itemize}
     \item \textbf{Automatic Shard Assignment:} New nodes are automatically assigned as primaries for shards that do not yet have a primary. The system uses a round-robin approach (an approach in which the choice is circular - it goes in loop to choose a server) to distribute primaries evenly across all active nodes. For example, if the cluster has 10 shards and 3 nodes join, Node 1 might get shards 0, 3, 6, 9; Node 2 gets shards 1, 4, 7; and Node 3 gets shards 2, 5, 8.
     \item \textbf{Replica Population:} After assigning primaries, the rebalancer identifies shards that lack the desired number of replicas and assigns new nodes as replicas. 
@@ -1001,12 +1002,12 @@ Similarly to data growing infinitely, sometimes the data might shrink to not nee
 \subsubsection{Scaling Down and Replica Recovery}
 The system treats a deliberate node removal similarly to a failure. If a node is decommissioned:
 \begin{itemize}
-    \item \textbf{Redundancy Restoration:} If the removed node was a replica, the \texttt{Rebalance} logic detects that the shard's replication factor has decreased. It automatically identifies another healthy node in the cluster and triggers a data pull to restore the backup.
+    \item \textbf{Redundancy Restoration:} If the removed node was a replica, the \\ \texttt{Rebalance} logic detects that the shard's replication factor has decreased. It automatically identifies another healthy node in the cluster and triggers a data pull to restore the backup.
     \item \textbf{Safe Promotion:} If the node was a primary, promotion happens first, followed by replica restoration on a different node.
 \end{itemize}
 This ensures that the cluster is self healing regarding its durability guarantees; as long as there is a spare node in the cluster, the system will always attempt to maintain the configured number of replicas for every shard.
 
-As described in Chapter 2, the common problem of distributed systems is the split brain problem. It is characterized by nodes losing connection to each other and in result a cluster splitting from one into two or more. 
+As described in Chapter 2, the common problem of distributed systems is the split-brain problem. It is characterized by nodes losing connection to each other and in result a cluster splitting from one into two or more. 
 
 \subsection{Lease Management and Fencing}
 
@@ -1031,13 +1032,13 @@ Next chapter will describe how the Data Plane manages synchronization with the C
 
 The Data Plane maintains consistency through coordination with the Control Plane. \\
 
-The Data Plane ensures that the topology is always synchronized. Heartbeat responses contain the latest Epoch. If the Epoch is higher than the node's local Epoch value, the lease manager will immediately fetch the latest topology from the Control Plane and update the local state. This ensures that the DataNode is always aware of the role assigned to it by the Control Plane—whether it is a primary node or a replica.\\
+The Data Plane ensures that the topology is always synchronized. Heartbeat responses contain the latest Epoch. If the Epoch is higher than the node's local Epoch value, the lease manager will immediately fetch the latest topology from the Control Plane and update the local state. This ensures that the data node is always aware of the role assigned to it by the Control Plane—whether it is a primary node or a replica.\\
 
-The Data Plane also uses epoch-based fencing. If a node has an active lease, every write request must include an Epoch. The DataNode compares the client's Epoch to its own; if the request's Epoch is smaller than the local one, the request is rejected with a \texttt{412 Precondition Failed} status, preventing stale writes from delayed clients that have yet to refetch the current topology.\\
+The Data Plane also uses epoch-based fencing. If a node has an active lease, every write request must include an Epoch. The data node compares the client's Epoch to its own; if the request's Epoch is smaller than the local one, the request is rejected with a \texttt{412 Precondition Failed} status, preventing stale writes from delayed clients that have yet to refetch the current topology.\\
 
-The final synchronization mechanism is primary-backup replication. If a DataNode is a primary, it is responsible for replicating writes to all replica nodes. This replication is \textbf{synchronous} (meaning the system waits for all replicas to finish before returning a success message to the user). This makes the system \textbf{strongly consistent}, as a request is only accepted if all replicas and the primary node have successfully saved it. This also provides a form of durability, as the system preserves data as long as at least one replica remains alive.\\
+The final synchronization mechanism is primary-backup replication. If a data node is a primary, it is responsible for replicating writes to all replica nodes. This replication is synchronous (meaning the system waits for all replicas to finish before returning a success message to the user). This makes the system strongly consistent, as a request is only accepted if all replicas and the primary node have successfully saved it. This also provides a form of durability, as the system preserves data as long as at least one replica remains alive.\\
 
-\noindent \textbf{Note:} \label{subsec:consistency_note} The strong consistency definition in Chapter \ref{subsubsec:strong_consistency} states that:
+\noindent \textbf{Note:} \label{subsec:consistency_note} The strong consistency definition in Chapter 2 states that:
 \begin{itemize}
     \item If operation A completes (the client receives an OK), then every operation B that starts after A finishes must see the effect of A.
     \item If an operation A is in-flight or timed out, it is allowed to either "have happened" or "not have happened," provided the system remains consistent about that choice thereafter.
@@ -1057,7 +1058,7 @@ Shard synchronization is a crucial part of the system. Two data nodes - a source
 
 Similarly to the Control Plane, to abstract the implementation of operations, the data node also exposes HTTP endpoints for its operations.
 
-\subsection{DataNode HTTP API Reference}
+\subsection{data node HTTP API Reference}
 Data Plane nodes expose endpoints for client CRUD operations and internal synchronization.
 
 \begin{table}[h!]
@@ -1091,13 +1092,13 @@ The client maintains a local copy of the cluster topology fetched from the Contr
 \begin{enumerate}
     \item Hash the key using the FNV-1a algorithm (see Section \ref{subsec:fnv1a}).
     \item Determine the shard ID by taking the hash modulo the number of shards.
-    \item Look up the primary DataNode ID for that shard in the local cache.
-    \item Send the request to the identified primary DataNode.
+    \item Look up the primary data node ID for that shard in the local cache.
+    \item Send the request to the identified primary data node.
 \end{enumerate}
 
-\noindent The client is lazy but reactive, continuing to use its local cache as long as it remains valid. Cache validity is determined by DataNode responses: 
+\noindent The client is lazy but reactive, continuing to use its local cache as long as it remains valid. Cache validity is determined by data node responses: 
 \begin{enumerate}
-    \item \texttt{412 Precondition Failed}: The client's Epoch is too old; the DataNode has a newer Epoch.
+    \item \texttt{412 Precondition Failed}: The client's Epoch is too old; the data node has a newer Epoch.
     \item \texttt{400 Not Primary}: The shard has migrated or a failover has occurred.
 \end{enumerate}
 \noindent In both cases, the client must refetch the topology and associated metadata from the Control Plane (as described in Section \ref{subsec:query_routing}) and update its local cache. 
@@ -1143,8 +1144,8 @@ The \texttt{api.Server} acts as a wrapper around the Raft node. When an HTTP req
 \subsection{Idempotency and Resilience}
 Distributed consistency requires handling retries safely. The API layer implements two critical sub-components:
 \begin{enumerate}
-    \item \textbf{Idempotency Cache:} To prevent the same administrative command from being executed twice (for example, registering the same DataNode multiple times due to a network timeout), the server tracks request IDs in an \texttt{IdempotencyCache}. It discards duplicate requests before they reach the Raft log.
-    \item \textbf{Auto-Retrier:} Transient failures are handled by a \texttt{Retrier} component, which automatically retries idempotent operations if the connection to the leader is interrupted, ensuring high availability for Control Plane operations.
+    \item \textbf{Idempotency Cache:} To prevent the same administrative command from being executed twice (for example, registering the same data node multiple times due to a network timeout), the server tracks request IDs in an \texttt{IdempotencyCache}. It discards duplicate requests before they reach the Raft log.
+    \item \textbf{Auto-Retrier:} Transient failures are handled by a \\ \texttt{Retrier} component, which automatically retries idempotent operations if the connection to the leader is interrupted, ensuring high availability for Control Plane operations.
 \end{enumerate}
 
 \subsection{Client API Reference}
@@ -1175,7 +1176,7 @@ The following table lists the endpoints exposed by the API server for external i
 
 \section{Methodology for testing distributed systems}
 
-As testing distributed systems requires independent servers I considered two options. First option was to run tests using multiple computers. This option however wasn't developer friendly. Every time I would want to test my system I had to boot multiple computers, synchronize data through version control system, then set it up. This would take too much time and effort just to run some basic testing. Thats where the second option came in - I simulated distributed servers using \textbf{Docker Containers} \cite{docker} (a way to package and run software in an isolated environment). As I can control almost everything about Docker Containers - restarts, failures, networks, this was my way of testing.
+As testing distributed systems requires independent servers I considered two options. First option was to run tests using multiple computers. This option however wasn't developer friendly. Every time I would want to test my system I had to boot multiple computers, synchronize data through version control system, then set it up. This would take too much time and effort just to run some basic testing. Thats where the second option came in - I simulated distributed servers using Docker Containers \cite{docker} (a way to package and run software in an isolated environment). As I can control almost everything about Docker Containers - restarts, failures, networks, this was my way of testing.
 
 To facilitate consistent and repeatable testing, the entire system is orchestrated using \texttt{docker-compose}. The current setup simulates a cluster composed of 3 Controllers and 5 Data Nodes. This configuration is defined in the \texttt{docker-compose.yml} file, which manages:
 \begin{itemize}
@@ -1194,14 +1195,14 @@ As noted in chapter 3, Raft is a central thing in Control Plane, and Control Pla
     \item persistence - saving logs, loading logs, comparing whether loaded logs are correct, saving empty logs, saving to invalid paths, saving to corrupted file
     \item snapshot - whether indexes in log are correct after snapshot, whether snapshot is saved correctly - after load to we have correct data, checking whether log is truncated after snapshot, test for snapshot installation rpc, checking whether snapshot will run if below threshold or log empty, checking whether snapshot creates with any directory problems
 \end{itemize}
-\noindent But as far as \textbf{unit tests} (tests that check a single small part of the code in isolation) can go, they cannot test how parts of the system behaves in terms of each other. There come \textbf{integration tests} (tests that check if different parts of the system work together correctly):
+\noindent But as far as unit tests (tests that check a single small part of the code in isolation) can go, they cannot test how parts of the system behaves in terms of each other. There come integration tests (tests that check if different parts of the system work together correctly):
 \begin{itemize}
     \item Full test of election, writing to a log and replication of this log to other nodes
     \item Test of forwarding to a leader if broadcast is sent to non-leader node 
     \item Test of Raft recovery - whether node will have correct values after it crashes 
 \end{itemize}
 
-\noindent There was also a \textbf{benchmark} (a test used to measure the performance or speed of a system) created for Raft only. It tried to run as many requests per second as possible. On Macbook Air M1 2020, 16GB RAM it achieved around 290k requests per second.
+\noindent There was also a benchmark (a test used to measure the performance or speed of a system) created for Raft only. It tried to run as many requests per second as possible. On Macbook Air M1 2020, 16GB RAM it achieved around 290k requests per second.
 
 \section{Simulation of failures and network partitioning}
 
@@ -1234,7 +1235,7 @@ The two primary verification scripts are:
 \noindent All of these tests succeeded, guaranteeing that the system is Strongly Consistent and Partition Tolerant.
 
 \section{Continuous Integration (CI/CD)}
-To maintain code quality and prevent regressions (new bugs in old code) during development, I implemented a \textbf{Continuous Integration} (CI) pipeline—an automated process that builds and tests the code every time a change is made—using \textbf{GitHub Actions}. The workflow is defined in \texttt{.github/workflows/go.yml} and performs the following steps on every pull request or push to the main branch:
+To maintain code quality and prevent regressions (new bugs in old code) during development, I implemented a Continuous Integration (CI) pipeline—an automated process that builds and tests the code every time a change is made—using \textbf{GitHub Actions}. The workflow is defined in \texttt{.github/workflows/go.yml} and performs the following steps on every pull request or push to the main branch:
 \begin{itemize}
     \item \textbf{Environment Provisioning:} It sets up a Linux environment with the required Go version (currently 1.24).
     \item \textbf{Dependency Caching:} To optimize execution time, the pipeline caches Go modules and build artifacts, typically reducing the build stage duration by over 50\%.
@@ -1249,14 +1250,14 @@ This automated feedback loop was essential for the rapid development of complex 
 
 \section{Benchmarks}
 The primary advantage of a cache is its speed. If performance were not a priority, a traditional database would be a more suitable choice. Consequently, a thorough performance analysis is crucial. \\
-I conducted benchmarks to calculate the \textbf{Requests Per Second (RPS)} (the \hyperref[def:throughput]{throughput} or speed) the cache can support. Each benchmark was executed for 10\,seconds using 100 workers (clients) implemented as threads. Unless specified otherwise in test, all tests will use 100 workers. The tool issues as many write requests as possible, with each request targeting a unique key. After 10\,seconds, the total number of requests is divided by 10 to determine the average RPS. \\
+I conducted benchmarks to calculate the Requests Per Second (RPS) (the \hyperref[def:throughput]{throughput} or speed) the cache can support. Each benchmark was executed for 10\,seconds using 100 workers (clients) implemented as threads. Unless specified otherwise in test, all tests will use 100 workers. The tool issues as many write requests as possible, with each request targeting a unique key. After 10\,seconds, the total number of requests is divided by 10 to determine the average RPS. \\
 
 \noindent The benchmarks were performed on a MacBook Air M1 (2020) with 16\,GB of RAM, running macOS Tahoe 15.1.
 
 To ensure objective and reproducible results, I developed a suite of benchmarking tools located in the \texttt{tests/benchmark/} directory:
 \begin{itemize}
     \item \texttt{benchmark\_rps.go}: A high-performance Go based benchmark that measures maximum RPS using \hyperref[def:goroutine]{goroutines} and connection pooling.
-    \item \texttt{benchmark\_scaling.sh}: Orchestrates tests across multiple cluster configurations to measure \textbf{horizontal scaling} (adding more servers to increase performance) efficiency.
+    \item \texttt{benchmark\_scaling.sh}: Orchestrates tests across multiple cluster configurations to measure horizontal scaling (adding more servers to increase performance) efficiency.
     \item \texttt{benchmark\_raft\_delay.sh}: Evaluates the impact of consensus latency on Control Plane performance by injecting artificial Raft processing delays.
     \item \texttt{benchmark\_comparison.sh}: Automates the deployment of both this system and competitor systems (Etcd, Redis) to provide direct side-by-side performance comparisons.
 \end{itemize}
@@ -1267,7 +1268,7 @@ To ensure objective and reproducible results, I developed a suite of benchmarkin
 
 \begin{table}[h!]
 \centering
-\caption{Client Scaling (One DataNode)}
+\caption{Client Scaling (One data node)}
 \label{tab:client_scaling}
 \begin{tabular}{|c|c|}
 \hline
@@ -1282,11 +1283,11 @@ Workers & RPS \\ \hline
 
 \begin{table}[h!]
 \centering
-\caption{Horizontal Scaling (Multiple DataNodes, No Replication)}
+\caption{Horizontal Scaling (Multiple data nodes, No Replication)}
 \label{tab:horizontal_scaling}
 \begin{tabular}{|c|c|c|}
 \hline
-DataNodes & Combined RPS & Scaling \\ \hline
+data nodes & Combined RPS & Scaling \\ \hline
 1 & 28,460 & 1.0x \\ \hline
 2 & 55,001 & 1.93x \\ \hline
 3 & 72,731 & 2.56x \\ \hline
@@ -1446,7 +1447,7 @@ The project is organized into a modular directory structure that separates diffe
     
     \item \textbf{scripts/} - Utility scripts for cluster management, including starting, stopping, and cleaning up the cluster
     
-    \item \textbf{proto/} - Protocol Buffer definitions for gRPC communication (contains \texttt{raft.proto})
+    \item \textbf{proto/} - Protocol Buffer definitions for gRPC communication (contains \\ \texttt{raft.proto})
 
 \end{itemize}
 
@@ -1461,16 +1462,16 @@ System requires Docker to be installed with Docker Compose addition. The system 
 If user wants to test the system and does not need to scale it yet, it is better to set up the project on local computer as it's faster and more convenient. \\
 The easiest way to start the cluster is using the provided script in the root directory of the project: \texttt{run\_local.sh}. This script provides an interactive menu that automates the deployment and management of the system. It handles the following tasks:
 \begin{itemize}
-    \item \textbf{Cluster Lifecycle:} It builds the necessary binaries and starts a base cluster consisting of three Controllers (forming a Raft quorum) and one initial DataNode.
-    \item \textbf{Dynamic Scaling:} It allows the user to easily scale the cluster by adding additional DataNodes (\texttt{datanode-2} through \texttt{datanode-5}) at runtime. This is particularly useful for observing the automatic shard rebalancing mechanism in action.
-    \item \textbf{Fault Simulation:} It provides an option to stop specific DataNodes, allowing the user to verify the system's resilience and its ability to promote replicas to primary status.
+    \item \textbf{Cluster Lifecycle:} It builds the necessary binaries and starts a base cluster consisting of three Controllers (forming a Raft quorum) and one initial data node.
+    \item \textbf{Dynamic Scaling:} It allows the user to easily scale the cluster by adding additional data nodes (\texttt{datanode-2} through \texttt{datanode-5}) at runtime. This is particularly useful for observing the automatic shard rebalancing mechanism in action.
+    \item \textbf{Fault Simulation:} It provides an option to stop specific data nodes, allowing the user to verify the system's resilience and its ability to promote replicas to primary status.
     \item \textbf{Interactive Testing:} It can launch the \texttt{raftcli} tool directly inside the Docker network. This allows for immediate testing of the cache with commands like \texttt{put} and \texttt{get}. Furthermore, the CLI's \texttt{load} command can be used to insert mock data (e.g., thousands of keys) to test the system's performance and data distribution.
     \item \textbf{Observability:} It includes a shortcut for viewing real-time logs of any specific service, which is essential for debugging and monitoring the Raft consensus process.
 \end{itemize}
 
 However, if user wants to do it himself, user should define a docker compose file with controllers for Control Plane. It is recommended to use at least 3 controllers, as only 1 will not guarantee any availability when it fails. \\
 
-The docker compose example is given in the root directory as \texttt{docker-compose.yml}. It has defined:
+The docker compose example is given in the root directory as \\ \texttt{docker-compose.yml}. It has defined:
 \begin{itemize}
     \item Controllers - the Dockerfile for building them is given in \texttt{deploy/Dockerfile}, however user can create any Dockerfile. It should use \texttt{cmd/controller} package to compile the binary. The Controller in Dockerfile needs a list of environment variables to be set:
     \begin{itemize}
@@ -1498,14 +1499,14 @@ The docker compose example is given in the root directory as \texttt{docker-comp
 
     Controllers should also have exported ports and defined volumes for the data saves to be persistent. 
     
-    \item DataNodes - the Dockerfile is given in \texttt{deploy/Dockerfile.datanode}. They use the \texttt{cmd/datanode} package. Required variables:
+    \item data nodes - the Dockerfile is given in \texttt{deploy/Dockerfile.datanode}. They use the \texttt{cmd/datanode} package. Required variables:
     \begin{itemize}
         \item \texttt{CONTROLLER\_URL}: The address of one of the controllers to perform registration and heartbeat (e.g., \texttt{http://controller-0:8080}).
-        \item \texttt{NODE\_ID}: The unique identifier/address of the DataNode itself.
+        \item \texttt{NODE\_ID}: The unique identifier/address of the data node itself.
         \item \texttt{LEASE\_DURATION}: The time after which a node is considered dead if no heartbeat is received.
     \end{itemize}
 
-    DataNodes should also have exported ports and should be dependent on any of the controllers, so it can register and heartbeat.
+    data nodes should also have exported ports and should be dependent on any of the controllers, so it can register and heartbeat.
 \end{itemize}
 
 \subsubsection{Multi server setup}
@@ -1513,7 +1514,7 @@ If user wants to use multiple servers, he should fetch the repository on each of
 
 Data nodes can be added at any time, as long as they point to a correct controller IP address. The Control Plane is meant to handle the registration automatically. 
 
-Please note that this implementation is designed for demonstration and research purposes and is not intended for production environments. It lacks advanced features such as edge proxying or industrial-grade load balancing, which should be provided by specialized infrastructure in a commercial deployment. Furthermore, the setup requires robust network connectivity; all controllers and DataNodes must be able to communicate bidirectionally. Users must ensure that the networks defined in the \texttt{docker-compose.yml} file are properly routed across physical hosts and that all necessary ports are correctly mapped and accessible.
+Please note that this implementation is designed for demonstration and research purposes and is not intended for production environments. It lacks advanced features such as edge proxying or industrial-grade load balancing, which should be provided by specialized infrastructure in a commercial deployment. Furthermore, the setup requires robust network connectivity; all controllers and data nodes must be able to communicate bidirectionally. Users must ensure that the networks defined in the \texttt{docker-compose.yml} file are properly routed across physical hosts and that all necessary ports are correctly mapped and accessible.
 
 \section{Using the CLI}
 
