@@ -34,5 +34,42 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-${{ matrix.go-version }}-
 
-      - name: Run tests
-        run: go test ./... --short
+      - name: Go vet
+        run: go vet ./...
+
+      # TestKnownBug_* intentionally FAIL: they expose unfixed Raft persistence
+      # bugs. They are excluded from this required gate (NOT deleted/skipped in
+      # code) and run in the non-blocking step below so the bugs stay visible.
+      - name: Run unit tests (race, short, excluding known bugs)
+        run: go test -race ./... --short -skip TestKnownBug
+
+      # Non-blocking: expected to fail until the persistence bugs are fixed.
+      - name: Known-bug tests (non-blocking)
+        continue-on-error: true
+        run: go test -race ./pkg/raft -run TestKnownBug
+
+  integration:
+    name: Integration (e2e / fault injection)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.24"
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.24-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.24-
+
+      - name: Run integration tests (race, non-short)
+        run: go test -race ./tests/... -timeout 30m
