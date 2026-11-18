@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
 	"os"
@@ -75,6 +76,7 @@ type Cluster struct {
 	ctrls   []*ctrlNode
 	dns     []*dnNode
 	proxies map[edge]*Proxy
+	extra   []*Proxy // datanode proxies created by tests
 	front   *front
 
 	http      *http.Client
@@ -162,6 +164,27 @@ func NewCluster(t testing.TB, opts Options) *Cluster {
 		dn.proc = newProc(fmt.Sprintf("datanode-%d", dn.idx), datanodeBin, c.datanodeEnv(dn))
 		if err := dn.start(); err != nil {
 			t.Fatalf("harness: start %s: %v", dn.name, err)
+		}
+		if !opts.NoWait {
+			// Register datanodes one at a time and let the controllers settle in
+			// between: the controller currently loses a RegisterNode that is
+			// applied between the leader's Rebalance snapshot and the
+			// UpdateTopology that carries it (lost update in pkg/controller), and
+			// datanodes never re-register after a 200.
+			id := c.DataNodeID(dn.idx)
+			c.WaitFor(id+" registered", 60*time.Second, func() bool {
+				l, ok := c.leaderAmong(c.runningControllers())
+				if !ok {
+					return false
+				}
+				cfg, err := c.TopologyOf(l)
+				if err != nil {
+					return false
+				}
+				_, reg := cfg.Nodes[id]
+				return reg
+			})
+			c.WaitControllersConverged()
 		}
 	}
 
@@ -312,6 +335,9 @@ func (c *Cluster) Close() {
 		for _, p := range c.proxies {
 			p.Close()
 		}
+		for _, p := range c.extra {
+			p.Close()
+		}
 		if c.front != nil {
 			c.front.Close()
 		}
@@ -449,7 +475,23 @@ func (c *Cluster) WaitForLeaderAmong(set []int) int {
 // leader/term and hold identical topologies (same epoch, nodes and shards).
 func (c *Cluster) WaitControllersConverged() {
 	c.t.Helper()
+	// Require the converged state to hold across two polls 250ms apart so a
+	// pending Rebalance broadcast is not mistaken for quiescence.
+	var firstOK time.Time
 	c.WaitFor("controllers converged", 45*time.Second, func() bool {
+		if !c.convergedNow() {
+			firstOK = time.Time{}
+			return false
+		}
+		if firstOK.IsZero() {
+			firstOK = time.Now()
+		}
+		return time.Since(firstOK) >= 250*time.Millisecond
+	})
+}
+
+func (c *Cluster) convergedNow() bool {
+	{
 		set := c.runningControllers()
 		if _, ok := c.leaderAmong(set); !ok {
 			return false
@@ -468,7 +510,7 @@ func (c *Cluster) WaitControllersConverged() {
 			}
 		}
 		return true
-	})
+	}
 }
 
 // fingerprint ignores per-replica fields (LastHeartbeat is stamped locally on apply).
@@ -706,7 +748,8 @@ func freePorts(n int) ([]int, error) {
 }
 
 // front is an HTTP reverse proxy in front of the controllers that sends each
-// request to the first controller whose API accepts a connection. Datanodes use
+// request to the current controller, failing over to the next one on a
+// connection error. Datanodes use
 // it as CONTROLLER_URL because they only accept a single controller URL; it
 // models a load balancer / VIP so that datanodes survive a controller crash.
 type front struct {
@@ -739,9 +782,15 @@ func newFront(backends []string) (*front, error) {
 func (f *front) URL() string { return "http://" + f.ln.Addr().String() }
 func (f *front) Close()      { f.srv.Close() }
 
+// failoverTransport is sticky: it keeps using the last backend that worked and
+// only moves on when it fails, so heartbeats do not flap back to a restarted
+// controller (each controller's reaper tracks heartbeats locally).
 type failoverTransport struct {
 	backends []string
 	rt       *http.Transport
+
+	mu     sync.Mutex
+	cursor int
 }
 
 func (t *failoverTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -751,8 +800,12 @@ func (t *failoverTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		req.Body.Close()
 	}
 	var lastErr error
-	for _, b := range t.backends {
-		u, _ := url.Parse(b)
+	t.mu.Lock()
+	start := t.cursor
+	t.mu.Unlock()
+	for k := 0; k < len(t.backends); k++ {
+		idx := (start + k) % len(t.backends)
+		u, _ := url.Parse(t.backends[idx])
 		r2 := req.Clone(req.Context())
 		r2.URL.Scheme, r2.URL.Host = u.Scheme, u.Host
 		r2.Host = u.Host
@@ -762,9 +815,54 @@ func (t *failoverTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 		resp, err := t.rt.RoundTrip(r2)
 		if err == nil {
+			t.mu.Lock()
+			t.cursor = idx
+			t.mu.Unlock()
 			return resp, nil
 		}
 		lastErr = err
 	}
 	return nil, lastErr
+}
+
+// ProxyDataNode returns a TCP proxy in front of datanode i for client-side fault
+// injection (cut/delay/blackhole). It is closed with the cluster.
+func (c *Cluster) ProxyDataNode(i int) *Proxy {
+	c.t.Helper()
+	p, err := newProxy(fmt.Sprintf("datanode %d", i), fmt.Sprintf("127.0.0.1:%d", c.dns[i].port))
+	if err != nil {
+		c.t.Fatalf("harness: datanode proxy: %v", err)
+	}
+	c.extra = append(c.extra, p)
+	return p
+}
+
+// ClientVia returns a SmartClient whose view of the topology has the addresses
+// of the given datanodes (index -> proxy) replaced by their proxies, so all
+// client traffic to those datanodes flows through the proxy. The topology is
+// the leader's real one, served by a private in-test server.
+func (c *Cluster) ClientVia(proxies map[int]*Proxy) *client.SmartClient {
+	c.t.Helper()
+	cfg := c.Topology()
+	nodes := make(map[string]metadata.NodeMetadata, len(cfg.Nodes))
+	for id, n := range cfg.Nodes {
+		nodes[id] = n
+	}
+	for i, p := range proxies {
+		id := c.DataNodeID(i)
+		n := nodes[id]
+		n.Address = p.Addr()
+		nodes[id] = n
+	}
+	view := *cfg
+	view.Nodes = nodes
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(&view)
+	}))
+	c.t.Cleanup(srv.Close)
+	cl, err := client.NewSmartClient([]string{srv.URL})
+	if err != nil {
+		c.t.Fatalf("harness: client via proxies: %v", err)
+	}
+	return cl
 }
