@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -46,6 +47,16 @@ func main() {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
+	})
+	// /status exposes the topology epoch the node has learned and whether its
+	// lease is active, so tests can wait for readiness without sleeping.
+	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"node_id":      config.NodeID,
+			"epoch":        stateMgr.GetEpoch(),
+			"lease_active": leaseMgr.IsActive(),
+		})
 	})
 	mux.HandleFunc("/data", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost || r.Method == http.MethodPut {
