@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
@@ -21,9 +22,9 @@ type Replicator struct {
 	signalCh   chan struct{}
 	stopCh     chan struct{}
 
-	consecutiveFailures    int
+	consecutiveFailures    atomic.Int32 // read by checkQuorumHealth from other replicators
 	maxConsecutiveFailures int
-	lastHeartbeatSuccess   time.Time
+	lastHeartbeatSuccess   time.Time // only touched by the replicator goroutine
 }
 
 func NewReplicator(parent *Raft, followerId int) *Replicator {
@@ -32,7 +33,6 @@ func NewReplicator(parent *Raft, followerId int) *Replicator {
 		followerId:             followerId,
 		signalCh:               make(chan struct{}, 1),
 		stopCh:                 make(chan struct{}),
-		consecutiveFailures:    0,
 		maxConsecutiveFailures: 5,
 		lastHeartbeatSuccess:   time.Now(),
 	}
@@ -74,7 +74,7 @@ func (rep *Replicator) replicate() {
 	if !rep.parent.isPeerAvailable(rep.followerId) {
 		slog.Debug(fmt.Sprintf("Node %d: Skipping replication to unavailable peer %d",
 			rep.parent.id, rep.followerId))
-		rep.consecutiveFailures++
+		rep.consecutiveFailures.Add(1)
 		rep.parent.checkQuorumHealth()
 		return
 	}
@@ -101,7 +101,7 @@ func (rep *Replicator) replicate() {
 	if peer == nil {
 		slog.Debug(fmt.Sprintf("Node %d: No peer client for follower %d",
 			rep.parent.id, rep.followerId))
-		rep.consecutiveFailures++
+		rep.consecutiveFailures.Add(1)
 		rep.parent.checkQuorumHealth()
 		return
 	}
@@ -118,13 +118,13 @@ func (rep *Replicator) replicate() {
 
 	if err != nil {
 		slog.Warn(fmt.Sprintf("Node %d: LogRequest to follower %d failed (attempt %d): %v",
-			rep.parent.id, rep.followerId, rep.consecutiveFailures+1, err))
-		rep.consecutiveFailures++
+			rep.parent.id, rep.followerId, rep.consecutiveFailures.Load()+1, err))
+		rep.consecutiveFailures.Add(1)
 		rep.parent.checkQuorumHealth()
 		return
 	}
 
-	rep.consecutiveFailures = 0
+	rep.consecutiveFailures.Store(0)
 	rep.lastHeartbeatSuccess = time.Now()
 
 	slog.Info(fmt.Sprintf("Node %d: LogRequest to follower %d succeeded (success=%t, ack=%d, term=%d)",
@@ -151,7 +151,8 @@ func (rep *Replicator) replicate() {
 			rep.parent.ackedLengths[rep.followerId] = match
 			rep.parent.commitLogEntries()
 		} else {
-			floor := rep.parent.snapshotter.lastIndex + 1
+			// nextIndex <= lastIndex is what makes the leader fall back to InstallSnapshot
+			floor := rep.parent.snapshotter.lastIndex
 			if rep.parent.sentLengths[rep.followerId] > floor {
 				slog.Debug(fmt.Sprintf("Node %d: LogRequest rejected by follower %d, decrementing sentLength from %d to %d",
 					rep.parent.id, rep.followerId, rep.parent.sentLengths[rep.followerId], rep.parent.sentLengths[rep.followerId]-1))
