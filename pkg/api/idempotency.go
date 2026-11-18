@@ -11,6 +11,7 @@ type IdempotencyCache struct {
 	mu      sync.RWMutex
 	entries map[string]*IdempotencyCacheEntry
 	ttl     time.Duration
+	now     func() time.Time // injectable clock for tests
 }
 
 type IdempotencyCacheEntry struct {
@@ -19,9 +20,14 @@ type IdempotencyCacheEntry struct {
 }
 
 func NewIdempotencyCache(ttl time.Duration) *IdempotencyCache {
+	return newIdempotencyCacheWithClock(ttl, time.Now)
+}
+
+func newIdempotencyCacheWithClock(ttl time.Duration, now func() time.Time) *IdempotencyCache {
 	cache := &IdempotencyCache{
 		entries: make(map[string]*IdempotencyCacheEntry),
 		ttl:     ttl,
+		now:     now,
 	}
 
 	go cache.cleanupExpired()
@@ -38,7 +44,7 @@ func (c *IdempotencyCache) Get(token string) (*raft.BroadcastResponse, bool) {
 		return nil, false
 	}
 
-	if time.Since(entry.CompletedAt) > c.ttl {
+	if c.now().Sub(entry.CompletedAt) > c.ttl {
 		return nil, false
 	}
 
@@ -51,7 +57,7 @@ func (c *IdempotencyCache) Set(token string, response raft.BroadcastResponse) {
 
 	c.entries[token] = &IdempotencyCacheEntry{
 		Response:    response,
-		CompletedAt: time.Now(),
+		CompletedAt: c.now(),
 	}
 }
 
@@ -61,7 +67,7 @@ func (c *IdempotencyCache) cleanupExpired() {
 
 	for range ticker.C {
 		c.mu.Lock()
-		now := time.Now()
+		now := c.now()
 		for token, entry := range c.entries {
 			if now.Sub(entry.CompletedAt) > c.ttl {
 				delete(c.entries, token)

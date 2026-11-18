@@ -230,6 +230,7 @@ func (c *SmartClient) Get(key string) (string, error) {
 		case http.StatusServiceUnavailable:
 			slog.Info("Node fenced, waiting for failover", "attempt", attempt)
 			time.Sleep(200 * time.Millisecond)
+			c.FetchTopology()
 			continue
 
 		default:
@@ -273,6 +274,11 @@ func (c *SmartClient) Delete(key string) error {
 		case http.StatusOK:
 			return nil
 
+		case http.StatusBadRequest:
+			slog.Info("Not primary for shard, refreshing topology", "attempt", attempt)
+			c.FetchTopology()
+			continue
+
 		case http.StatusPreconditionFailed:
 			slog.Info("Epoch stale, refreshing topology", "attempt", attempt)
 			c.FetchTopology()
@@ -287,6 +293,7 @@ func (c *SmartClient) Delete(key string) error {
 		case http.StatusServiceUnavailable:
 			slog.Info("Node fenced, waiting for failover", "attempt", attempt)
 			time.Sleep(200 * time.Millisecond)
+			c.FetchTopology()
 			continue
 
 		case http.StatusInternalServerError:

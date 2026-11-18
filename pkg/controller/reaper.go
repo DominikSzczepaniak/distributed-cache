@@ -10,10 +10,16 @@ type Reaper struct {
 	lastSeen    map[string]time.Time
 	gracePeriod time.Duration
 	onDeath     func(nodeID string)
+	now         func() time.Time // injectable clock for tests
 }
 
 func NewReaper(gracePeriod time.Duration, onDeath func(nodeID string)) *Reaper {
+	return newReaperWithClock(gracePeriod, onDeath, time.Now)
+}
+
+func newReaperWithClock(gracePeriod time.Duration, onDeath func(nodeID string), now func() time.Time) *Reaper {
 	return &Reaper{
+		now:         now,
 		lastSeen:    make(map[string]time.Time),
 		gracePeriod: gracePeriod,
 		onDeath:     onDeath,
@@ -23,7 +29,7 @@ func NewReaper(gracePeriod time.Duration, onDeath func(nodeID string)) *Reaper {
 func (r *Reaper) Track(nodeID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.lastSeen[nodeID] = time.Now()
+	r.lastSeen[nodeID] = r.now()
 }
 
 func (r *Reaper) Run() {
@@ -38,7 +44,7 @@ func (r *Reaper) checkLiveness() {
 	defer r.mu.Unlock()
 
 	for id, seen := range r.lastSeen {
-		if time.Since(seen) > r.gracePeriod {
+		if r.now().Sub(seen) > r.gracePeriod {
 			delete(r.lastSeen, id)
 			go r.onDeath(id)
 		}

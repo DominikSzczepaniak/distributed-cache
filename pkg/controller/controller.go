@@ -20,12 +20,16 @@ type Controller struct {
 }
 
 func NewController(r *raft.Raft, gracePeriod time.Duration) *Controller {
+	return newControllerWithClock(r, gracePeriod, time.Now)
+}
+
+func newControllerWithClock(r *raft.Raft, gracePeriod time.Duration, now func() time.Time) *Controller {
 	c := &Controller{
 		raft:   r,
 		config: metadata.NewClusterConfig(10),
 	}
 
-	c.reaper = NewReaper(gracePeriod, c.HandleNodeFailure)
+	c.reaper = newReaperWithClock(gracePeriod, c.HandleNodeFailure, now)
 	go c.reaper.Run()
 
 	return c
@@ -46,6 +50,9 @@ func (c *Controller) MoveShard(shardID int, targetNodeID string) error {
 
 	if !ok1 || !ok2 {
 		return fmt.Errorf("source or target node not found")
+	}
+	if targetNode.Status != metadata.StatusActive {
+		return fmt.Errorf("target node %s is not active (status %s)", targetNodeID, targetNode.Status)
 	}
 
 	slog.Info("Starting migration", "shard", shardID, "source", sourceNodeID, "target", targetNodeID)
@@ -71,7 +78,9 @@ func (c *Controller) MoveShard(shardID int, targetNodeID string) error {
 	slog.Info("Phase 2: Shard Locked", "shard", shardID, "epoch", newConfig.Epoch)
 
 	if err := c.triggerPull(targetNode.Address, sourceNode.Address, shardID); err != nil {
-		// TODO: Rollback? For now just error out, system stays locked (safe but unavailable)
+		// The source is still the primary and holds all data, so unlock the shard
+		// (publishing a new epoch) instead of leaving it unavailable forever.
+		c.unlockShard(shardID)
 		return fmt.Errorf("phase 3 catchup failed: %w", err)
 	}
 
@@ -84,6 +93,16 @@ func (c *Controller) MoveShard(shardID int, targetNodeID string) error {
 	newConfig2.Shards = newShards2
 
 	shardMeta2 := newConfig2.Shards[shardID]
+	// The target becomes primary: it must not remain in its own replica list,
+	// and the old primary (which holds a full copy) takes over as a replica.
+	newReplicas := make([]string, 0, len(shardMeta2.ReplicaIDs)+1)
+	for _, r := range shardMeta2.ReplicaIDs {
+		if r != targetNodeID {
+			newReplicas = append(newReplicas, r)
+		}
+	}
+	newReplicas = append(newReplicas, sourceNodeID)
+	shardMeta2.ReplicaIDs = newReplicas
 	shardMeta2.PrimaryID = targetNodeID
 	shardMeta2.Status = metadata.ShardStatusActive
 	newConfig2.Shards[shardID] = shardMeta2
@@ -93,6 +112,24 @@ func (c *Controller) MoveShard(shardID int, targetNodeID string) error {
 	slog.Info("Phase 3: Migration Complete", "shard", shardID, "new_primary", targetNodeID, "epoch", newConfig2.Epoch)
 
 	return nil
+}
+
+// unlockShard reverts a LOCKED shard to ACTIVE (copy-on-write) and bumps the epoch.
+func (c *Controller) unlockShard(shardID int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	newConfig := *c.config
+	newShards := make(map[int]metadata.ShardMetadata, len(c.config.Shards))
+	for k, v := range c.config.Shards {
+		newShards[k] = v
+	}
+	newConfig.Shards = newShards
+	meta := newShards[shardID]
+	meta.Status = metadata.ShardStatusActive
+	newShards[shardID] = meta
+	newConfig.Epoch++
+	c.config = &newConfig
+	slog.Warn("Migration rolled back: shard unlocked", "shard", shardID, "epoch", newConfig.Epoch)
 }
 
 func (c *Controller) triggerPull(targetAddr, sourceAddr string, shardID int) error {

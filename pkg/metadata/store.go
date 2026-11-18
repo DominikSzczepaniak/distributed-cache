@@ -25,6 +25,7 @@ func Rebalance(config *ClusterConfig, deadNodeID string) *ClusterConfig {
 					ID:         shard.ID,
 					PrimaryID:  newPrimary,
 					ReplicaIDs: shard.ReplicaIDs[1:],
+					Status:     ShardStatusActive, // old primary is gone; any migration involving it is moot
 				}
 			} else {
 				// No replicas available - mark as unavailable
@@ -32,6 +33,7 @@ func Rebalance(config *ClusterConfig, deadNodeID string) *ClusterConfig {
 					ID:         shard.ID,
 					PrimaryID:  "",
 					ReplicaIDs: shard.ReplicaIDs,
+					Status:     shard.Status,
 				}
 			}
 		} else {
@@ -46,6 +48,7 @@ func Rebalance(config *ClusterConfig, deadNodeID string) *ClusterConfig {
 				ID:         shard.ID,
 				PrimaryID:  shard.PrimaryID,
 				ReplicaIDs: newReplicas,
+				Status:     shard.Status,
 			}
 		}
 	}
