@@ -231,26 +231,23 @@ func (r *Raft) appendEntries(prefixLen, leaderCommit int, suffix []LogEntry) {
 	slog.Info(fmt.Sprintf("Node %d: appendEntries called (prefixLen=%d leaderCommit=%d suffixLen=%d myLogLen=%d myCommit=%d)",
 		r.id, prefixLen, leaderCommit, len(suffix), len(r.log)+r.snapshotter.lastIndex, r.commitedLength))
 
-	absoluteLogLength := len(r.log) + r.snapshotter.lastIndex
-	if len(suffix) > 0 && absoluteLogLength > prefixLen {
-		checkIndex := prefixLen
-		relativeCheckIndex := checkIndex - r.snapshotter.lastIndex
-		suffixCheckIndex := 0
-
-		if relativeCheckIndex >= 0 && relativeCheckIndex < len(r.log) {
-			if r.log[relativeCheckIndex].Term != suffix[suffixCheckIndex].Term {
-				r.log = r.log[:relativeCheckIndex]
+	// Raft AppendEntries rules 3-4: find the first entry whose term conflicts
+	// with the leader's, drop it and everything after it, then append the
+	// leader's remaining entries. Entries that already match are left alone, so
+	// duplicated / delayed requests are no-ops.
+	for i, e := range suffix {
+		rel := prefixLen + i - r.snapshotter.lastIndex
+		if rel < 0 {
+			continue // already covered by our snapshot
+		}
+		if rel < len(r.log) {
+			if r.log[rel].Term == e.Term {
+				continue
 			}
+			r.log = r.log[:rel]
 		}
-	}
-	if prefixLen+len(suffix) > absoluteLogLength {
-		startAppendingIndex := absoluteLogLength - prefixLen
-		if startAppendingIndex < 0 {
-			startAppendingIndex = 0
-		}
-		if startAppendingIndex < len(suffix) {
-			r.log = append(r.log, suffix[startAppendingIndex:]...)
-		}
+		r.log = append(r.log, suffix[i:]...)
+		break
 	}
 	if leaderCommit > r.commitedLength {
 		maxCommit := len(r.log) + r.snapshotter.lastIndex
@@ -291,7 +288,7 @@ func (r *Raft) logResponse(followerId, term, ack int, success bool) {
 			r.ackedLengths[followerId] = ack
 			r.sentLengths[followerId] = ack + 1
 			r.commitLogEntries()
-		} else if r.sentLengths[followerId] > r.snapshotter.lastIndex+1 {
+		} else if r.sentLengths[followerId] > r.snapshotter.lastIndex {
 			r.sentLengths[followerId]--
 			if r.replicators != nil && r.replicators[followerId] != nil {
 				r.replicators[followerId].signal()

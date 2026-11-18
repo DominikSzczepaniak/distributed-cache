@@ -170,6 +170,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 				r.id, oldRole, term, leaderId))
 		}
 		r.currentRole = Follower
+		r.stopReplicatorsUnlocked()
 		if r.id != leaderId {
 			if oldLeader != leaderId {
 				slog.Info(fmt.Sprintf("Node %d: Updating leader from %d to %d",
@@ -203,6 +204,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		slog.Info(fmt.Sprintf("Node %d: LogRequest SUCCESS - appending %d entries (prevIndex=%d commitLen=%d)",
 			r.id, len(suffix), prevIndex, commitLength))
 		r.raftElector.ResetTimer()
+		respTerm := r.currentTerm // read under the lock; r.currentTerm is shared
 		r.mu.Unlock()
 
 		r.appendEntries(prevIndex, commitLength, suffix)
@@ -213,7 +215,7 @@ func (r *Raft) LogRequest(ctx context.Context, in *raftpb.LogRequestArgs) (*raft
 		slog.Info(fmt.Sprintf("Node %d: LogRequest completed, ack=%d", r.id, ack))
 		return &raftpb.LogResponse{
 			NodeId:      int32(r.id),
-			CurrentTerm: int32(r.currentTerm),
+			CurrentTerm: int32(respTerm),
 			Ack:         int32(ack),
 			Success:     true,
 		}, nil
@@ -251,6 +253,7 @@ func (r *Raft) VoteRequest(ctx context.Context, in *raftpb.VoteRequestArgs) (*ra
 	if candidateTerm > r.currentTerm {
 		r.currentTerm = candidateTerm
 		r.currentRole = Follower
+		r.stopReplicatorsUnlocked()
 		r.votedFor = -1
 
 		r.raftElector.ResetTimer()
@@ -304,6 +307,7 @@ func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRe
 	if int(in.LeaderTerm) > r.currentTerm {
 		r.currentTerm = int(in.LeaderTerm)
 		r.currentRole = Follower
+		r.votedFor = -1
 		r.currentLeaderId = int(in.LeaderId)
 		r.raftElector.ResetTimer()
 	}
@@ -322,7 +326,8 @@ func (r *Raft) InstallSnapshot(ctx context.Context, in *raftpb.InstallSnapshotRe
 	lastIncludedTerm := int(in.LastIncludedTerm)
 	currentLastIndex := r.snapshotter.lastIndex + len(r.log)
 	if currentLastIndex > lastIncludedIndex {
-		relativeIndex := lastIncludedIndex - r.snapshotter.lastIndex
+		// entry with 1-based index N lives at log[N-lastIndex-1]
+		relativeIndex := lastIncludedIndex - r.snapshotter.lastIndex - 1
 		if relativeIndex >= 0 && relativeIndex < len(r.log) &&
 			r.log[relativeIndex].Term == lastIncludedTerm {
 			r.log = r.log[relativeIndex+1:]
