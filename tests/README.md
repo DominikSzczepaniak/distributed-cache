@@ -18,3 +18,16 @@ go test ./tests/e2e -run TestE2E_PutGetDelete -v
 
 Docker demos (`docker-compose.yml`, `run_local.sh`, `scripts/*.sh`) are kept for
 manual use and are not part of the test suite.
+
+## Benchmarks
+
+```sh
+go test ./tests/benchmark -run xxx -bench . -benchtime=1x       # one pass, prints p50/p95/p99
+go test ./tests/benchmark -run xxx -bench ClientScaling -benchtime=5000x
+go test -tags compare ./tests/benchmark -run xxx -bench Compare  # optional Redis/etcd (skips if unreachable)
+```
+
+Metrics reported per benchmark: `p50_ms p95_ms p99_ms max_ms ops/s err_rate`.
+`go test --short` runs only the stub-backed smoke test (`TestLoadSmoke_Stub`) and
+the percentile unit tests; `TestBench_ClusterSmoke` runs a tiny workload against
+a real cluster in the non-short run.

@@ -80,6 +80,7 @@ type Cluster struct {
 	front   *front
 
 	http      *http.Client
+	httpLong  *http.Client // for calls that wait on Raft (BroadcastSync waits up to 5s)
 	closeOnce sync.Once
 }
 
@@ -106,6 +107,10 @@ func NewCluster(t testing.TB, opts Options) *Cluster {
 		dir:     t.TempDir(),
 		proxies: make(map[edge]*Proxy),
 		http:    &http.Client{Timeout: 2 * time.Second},
+		httpLong: &http.Client{
+			Timeout:   10 * time.Second,
+			Transport: &http.Transport{MaxIdleConnsPerHost: 256},
+		},
 	}
 	t.Cleanup(func() {
 		if t.Failed() {
@@ -649,8 +654,7 @@ func (c *Cluster) Topology() *metadata.ClusterConfig {
 // Register POSTs /cluster/register to controller i and returns the HTTP status.
 func (c *Cluster) Register(i int, nodeID, addr string) (int, error) {
 	body, _ := json.Marshal(map[string]string{"node_id": nodeID, "address": addr})
-	hc := &http.Client{Timeout: 10 * time.Second} // BroadcastSync waits up to 5s
-	resp, err := hc.Post(c.ControllerURL(i)+"/cluster/register", "application/json", bytes.NewReader(body))
+	resp, err := c.httpLong.Post(c.ControllerURL(i)+"/cluster/register", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return 0, err
 	}
@@ -662,8 +666,7 @@ func (c *Cluster) Register(i int, nodeID, addr string) (int, error) {
 // NoOp POSTs /debug/raft_noop to controller i (a committed no-op entry) and
 // returns the HTTP status.
 func (c *Cluster) NoOp(i int) (int, error) {
-	hc := &http.Client{Timeout: 10 * time.Second}
-	resp, err := hc.Post(c.ControllerURL(i)+"/debug/raft_noop", "application/json", nil)
+	resp, err := c.httpLong.Post(c.ControllerURL(i)+"/debug/raft_noop", "application/json", nil)
 	if err != nil {
 		return 0, err
 	}
@@ -865,4 +868,28 @@ func (c *Cluster) ClientVia(proxies map[int]*Proxy) *client.SmartClient {
 		c.t.Fatalf("harness: client via proxies: %v", err)
 	}
 	return cl
+}
+
+// SetTopology pushes cfg to every running controller through POST /debug/config
+// (local, not replicated through Raft) and waits until the datanodes have
+// picked it up via their heartbeat. cfg.Epoch must be higher than the current
+// epoch. Used to build topologies the Rebalance logic would not produce, e.g.
+// several primaries without replicas.
+func (c *Cluster) SetTopology(cfg *metadata.ClusterConfig) {
+	c.t.Helper()
+	body, err := json.Marshal(cfg)
+	if err != nil {
+		c.t.Fatalf("harness: marshal topology: %v", err)
+	}
+	for _, i := range c.runningControllers() {
+		resp, err := c.httpLong.Post(c.ControllerURL(i)+"/debug/config", "application/json", bytes.NewReader(body))
+		if err != nil {
+			c.t.Fatalf("harness: set topology on controller %d: %v", i, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			c.t.Fatalf("harness: set topology on controller %d: status %d", i, resp.StatusCode)
+		}
+	}
+	c.WaitDataNodesSynced()
 }
