@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,8 +18,18 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
+// raftBackend is the subset of *raft.Raft used by the HTTP handlers. It exists
+// so the handlers can be tested without a running Raft cluster.
+type raftBackend interface {
+	Forward(ctx context.Context, msg *raftpb.Message) (*raftpb.ForwardResponse, error)
+	ForwardGet(ctx context.Context, req *raftpb.GetRequest) (*raftpb.GetResponse, error)
+	GetApplication() raft.Application
+	GetStatus() raft.ClusterStatus
+	IsLeader() bool
+}
+
 type Server struct {
-	raft             *raft.Raft
+	raft             raftBackend
 	listenAddr       string
 	httpServer       *http.Server
 	retrier          *Retrier
@@ -99,11 +110,14 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	idempotencyToken := r.Header.Get("Idempotency-Key")
-	if idempotencyToken == "" {
-		idempotencyToken = s.generateIdempotencyToken(&req, getClientID(r))
+	// Only an explicit client-supplied key opts in to replay protection. A
+	// content-derived token would swallow legitimate repeated writes (A,B,A).
+	dedupe := idempotencyToken != ""
+	if !dedupe {
+		idempotencyToken = newRandomToken()
 	}
 
-	if cachedResp, found := s.idempotencyCache.Get(idempotencyToken); found {
+	if cachedResp, found := s.lookupIdempotent(idempotencyToken, dedupe); found {
 		slog.Info(fmt.Sprintf("Returning cached response for token: %s", idempotencyToken))
 		resp := PutResponse{
 			Success: cachedResp.Success,
@@ -155,11 +169,13 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.idempotencyCache.Set(idempotencyToken, raft.BroadcastResponse{
-		Success: success,
-		Value:   0,
-		Error:   nil,
-	})
+	if dedupe {
+		s.idempotencyCache.Set(idempotencyToken, raft.BroadcastResponse{
+			Success: success,
+			Value:   0,
+			Error:   nil,
+		})
+	}
 
 	resp := PutResponse{
 		Success: success,
@@ -213,13 +229,12 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, key int) {
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key int) {
 	idempotencyToken := r.Header.Get("Idempotency-Key")
-	if idempotencyToken == "" {
-		h := sha256.New()
-		h.Write([]byte(fmt.Sprintf("DELETE:%s:%d", getClientID(r), key)))
-		idempotencyToken = hex.EncodeToString(h.Sum(nil))
+	dedupe := idempotencyToken != ""
+	if !dedupe {
+		idempotencyToken = newRandomToken()
 	}
 
-	if cachedResp, found := s.idempotencyCache.Get(idempotencyToken); found {
+	if cachedResp, found := s.lookupIdempotent(idempotencyToken, dedupe); found {
 		slog.Info(fmt.Sprintf("Returning cached DELETE response for token: %s", idempotencyToken))
 		resp := DeleteResponse{
 			Success: cachedResp.Success,
@@ -271,11 +286,13 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key int) {
 		return
 	}
 
-	s.idempotencyCache.Set(idempotencyToken, raft.BroadcastResponse{
-		Success: success,
-		Value:   0,
-		Error:   nil,
-	})
+	if dedupe {
+		s.idempotencyCache.Set(idempotencyToken, raft.BroadcastResponse{
+			Success: success,
+			Value:   0,
+			Error:   nil,
+		})
+	}
 
 	resp := DeleteResponse{
 		Success: success,
@@ -325,6 +342,22 @@ func (s *Server) generateIdempotencyToken(req *PutRequest, clientID string) stri
 	h := sha256.New()
 	h.Write([]byte(fmt.Sprintf("%s:%d:%d", clientID, req.Key, req.Value)))
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (s *Server) lookupIdempotent(token string, dedupe bool) (*raft.BroadcastResponse, bool) {
+	if !dedupe {
+		return nil, false
+	}
+	return s.idempotencyCache.Get(token)
+}
+
+func newRandomToken() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failing is effectively fatal; fall back to time so we still get a unique-enough token.
+		return fmt.Sprintf("t-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
 }
 
 func getClientID(r *http.Request) string {
