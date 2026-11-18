@@ -3,7 +3,6 @@ package raft
 import (
 	"fmt"
 	"math/rand"
-	"path/filepath"
 	"runtime"
 	"sync"
 	"testing"
@@ -13,103 +12,117 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFullRaftIntegration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("short")
-	}
-	t.Run("election_and_replication", func(t *testing.T) {
-		nodes := createCluster(t, 3)
-		time.Sleep(500 * time.Millisecond)
-		var leader *Raft
-	outer:
-		for {
-			for _, n := range nodes {
-				n.mu.RLock()
-				currentRole := n.currentRole
-				n.mu.RUnlock()
-				if currentRole == Leader {
-					leader = n
-					break outer
+// waitForStableLeader waits until exactly one node is leader and every other
+// node knows who it is.
+func waitForStableLeader(t testing.TB, nodes []*Raft) *Raft {
+	t.Helper()
+	var leader *Raft
+	require.Eventually(t, func() bool {
+		leader = nil
+		for _, n := range nodes {
+			if n.getCurrentRole() == Leader {
+				if leader != nil {
+					return false
 				}
+				leader = n
 			}
 		}
-		require.NotNil(t, leader)
+		if leader == nil {
+			return false
+		}
+		for _, n := range nodes {
+			if n != leader && stateOf(n).Leader != leader.id {
+				return false
+			}
+		}
+		return true
+	}, 15*time.Second, 10*time.Millisecond, "no stable leader elected")
+	return leader
+}
+
+func TestFullRaftIntegration(t *testing.T) {
+	t.Run("election_and_replication", func(t *testing.T) {
+		nodes := createCluster(t, 3)
+		leader := waitForStableLeader(t, nodes)
 		val := 100
 		leader.Broadcast(Message{MsgType: PutMsg, Key: 9, Value: &val})
-		time.Sleep(1 * time.Second)
+		require.Eventually(t, func() bool {
+			for _, n := range nodes {
+				if n.application.(*testApp).getData()[9] != val {
+					return false
+				}
+			}
+			return true
+		}, 10*time.Second, 10*time.Millisecond, "value not applied on all nodes")
 		for i, n := range nodes {
-			n.mu.RLock()
-			assert.Greater(t, len(n.log), 0, "node %d", i)
-			assert.Greater(t, n.commitedLength, 0, "node %d", i)
-			n.mu.RUnlock()
-			data := n.application.(*testApp).getData()
-			assert.Equal(t, val, data[9], "node %d", i)
+			st := stateOf(n)
+			assert.Greater(t, len(st.Log), 0, "node %d", i)
+			assert.Greater(t, st.Commit, 0, "node %d", i)
 		}
 	})
 	t.Run("forwarding", func(t *testing.T) {
 		nodes := createCluster(t, 3)
-		time.Sleep(500 * time.Millisecond)
-		var leader, follower *Raft
+		leader := waitForStableLeader(t, nodes)
+		var follower *Raft
 		for _, n := range nodes {
-			n.mu.RLock()
-			if n.currentRole == Leader {
-				leader = n
-			} else if follower == nil {
+			if n != leader {
 				follower = n
+				break
 			}
-			n.mu.RUnlock()
 		}
-		require.NotNil(t, leader)
 		require.NotNil(t, follower)
 		val := 55
-		follower.Broadcast(Message{MsgType: PutMsg, Key: 5, Value: &val})
-		time.Sleep(1 * time.Second)
-		for i, n := range nodes {
-			data := n.application.(*testApp).getData()
-			assert.Equal(t, val, data[5], "node %d", i)
-		}
+		ok, _, err := follower.BroadcastSync(Message{MsgType: PutMsg, Key: 5, Value: &val}, 10*time.Second)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Eventually(t, func() bool {
+			for _, n := range nodes {
+				if n.application.(*testApp).getData()[5] != val {
+					return false
+				}
+			}
+			return true
+		}, 10*time.Second, 10*time.Millisecond, "forwarded value not applied on all nodes")
 	})
 }
 
 func TestRaftRecovery(t *testing.T) {
-	if testing.Short() {
-		t.Skip("short")
-	}
-	tmp := t.TempDir()
-	fn := filepath.Join(tmp, "r.data")
-	app1 := newTestApp()
+	dir := t.TempDir()
 	initLogs := []LogEntry{
 		{Term: 1, Message: Message{MsgType: PutMsg, Key: 1, Value: intPtr(42)}},
 		{Term: 1, Message: Message{MsgType: PutMsg, Key: 2, Value: intPtr(24)}},
 	}
-	node1 := &Raft{id: 0, totalNodes: 3, currentTerm: 2, votedFor: 1,
-		log: initLogs, commitedLength: 2, application: app1}
-	s := NewRaftDataSaver(node1, &Config{logsFilename: fn, metadataFilename: fn + ".meta", snapshotFilename: fn + ".snap", totalNodes: 3, raftId: 0})
 
+	// "Before the crash": a node with durable state.
+	node1 := createTestRaftIn(t, 0, 3, dir)
 	node1.mu.Lock()
 	node1.currentTerm = 2
 	node1.votedFor = 1
 	node1.commitedLength = 2
-	node1.log = initLogs
+	node1.log = append([]LogEntry(nil), initLogs...)
 	node1.mu.Unlock()
-
-	ok, err := s.SaveValues()
+	ok, err := node1.logSaver.SaveValues()
 	require.NoError(t, err)
 	require.True(t, ok)
-	app2 := newTestApp()
-	node2 := NewRaft(app2, &Config{logsFilename: fn, metadataFilename: fn + ".meta", snapshotFilename: fn + ".snap", totalNodes: 3, raftId: 0, raftAddrs: make([]string, 3)})
-	assert.Equal(t, 2, node2.currentTerm)
-	assert.Equal(t, 1, node2.votedFor)
-	assert.Equal(t, 2, node2.commitedLength)
-	require.Len(t, node2.log, 2)
+	require.NoError(t, node1.logSaver.WaitForPendingSaves())
+
+	// "After the restart": a fresh node over the same files loads the state
+	// (NewRaft does exactly this via LoadValues but also binds a gRPC port,
+	// which needs real addresses, so the LoadValues path is exercised directly).
+	node2 := createTestRaftIn(t, 0, 3, dir)
+	term, votedFor, commit, savedLog, err := node2.logSaver.LoadValues()
+	require.NoError(t, err)
+	assert.Equal(t, 2, term)
+	assert.Equal(t, 1, votedFor)
+	assert.Equal(t, 2, commit)
+	require.Len(t, savedLog, 2)
 	for i, exp := range initLogs {
-		got := node2.log[i]
+		got := savedLog[i]
 		assert.Equal(t, exp.Term, got.Term)
 		assert.Equal(t, exp.Message.MsgType, got.Message.MsgType)
 		assert.Equal(t, exp.Message.Key, got.Message.Key)
-		if exp.Message.Value != nil {
-			assert.Equal(t, *exp.Message.Value, *got.Message.Value)
-		}
+		require.NotNil(t, got.Message.Value)
+		assert.Equal(t, *exp.Message.Value, *got.Message.Value)
 	}
 }
 
