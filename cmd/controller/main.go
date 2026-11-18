@@ -85,6 +85,25 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
+	mux.HandleFunc("/health", func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+
+	// /status exposes Raft role/term/leader so tests and operators can find the
+	// leader without scraping logs.
+	mux.HandleFunc("/status", func(w http.ResponseWriter, req *http.Request) {
+		st := r.GetStatus()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"node_id":     st.NodeID,
+			"role":        st.Role,
+			"term":        st.Term,
+			"leader_id":   st.LeaderID,
+			"total_nodes": st.TotalNodes,
+		})
+	})
+
 	mux.HandleFunc("/topology", func(w http.ResponseWriter, req *http.Request) {
 		config := ctrl.GetConfig()
 		json.NewEncoder(w).Encode(config)
