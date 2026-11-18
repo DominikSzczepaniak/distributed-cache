@@ -12,4 +12,8 @@ git add -u
 echo "[pre-commit] Running go vet…"
 go vet ./...
 
+echo "[pre-commit] Running short tests (~15s)…"
+# TestKnownBug_* intentionally fail (unfixed persistence bugs); see CI.
+go test ./... --short -skip TestKnownBug
+
 echo "[pre-commit] All done."
