@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
@@ -163,7 +164,28 @@ func (m *mockPeerClient) InstallSnapshot(ctx context.Context, in *raftpb.Install
 
 func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
 	t.Helper()
-	return createTestRaftIn(t, id, totalNodes, t.TempDir())
+	return createTestRaftIn(t, id, totalNodes, testDataDir(t))
+}
+
+// testDataDir is t.TempDir() minus the hard failure on "directory not empty":
+// RPC handlers fire `go logSaver.SaveValues()` that can still be writing when
+// the test returns. Cleanup stops the savers first (see createTestRaftIn),
+// then removes the dir with a short retry for the in-flight write.
+func testDataDir(t testing.TB) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "raft-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for i := 0; i < 50; i++ {
+			if os.RemoveAll(dir) == nil {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+	return dir
 }
 
 // createTestRaftIn is createTestRaft with an explicit data dir, so a "restart"
@@ -207,6 +229,7 @@ func createTestRaftIn(t testing.TB, id, totalNodes int, tmpDir string) *Raft {
 	initial := make([]PeerClient, totalNodes)
 	r.setPeers(initial)
 
+	t.Cleanup(func() { stopSaver(r) })
 	return r
 }
 
@@ -272,7 +295,7 @@ func createCluster(t testing.TB, n int) []*Raft {
 	}
 	nodes := make([]*Raft, n)
 	for id := 0; id < n; id++ {
-		tmp := t.TempDir()
+		tmp := testDataDir(t)
 		fn := filepath.Join(tmp, fmt.Sprintf("node-%d", id))
 		cfg := &Config{
 			logsFilename:      fn + ".logs",
@@ -349,5 +372,9 @@ func stopReplicators(r *Raft) {
 // flags. Tests that need durability call WaitForPendingSaves at a quiescent
 // point instead.
 func stopSaver(r *Raft) {
-	close(r.logSaver.stopCh)
+	select {
+	case <-r.logSaver.stopCh:
+	default:
+		close(r.logSaver.stopCh)
+	}
 }

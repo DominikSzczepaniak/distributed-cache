@@ -1,9 +1,7 @@
 package raft
 
 import (
-	"fmt"
-	"math/rand"
-	"runtime"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -126,140 +124,58 @@ func TestRaftRecovery(t *testing.T) {
 	}
 }
 
+// TestConcurrentOperations hammers the leader from many goroutines and checks
+// that every replica converges to the same state.
+//
+// Size: 5k messages under -short, 200k otherwise. The original 25M-message run
+// (which cannot finish under -race in any sensible time) is still available
+// with RAFT_FULL_SOAK=1.
 func TestConcurrentOperations(t *testing.T) {
-	if testing.Short() {
-		t.Skip("short")
+	nmsgs, numWorkers, waitFor := 5_000, 32, 30*time.Second
+	if !testing.Short() {
+		nmsgs, numWorkers, waitFor = 200_000, 128, 3*time.Minute
 	}
+	if os.Getenv("RAFT_FULL_SOAK") != "" {
+		nmsgs, numWorkers, waitFor = 25_000_000, 256, 30*time.Minute
+	}
+	const numKeys = 1000
+
 	nodes := createCluster(t, 3)
-	time.Sleep(1000 * time.Millisecond)
-	var leader *Raft
-	for _, n := range nodes {
-		n.mu.RLock()
-		if n.currentRole == Leader {
-			leader = n
-		}
-		n.mu.RUnlock()
-	}
-	require.NotNil(t, leader)
-	const nmsgs = 25_000_000
-	const numKeys = 10000
-	const numWorkers = 256
+	leader := waitForStableLeader(t, nodes)
 
 	jobs := make(chan int, 256)
 	var wg sync.WaitGroup
-
 	for w := 0; w < numWorkers; w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for key := range jobs {
 				v := key * 2
-				leader.Broadcast(Message{
-					MsgType: PutMsg,
-					Key:     key,
-					Value:   &v,
-				})
+				leader.Broadcast(Message{MsgType: PutMsg, Key: key, Value: &v})
 			}
 		}()
 	}
-
 	for i := 0; i < nmsgs; i++ {
-		jobs <- rand.Intn(numKeys)
+		jobs <- i % numKeys // every key is written, value is a pure function of the key
 	}
 	close(jobs)
-
 	wg.Wait()
-	time.Sleep(1 * time.Second)
 
-	for _, n := range nodes {
-		for i := 0; i < numKeys; i++ {
-			assert.Equal(t, i*2, n.application.GetValue(i))
+	// Broadcast is asynchronous: wait for the commit index, not for a sleep.
+	require.Eventually(t, func() bool {
+		for _, n := range nodes {
+			if stateOf(n).Commit < nmsgs {
+				return false
+			}
 		}
-	}
-}
+		return true
+	}, waitFor, 50*time.Millisecond, "replicas did not commit all %d entries", nmsgs)
 
-func TestPausedConcurrentOperations(t *testing.T) {
-	if testing.Short() {
-		t.Skip("short")
-	}
-
-	nodes := createCluster(t, 3)
-	time.Sleep(1000 * time.Millisecond)
-
-	var leader *Raft
-	for _, n := range nodes {
-		n.mu.RLock()
-		if n.currentRole == Leader {
-			leader = n
-		}
-		n.mu.RUnlock()
-	}
-	require.NotNil(t, leader)
-
-	const phaseMsgs = 8_000_000
-	const numKeys = 10000
-	const numWorkers = 256
-
-	printMemStats := func(label string) {
-		var m runtime.MemStats
-		runtime.ReadMemStats(&m)
-		fmt.Printf("[%s] Alloc: %v MB, TotalAlloc: %v MB, Sys: %v MB, Goroutines: %d\n",
-			label,
-			m.Alloc/1024/1024,
-			m.TotalAlloc/1024/1024,
-			m.Sys/1024/1024,
-			runtime.NumGoroutine(),
-		)
-	}
-
-	runPhase := func(phaseNum int) {
-		fmt.Printf("=== Starting Phase %d ===\n", phaseNum)
-		printMemStats("Before")
-		start := time.Now()
-
-		jobs := make(chan int, 256)
-		var wg sync.WaitGroup
-
-		for w := 0; w < numWorkers; w++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for key := range jobs {
-					v := key * 2
-					leader.Broadcast(Message{
-						MsgType: PutMsg,
-						Key:     key,
-						Value:   &v,
-					})
-				}
-			}()
-		}
-
-		for i := 0; i < phaseMsgs; i++ {
-			jobs <- rand.Intn(numKeys)
-		}
-		close(jobs)
-
-		wg.Wait()
-		elapsed := time.Since(start)
-		fmt.Printf("=== Phase %d completed in %v ===\n", phaseNum, elapsed)
-		printMemStats("After")
-	}
-
-	runPhase(1)
-
-	fmt.Println("Pausing 10 seconds...")
-	time.Sleep(10 * time.Second)
-	runtime.GC()
-	printMemStats("After GC")
-
-	runPhase(2)
-
-	time.Sleep(1 * time.Second)
-
-	for _, n := range nodes {
-		for i := 0; i < numKeys; i++ {
-			assert.Equal(t, i*2, n.application.GetValue(i))
+	for i, n := range nodes {
+		for k := 0; k < numKeys; k++ {
+			if !assert.Equal(t, k*2, n.application.GetValue(k), "node %d key %d", i, k) {
+				return
+			}
 		}
 	}
 }

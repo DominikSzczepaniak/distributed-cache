@@ -3,75 +3,12 @@ package raft
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
-
-func TestLogReplication(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name      string
-		leaderLog []LogEntry
-	}{
-		{
-			"success",
-			[]LogEntry{{Term: 1, Message: Message{MsgType: PutMsg, Key: 1, Value: intPtr(42)}}},
-		},
-		{
-			"failure",
-			[]LogEntry{{Term: 1, Message: Message{MsgType: PutMsg, Key: 2, Value: intPtr(24)}}},
-		},
-	}
-	for _, tt := range cases {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			nodes, _ := createClusterMocks(t, 2)
-			leader := nodes[0]
-
-			leader.mu.Lock()
-			leader.currentRole = Leader
-			leader.currentTerm = 1
-			leader.log = append([]LogEntry{}, tt.leaderLog...)
-
-			// Initialize replicators (like becomeLeader does)
-			leader.replicators = make([]*Replicator, leader.totalNodes)
-			for followerId := 0; followerId < leader.totalNodes; followerId++ {
-				if followerId == leader.id {
-					continue
-				}
-				lastLogIndex := leader.snapshotter.lastIndex + len(leader.log)
-				leader.sentLengths[followerId] = lastLogIndex + 1
-				leader.ackedLengths[followerId] = 0
-
-				leader.replicators[followerId] = NewReplicator(leader, followerId)
-				leader.replicators[followerId].start()
-			}
-			leader.mu.Unlock()
-
-			// Signal replicators to replicate
-			for i := 0; i < leader.totalNodes; i++ {
-				if i != leader.id && leader.replicators[i] != nil {
-					leader.replicators[i].signal()
-				}
-			}
-			time.Sleep(200 * time.Millisecond)
-
-			// Cleanup: stop replicators
-			leader.mu.Lock()
-			for _, rep := range leader.replicators {
-				if rep != nil {
-					rep.stop()
-				}
-			}
-			leader.mu.Unlock()
-		})
-	}
-}
 
 func TestLogRequest(t *testing.T) {
 	t.Parallel()
@@ -121,7 +58,6 @@ func TestLogRequest(t *testing.T) {
 			assert.Equal(t, tt.wantSuccess, resp.Success)
 			assert.Equal(t, tt.wantAck, resp.Ack)
 
-			time.Sleep(50 * time.Millisecond)
 		})
 	}
 }

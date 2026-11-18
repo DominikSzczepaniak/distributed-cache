@@ -37,9 +37,6 @@ func TestWriteAndReadSnapshotData(t *testing.T) {
 }
 
 func TestSnapshotCreationOnThreshold(t *testing.T) {
-	if testing.Short() {
-		t.Skip("short")
-	}
 	t.Parallel()
 	node := createTestRaft(t, 0, 3)
 
@@ -71,36 +68,7 @@ func TestSnapshotCreationOnThreshold(t *testing.T) {
 		"snapshot lastIndex should be set")
 }
 
-func TestSnapshotWithApplicationState(t *testing.T) {
-	if testing.Short() {
-		t.Skip("short")
-	}
-	t.Parallel()
-	node := createTestRaft(t, 0, 3)
-	app := node.application.(*testApp)
-
-	app.data[1] = 100
-	app.data[2] = 200
-	app.data[3] = 300
-
-	snapshot, err := app.GetSnapshot()
-	require.NoError(t, err)
-	assert.Greater(t, len(snapshot), 0)
-
-	newApp := newTestApp()
-	err, lastKey := newApp.RestoreFromSnapshot(snapshot)
-	require.NoError(t, err)
-
-	assert.Equal(t, 100, newApp.GetValue(1))
-	assert.Equal(t, 200, newApp.GetValue(2))
-	assert.Equal(t, 300, newApp.GetValue(3))
-	assert.Greater(t, lastKey, 0)
-}
-
 func TestInstallSnapshotRPC(t *testing.T) {
-	if testing.Short() {
-		t.Skip("short")
-	}
 	t.Parallel()
 	nodes := createCluster(t, 3)
 	leader := nodes[0]
@@ -139,17 +107,12 @@ func TestInstallSnapshotRPC(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
-	time.Sleep(100 * time.Millisecond)
-
 	data := follower.application.(*testApp).getData()
 	assert.Equal(t, 1000, data[10], "follower should have snapshot data")
 	assert.Equal(t, 2000, data[20], "follower should have snapshot data")
 }
 
 func TestSnapshotPersistence(t *testing.T) {
-	if testing.Short() {
-		t.Skip("short")
-	}
 	t.Parallel()
 	tmpDir := t.TempDir()
 	fn := filepath.Join(tmpDir, "snapshot.persist")

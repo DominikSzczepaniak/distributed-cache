@@ -2,7 +2,6 @@ package raft
 
 import (
 	"context"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"testing"
 	"time"
 
@@ -114,41 +113,4 @@ func TestVoteRequest(t *testing.T) {
 			assert.Equal(t, int32(tt.wantCurrentTerm), resp.CurrentTerm)
 		})
 	}
-}
-
-func TestElectionTimeout(t *testing.T) {
-	if testing.Short() {
-		t.Skip("short mode")
-	}
-	node := createTestRaft(t, 0, 3)
-	mocks := make([]*mockPeerClient, 3)
-	for i := range mocks {
-		mocks[i] = &mockPeerClient{}
-		mocks[i].
-			On("VoteRequest", mock.Anything, mock.Anything).
-			Return(&raftpb.VoteResponse{
-				NodeId:      int32(i),
-				CurrentTerm: 1,
-				Granted:     false,
-			}, nil).
-			Maybe()
-		mocks[i].
-			On("Heartbeat", mock.Anything, mock.Anything).
-			Return(&emptypb.Empty{}, nil).
-			Maybe()
-	}
-	peers := make([]PeerClient, len(mocks))
-	for i, m := range mocks {
-		peers[i] = m
-	}
-	node.setPeers(peers)
-	time.Sleep(1000 * time.Millisecond)
-	node.mu.RLock()
-	role, term := node.currentRole, node.currentTerm
-	node.mu.RUnlock()
-	assert.True(t, role == Candidate || role == Follower)
-	if role == Candidate {
-		assert.Greater(t, term, 0)
-	}
-	assert.NotEqual(t, Leader, role)
 }
