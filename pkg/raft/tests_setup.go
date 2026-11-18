@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/dominikszczepaniak/distributed-cache/pkg/raft/raftpb"
@@ -163,8 +164,35 @@ func (m *mockPeerClient) InstallSnapshot(ctx context.Context, in *raftpb.Install
 
 func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
 	t.Helper()
+	return createTestRaftIn(t, id, totalNodes, testDataDir(t))
+}
+
+// testDataDir is t.TempDir() minus the hard failure on "directory not empty":
+// RPC handlers fire `go logSaver.SaveValues()` that can still be writing when
+// the test returns. Cleanup stops the savers first (see createTestRaftIn),
+// then removes the dir with a short retry for the in-flight write.
+func testDataDir(t testing.TB) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "raft-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for i := 0; i < 50; i++ {
+			if os.RemoveAll(dir) == nil {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+	return dir
+}
+
+// createTestRaftIn is createTestRaft with an explicit data dir, so a "restart"
+// can build a second node on the same files.
+func createTestRaftIn(t testing.TB, id, totalNodes int, tmpDir string) *Raft {
+	t.Helper()
 	app := newTestApp()
-	tmpDir := t.TempDir()
 	fn := filepath.Join(tmpDir, fmt.Sprintf("node-%d", id))
 	cfg := &Config{
 		logsFilename:      fn + ".logs",
@@ -201,6 +229,7 @@ func createTestRaft(t testing.TB, id, totalNodes int) *Raft {
 	initial := make([]PeerClient, totalNodes)
 	r.setPeers(initial)
 
+	t.Cleanup(func() { stopSaver(r) })
 	return r
 }
 
@@ -266,7 +295,7 @@ func createCluster(t testing.TB, n int) []*Raft {
 	}
 	nodes := make([]*Raft, n)
 	for id := 0; id < n; id++ {
-		tmp := t.TempDir()
+		tmp := testDataDir(t)
 		fn := filepath.Join(tmp, fmt.Sprintf("node-%d", id))
 		cfg := &Config{
 			logsFilename:      fn + ".logs",
@@ -291,11 +320,16 @@ func createCluster(t testing.TB, n int) []*Raft {
 			ackedLengths:    make([]int, n),
 			application:     apps[id],
 		}
-		r.heartbeat = newHeartbeat(r)
-		r.logSaver = NewRaftDataSaver(r, cfg)
-		r.raftElector = NewRaftElector(r)
-		//r.logReplicator = NewRaftLogReplicator(r)
+		// Hold the write lock while wiring: the heartbeat/elector goroutines
+		// start inside their constructors and read r.snapshotter / r.raftElector
+		// (under r.mu.RLock) when their timers fire. Without this the race
+		// detector flags the late field writes.
+		r.mu.Lock()
 		r.snapshotter = newSnapshotter(cfg)
+		r.logSaver = NewRaftDataSaver(r, cfg)
+		r.heartbeat = newHeartbeat(r)
+		r.raftElector = NewRaftElector(r)
+		r.mu.Unlock()
 		nodes[id] = r
 	}
 	peers := make([]PeerClient, n)
@@ -303,7 +337,44 @@ func createCluster(t testing.TB, n int) []*Raft {
 		peers[i] = &inMemPeer{r: nodes[i]}
 	}
 	for _, node := range nodes {
+		node.mu.Lock()
 		node.setPeers(peers)
+		node.mu.Unlock()
 	}
+	t.Cleanup(func() {
+		for _, node := range nodes {
+			stopReplicators(node)
+			close(node.raftElector.cancelTimerCh)
+			close(node.heartbeat.cancelTimerCh)
+		}
+		for _, node := range nodes {
+			stopSaver(node)
+		}
+	})
 	return nodes
+}
+
+func stopReplicators(r *Raft) {
+	r.mu.Lock()
+	reps := r.replicators
+	r.replicators = nil
+	r.mu.Unlock()
+	for _, rep := range reps {
+		if rep != nil {
+			rep.stop()
+		}
+	}
+}
+
+// stopSaver stops the DataSaver workers. It deliberately does not call
+// WaitForPendingSaves: in-flight RPC handlers may still call SaveValues
+// (WaitGroup.Add) concurrently, which is a WaitGroup misuse the race detector
+// flags. Tests that need durability call WaitForPendingSaves at a quiescent
+// point instead.
+func stopSaver(r *Raft) {
+	select {
+	case <-r.logSaver.stopCh:
+	default:
+		close(r.logSaver.stopCh)
+	}
 }
