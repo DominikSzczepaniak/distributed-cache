@@ -40,6 +40,9 @@ func (c *ConcurrentMapCache) ExportShard(shardID int, totalShards int) map[strin
 	defer c.mu.RUnlock()
 
 	result := make(map[string]string)
+	if totalShards <= 0 {
+		return result
+	}
 	for k, v := range c.data {
 		h := fnv.New32a()
 		h.Write([]byte(k))

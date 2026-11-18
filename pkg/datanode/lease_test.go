@@ -48,15 +48,27 @@ func TestLeaseManager_RenewFailure(t *testing.T) {
 }
 
 func TestLeaseManager_Expiration(t *testing.T) {
+	clk := newTestClock()
 	leaseDuration := 50 * time.Millisecond
-	stateMgr := NewStateManager()
-	lm := NewLeaseManager("http://invalid-url", "node-1", leaseDuration, stateMgr)
+	lm := NewLeaseManager("http://invalid-url", "node-1", leaseDuration, NewStateManager())
+	lm.now = clk.Now
+
+	assert.False(t, lm.IsActive(), "no lease before first renewal")
 
 	lm.extendLease()
 	assert.True(t, lm.IsActive())
 
-	time.Sleep(2 * leaseDuration)
+	clk.Advance(leaseDuration - time.Nanosecond)
+	assert.True(t, lm.IsActive(), "still valid just before expiry")
+
+	clk.Advance(time.Nanosecond)
+	assert.False(t, lm.IsActive(), "expired at validUntil (Before is strict)")
+
+	clk.Advance(time.Hour)
 	assert.False(t, lm.IsActive())
+
+	lm.extendLease()
+	assert.True(t, lm.IsActive(), "renewal after expiry re-activates the node")
 }
 
 func TestLeaseManager_EpochUpdate(t *testing.T) {

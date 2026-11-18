@@ -21,6 +21,9 @@ type LeaseManager struct {
 	nodeID        string
 	client        *http.Client
 	stateMgr      *StateManager
+	now           func() time.Time // injectable clock for tests
+	stopCh        chan struct{}
+	stopOnce      sync.Once
 }
 
 func NewLeaseManager(controllerURL, nodeID string, duration time.Duration, stateMgr *StateManager) *LeaseManager {
@@ -30,6 +33,8 @@ func NewLeaseManager(controllerURL, nodeID string, duration time.Duration, state
 		nodeID:        nodeID,
 		client:        &http.Client{Timeout: 2 * time.Second},
 		stateMgr:      stateMgr,
+		now:           time.Now,
+		stopCh:        make(chan struct{}),
 	}
 }
 
@@ -40,7 +45,13 @@ func (l *LeaseManager) Start() {
 
 	ticker := time.NewTicker(l.duration / 3)
 	go func() {
-		for range ticker.C {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-l.stopCh:
+				return
+			case <-ticker.C:
+			}
 			if l.renew() {
 				l.extendLease()
 			} else {
@@ -51,10 +62,16 @@ func (l *LeaseManager) Start() {
 	}()
 }
 
+// Stop terminates the background renewal loop. It is safe to call more than once.
+// The lease is not revoked; it simply expires.
+func (l *LeaseManager) Stop() {
+	l.stopOnce.Do(func() { close(l.stopCh) })
+}
+
 func (l *LeaseManager) extendLease() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.validUntil = time.Now().Add(l.duration)
+	l.validUntil = l.now().Add(l.duration)
 	log.Printf("Lease renewed. Valid until: %s", l.validUntil.Format(time.RFC3339))
 }
 
@@ -131,5 +148,5 @@ func (l *LeaseManager) fetchTopology() {
 func (l *LeaseManager) IsActive() bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	return time.Now().Before(l.validUntil)
+	return l.now().Before(l.validUntil)
 }

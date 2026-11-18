@@ -131,6 +131,13 @@ func (s *Server) HandlePut(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Replication may take long enough for the lease to lapse; a fenced primary
+	// must neither apply nor acknowledge the write.
+	if !s.lease.IsActive() {
+		http.Error(w, "Node is Fenced (Lease Expired)", http.StatusServiceUnavailable)
+		return
+	}
+
 	s.cache.Put(req.Key, req.Value)
 	w.WriteHeader(http.StatusOK)
 }
@@ -181,6 +188,11 @@ func (s *Server) HandleDelete(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Replication Failed", http.StatusInternalServerError)
 			return
 		}
+	}
+
+	if !s.lease.IsActive() {
+		http.Error(w, "Node is Fenced (Lease Expired)", http.StatusServiceUnavailable)
+		return
 	}
 
 	s.cache.Delete(req.Key)
