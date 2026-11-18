@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -127,16 +126,14 @@ func TestRaftRecovery(t *testing.T) {
 // TestConcurrentOperations hammers the leader from many goroutines and checks
 // that every replica converges to the same state.
 //
-// Size: 5k messages under -short, 200k otherwise. The original 25M-message run
-// (which cannot finish under -race in any sensible time) is still available
-// with RAFT_FULL_SOAK=1.
+// Size: 5k messages under -short, 200k otherwise. Raw throughput at scale
+// (e.g. 25M proposals) is measured by BenchmarkReplicateAndCommitParallel:
+//
+//	go test ./pkg/raft -run xxx -bench ReplicateAndCommitParallel -benchtime=25000000x
 func TestConcurrentOperations(t *testing.T) {
 	nmsgs, numWorkers, waitFor := 5_000, 32, 30*time.Second
 	if !testing.Short() {
 		nmsgs, numWorkers, waitFor = 200_000, 128, 3*time.Minute
-	}
-	if os.Getenv("RAFT_FULL_SOAK") != "" {
-		nmsgs, numWorkers, waitFor = 25_000_000, 256, 30*time.Minute
 	}
 	const numKeys = 1000
 
