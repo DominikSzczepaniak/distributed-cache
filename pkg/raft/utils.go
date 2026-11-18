@@ -74,6 +74,17 @@ func (r *Raft) becomeFollowerUnlocked(term int) {
 	r.raftElector.ResetTimer()
 }
 
+// stopReplicatorsUnlocked tears down a (former) leader's replicator goroutines.
+// Caller holds r.mu.
+func (r *Raft) stopReplicatorsUnlocked() {
+	for _, rep := range r.replicators {
+		if rep != nil {
+			rep.stop()
+		}
+	}
+	r.replicators = nil
+}
+
 func (r *Raft) becomeFollower(term int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -145,10 +156,10 @@ func (r *Raft) checkQuorumHealth() {
 			continue
 		}
 
-		if rep.consecutiveFailures >= rep.maxConsecutiveFailures {
+		if int(rep.consecutiveFailures.Load()) >= rep.maxConsecutiveFailures {
 			failedFollowers++
 			slog.Debug(fmt.Sprintf("Node %d: Follower %d has %d consecutive failures",
-				r.id, i, rep.consecutiveFailures))
+				r.id, i, rep.consecutiveFailures.Load()))
 		} else {
 			healthyFollowers++
 		}
